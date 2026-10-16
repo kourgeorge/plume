@@ -2,6 +2,10 @@ import Fastify, { FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import { getDb, getSetting, setSetting } from '../db';
+import { LLM, MODELS } from '../config';
+import { describe } from '../llm/settings';
+import { searchMode } from '../llm/client';
+import { RTL, contentLanguage, languageName } from '../context/language';
 import { PROFILE_DOCS, isProfileDocId, readDoc, writeDoc } from '../context/profile';
 import { startResearch } from '../research/profile';
 import { getJob } from '../jobs';
@@ -10,6 +14,14 @@ import { AuditResult, dailyFixes, markFixDone, runAudit } from '../agents/seoAud
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher } from '../publish';
 import { publishOne } from '../publish/runner';
+import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
+import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
+import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
+import { searchConsoleGaps } from '../agents/seo';
+import { TaskSetting, runTask, taskDefs, taskOverview, updateTask } from '../scheduler';
+import { Level, recentLogs } from '../log';
+import { budgetStatus, setBudgetLimit } from '../llm/budget';
+import { lastSpeed } from '../analytics/pagespeed';
 
 /** Only this machine may talk to the API: reject other Host headers (DNS rebinding) and cross-site Origins. */
 function localOnly(port: number) {
@@ -32,7 +44,9 @@ export function buildServer(port: number): FastifyInstance {
   app.get('/api/state', async () => ({
     site: getSetting<string | null>('siteUrl', null),
     docs: PROFILE_DOCS.map((d) => ({ id: d.id, title: d.title, written: readDoc(d.id) !== null })),
-    hasApiKey: !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+    hasApiKey: !!(LLM.ANTHROPIC_API_KEY || LLM.ANTHROPIC_AUTH_TOKEN),
+    llm: { ...describe(LLM), models: MODELS, webSearch: searchMode() },
+    language: { code: contentLanguage(), name: languageName(contentLanguage()), rtl: RTL.has(contentLanguage()) },
   }));
 
   app.post<{ Body: { url?: string; only?: string } }>('/api/research', async (req, reply) => {
@@ -137,9 +151,114 @@ export function buildServer(port: number): FastifyInstance {
     });
   }
 
+  // ---- Google: Search Console + Analytics ----
+  const redirectUri = `http://127.0.0.1:${port}/api/google/callback`;
+
+  app.get('/api/google', async () => ({
+    configured: googleConfigured(),
+    connected: googleConnected(),
+    site: getSetting<string | null>('gscSite', null),
+    property: getSetting<string | null>('ga4Property', null),
+    lastPull: getSetting<PullStatus | null>('lastPull', null),
+    redirectUri,
+  }));
+
+  app.get('/api/google/connect', async (_req, reply) => {
+    try {
+      return reply.redirect(authUrl(redirectUri));
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>('/api/google/callback', async (req, reply) => {
+    const { code, state, error } = req.query;
+    if (error || !code || !state) return reply.redirect(`/#results?google=${encodeURIComponent(error ?? 'cancelled')}`);
+    try {
+      await finishAuth(code, state);
+      // Pick the matching site automatically when there's an obvious one.
+      const origin = getSetting<string | null>('siteUrl', null);
+      if (origin && !getSetting('gscSite', null)) {
+        const site = matchSite(await listSearchConsoleSites(), origin);
+        if (site) setSetting('gscSite', site);
+      }
+      return reply.redirect('/#results');
+    } catch (err: any) {
+      return reply.redirect(`/#results?google=${encodeURIComponent(err.message)}`);
+    }
+  });
+
+  app.post('/api/google/disconnect', async () => {
+    disconnectGoogle();
+    return { ok: true };
+  });
+
+  app.get('/api/google/options', async (_req, reply) => {
+    try {
+      const [sites, properties] = await Promise.all([listSearchConsoleSites(), listAnalyticsProperties()]);
+      return { sites, properties };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  app.put<{ Body: { site?: string | null; property?: string | null } }>('/api/google/selection', async (req) => {
+    if (req.body?.site !== undefined) setSetting('gscSite', req.body.site || null);
+    if (req.body?.property !== undefined) setSetting('ga4Property', req.body.property || null);
+    return { ok: true };
+  });
+
+  app.post('/api/google/pull', async () => pullAll());
+
+  app.get('/api/results', async () => ({
+    queries: topQueries(50),
+    nearlyThere: searchConsoleGaps(topQueries(500)).slice(0, 20),
+    pages: topPages(30),
+    published: publishedResults(),
+    notes: performanceNotes(),
+  }));
+
+  // ---- timetable, logs, budget, speed ----
+  app.get('/api/tasks', async () => taskOverview());
+  app.put<{ Params: { id: string }; Body: Partial<TaskSetting> }>('/api/tasks/:id', async (req, reply) => {
+    try {
+      const b = req.body ?? {};
+      return updateTask(req.params.id, { ...(b.enabled !== undefined ? { enabled: !!b.enabled } : {}), ...(b.cron ? { cron: String(b.cron) } : {}), ...(b.limit !== undefined ? { limit: Number(b.limit) } : {}) });
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/run', async (req, reply) => {
+    if (!taskDefs().some((t) => t.id === req.params.id)) return reply.code(404).send({ error: 'no such task' });
+    return runTask(req.params.id);
+  });
+
+  app.get<{ Querystring: { source?: string; level?: Level; limit?: string } }>('/api/logs', async (req) =>
+    recentLogs({ source: req.query.source, level: req.query.level, limit: Math.min(Number(req.query.limit ?? 200), 1000) }),
+  );
+
+  app.get('/api/budget', async () => budgetStatus());
+  app.put<{ Body: { limit?: number } }>('/api/budget', async (req, reply) => {
+    try {
+      setBudgetLimit(Number(req.body?.limit));
+      return budgetStatus();
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  app.get('/api/speed', async () => lastSpeed());
+  app.post('/api/speed', async (_req, reply) => {
+    const url = getSetting<string | null>('siteUrl', null);
+    if (!url) return reply.code(400).send({ error: 'add your site first' });
+    const r = await runTask('speed');
+    return r.status === 'done' ? lastSpeed() : reply.code(502).send({ error: r.message });
+  });
+
   app.get('/api/usage', async () => {
     const db = getDb();
     return {
+      budget: budgetStatus(),
       total: db.prepare('SELECT COUNT(*) calls, COALESCE(SUM(cost_usd),0) cost FROM llm_calls').get(),
       byPurpose: db
         .prepare('SELECT purpose, model, COUNT(*) calls, SUM(input_tokens) input, SUM(output_tokens) output, SUM(cost_usd) cost FROM llm_calls GROUP BY purpose, model ORDER BY cost DESC')

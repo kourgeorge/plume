@@ -18,7 +18,7 @@ test('agentSystem includes every doc in full, in fixed order, cached', () => {
   const order = PROFILE_DOCS.map((d) => docs.text.indexOf(`<doc id="${d.id}"`));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.ok(docs.text.includes('(not written yet)'));
-  assert.equal(role.text, 'You write tweets.');
+  assert.match(role.text, /^You write tweets.\n\nWrite all customer-facing content/);
 });
 
 test('profileComplete needs all five docs', () => {
@@ -32,4 +32,13 @@ test('profileComplete needs all five docs', () => {
 test('isProfileDocId rejects path tricks', () => {
   assert.equal(isProfileDocId('../etc/passwd'), false);
   assert.equal(isProfileDocId('voice'), true);
+});
+
+test('site language: html lang wins, script detection is the fallback, rule names the language', () => {
+  const { detectLanguage, languageRule } = require('../src/context/language');
+  assert.equal(detectLanguage([{ lang: 'he-IL', text: '' }, { lang: 'he', text: '' }, { lang: 'en', text: '' }]), 'he');
+  assert.equal(detectLanguage([{ lang: '', text: 'קורס תאוריה לנהיגה עם סרטונים ומבחנים' }]), 'he');
+  assert.equal(detectLanguage([{ lang: '', text: 'Plain English text' }]), 'en');
+  assert.match(languageRule('he'), /in Hebrew/);
+  assert.match(languageRule('he'), /Slugs stay in lowercase Latin/);
 });

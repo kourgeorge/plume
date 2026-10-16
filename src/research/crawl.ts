@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { getDb } from '../db';
+import { BrowserFetch, Failed, USER_AGENT, fetchPage } from './fetchPage';
 
 export interface CrawledPage {
   url: string;
@@ -13,16 +14,19 @@ export interface CrawledPage {
   hasSchema: boolean;
   wordCount: number;
   text: string;
+  /** From <html lang>, e.g. "he" or "en-US"; empty if the page doesn't say. */
+  lang: string;
 }
 
 export interface CrawlOptions {
   maxPages?: number;
   /** Swappable for tests. */
   fetchFn?: typeof fetch;
+  /** Real-browser fallback; null = never use one. Default: the installed Chrome. */
+  browserFn?: BrowserFetch | null;
   onPage?: (page: CrawledPage, done: number) => void;
 }
 
-const USER_AGENT = 'PlumeBot/0.1 (+local marketing assistant)';
 const SKIP_EXT = /\.(png|jpe?g|gif|svg|webp|pdf|zip|mp4|mp3|css|js|ico|xml|json)$/i;
 
 /** Normalise a link: same origin only, no hash, no query, no trailing slash (except root). */
@@ -80,6 +84,7 @@ export function extractPage(url: string, status: number, html: string): { page: 
       hasSchema: schemaCount > 0,
       wordCount: text ? text.split(' ').length : 0,
       text,
+      lang: ($('html').attr('lang') ?? '').trim(),
     },
   };
 }
@@ -123,25 +128,46 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   for (const u of await sitemapUrls(origin, fetchFn)) enqueue(u, origin);
 
   const pages: CrawledPage[] = [];
+  const failures: Failed[] = [];
   const save = getDb().prepare(
     `INSERT OR REPLACE INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at)
      VALUES (@url, @status, @title, @metaDescription, @canonical, @h1, @headings, @imagesMissingAlt, @hasSchema, @wordCount, @text, @crawledAt)`,
   );
+  // Once a page only opened in a real browser, use the browser for the rest of the site.
+  let preferBrowser = false;
 
   while (queue.length && pages.length < maxPages) {
     const url = queue.shift()!;
-    let res: Response;
-    try {
-      res = await fetchFn(url, { headers: { 'user-agent': USER_AGENT }, redirect: 'follow' });
-    } catch {
+    const r = await fetchPage(url, { fetchFn, browserFn: opts.browserFn, preferBrowser });
+    if (!r.ok) {
+      failures.push(r);
+      // A missing page is normal; record it for the site check, then move on.
+      if (r.kind === 'http-error' && r.status) saveMissing(url, r.status);
       continue;
     }
-    if (!(res.headers.get('content-type') ?? '').includes('text/html')) continue;
-    const { page, links } = extractPage(url, res.status, await res.text());
+    if (r.via === 'browser') preferBrowser = true;
+    const { page, links } = extractPage(url, r.status, r.html);
     pages.push(page);
-    save.run({ ...page, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString() });
+    const { lang: _lang, ...row } = page;
+    save.run({ ...row, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString() });
     opts.onPage?.(page, pages.length);
-    for (const l of links) enqueue(l, url);
+    for (const l of links) enqueue(l, r.url);
   }
+  if (!pages.length) throw new CrawlError(startUrl, failures);
   return pages;
+}
+
+/** Raised when not a single page could be read; the message says why in plain English. */
+export class CrawlError extends Error {
+  constructor(public site: string, public failures: Failed[]) {
+    const first = failures[0];
+    super(first ? `Could not read ${site}: ${first.reason}.` : `Could not read ${site}: no pages found.`);
+  }
+}
+
+function saveMissing(url: string, status: number): void {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at)
+              VALUES (?, ?, '', '', '', '', '[]', 0, 0, 0, '', ?)`)
+    .run(url, status, new Date().toISOString());
 }

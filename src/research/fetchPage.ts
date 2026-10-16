@@ -1,0 +1,146 @@
+import * as cheerio from 'cheerio';
+
+export const USER_AGENT = 'PlumeBot/0.1 (+local marketing assistant)';
+/** Real-browser identity for the fallback: some firewalls only let browsers through. */
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36';
+
+export type FailureKind = 'unreachable' | 'blocked' | 'needs-js' | 'not-html' | 'http-error';
+
+export interface Fetched {
+  ok: true;
+  url: string;      // after redirects
+  status: number;
+  html: string;
+  via: 'http' | 'browser';
+}
+
+export interface Failed {
+  ok: false;
+  url: string;
+  kind: FailureKind;
+  /** Plain English, shown to the user. */
+  reason: string;
+  status?: number;
+  /** What came back when the page was merely thin, so it can still be used if nothing better works. */
+  html?: string;
+}
+
+export type FetchResult = Fetched | Failed;
+
+/** Opens a page in a real browser. Injected so tests don't need Chrome. */
+export type BrowserFetch = (url: string) => Promise<{ status: number; html: string; url: string }>;
+
+/** Words a page needs to count as having content. Below this, the page is probably built by JavaScript. */
+const MIN_WORDS = 40;
+
+export function visibleWords(html: string): number {
+  const $ = cheerio.load(html);
+  $('script, style, noscript, svg, template').remove();
+  const t = $('body').text().replace(/\s+/g, ' ').trim();
+  return t ? t.split(' ').length : 0;
+}
+
+/** Signs of a bot-protection or challenge page rather than the real site. */
+export function looksLikeChallenge(status: number, headers: Headers | Record<string, string>, html: string): string | null {
+  const h = (k: string) => (headers instanceof Headers ? headers.get(k) : headers[k]) ?? '';
+  const body = html.slice(0, 20000).toLowerCase();
+  if (h('cf-mitigated') === 'challenge' || /just a moment\.\.\.|cf-chl-|challenge-platform/.test(body)) return 'Cloudflare bot protection';
+  if (/captcha|are you a robot|access denied|request unsuccessful\. incapsula|_incapsula_|perimeterx|px-captcha|datadome/.test(body) && visibleWords(html) < 200)
+    return 'bot protection (captcha / firewall)';
+  if ((status === 403 || status === 429 || status === 503) && /cloudflare|akamai|sucuri|imperva|incapsula/i.test(`${h('server')} ${h('x-cdn')} ${h('x-sucuri-id') ? 'sucuri' : ''}`))
+    return `the site's firewall (${h('server') || 'CDN'})`;
+  return null;
+}
+
+function explainNetworkError(err: any): string {
+  const code = err?.cause?.code ?? err?.code ?? '';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'the address does not exist (no DNS record) — check the spelling';
+  if (code === 'ECONNREFUSED') return 'the server refused the connection';
+  if (/CERT|SSL|TLS/i.test(code) || /certificate/i.test(err?.cause?.message ?? '')) return `the site's security certificate is invalid (${code})`;
+  if (err?.name === 'TimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') return 'the site took too long to answer';
+  return `could not connect (${code || err?.message || 'network error'})`;
+}
+
+/** One plain HTTP read, classified. */
+export async function fetchHttp(url: string, fetchFn: typeof fetch = fetch): Promise<FetchResult> {
+  let res: Response;
+  try {
+    res = await fetchFn(url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,*/*' }, redirect: 'follow', signal: AbortSignal.timeout(20_000) });
+  } catch (err) {
+    return { ok: false, url, kind: 'unreachable', reason: explainNetworkError(err) };
+  }
+  const finalUrl = res.url || url;
+  const type = res.headers.get('content-type') ?? '';
+  const html = await res.text().catch(() => '');
+  const challenge = looksLikeChallenge(res.status, res.headers, html);
+  if (challenge) return { ok: false, url: finalUrl, kind: 'blocked', status: res.status, reason: `blocked by ${challenge}` };
+  if (res.status >= 400) {
+    const kind: FailureKind = res.status === 403 || res.status === 429 ? 'blocked' : 'http-error';
+    return { ok: false, url: finalUrl, kind, status: res.status, reason: kind === 'blocked' ? `the site refused automated visitors (error ${res.status})` : `the page returned error ${res.status}` };
+  }
+  if (type && !type.includes('html')) return { ok: false, url: finalUrl, kind: 'not-html', status: res.status, reason: `not a web page (${type.split(';')[0]})` };
+  if (visibleWords(html) < MIN_WORDS) return { ok: false, url: finalUrl, kind: 'needs-js', status: res.status, reason: 'the page is empty until JavaScript runs', html };
+  return { ok: true, url: finalUrl, status: res.status, html, via: 'http' };
+}
+
+/** Headless Chrome via the user's installed Chrome (no browser download). */
+let browserPromise: Promise<any> | null = null;
+export const chromeFetch: BrowserFetch = async (url) => {
+  browserPromise ??= (async () => {
+    const { chromium } = await import('playwright-core');
+    try {
+      return await chromium.launch({ channel: 'chrome', headless: true });
+    } catch (err: any) {
+      browserPromise = null;
+      throw new Error(`Google Chrome could not be started for reading JavaScript pages (${String(err.message).split('\n')[0]})`);
+    }
+  })();
+  const browser = await browserPromise;
+  const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: 'en-US' });
+  try {
+    const page = await ctx.newPage();
+    const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
+    return { status: resp?.status() ?? 200, html: await page.content(), url: page.url() };
+  } finally {
+    await ctx.close();
+  }
+};
+
+export async function closeBrowser(): Promise<void> {
+  const b = await browserPromise?.catch(() => null);
+  browserPromise = null;
+  await b?.close().catch(() => {});
+}
+
+/** Classify what the browser got back, the same way as an HTTP read. */
+export async function fetchBrowser(url: string, browserFn: BrowserFetch): Promise<FetchResult> {
+  let r: { status: number; html: string; url: string };
+  try {
+    r = await browserFn(url);
+  } catch (err: any) {
+    return { ok: false, url, kind: 'unreachable', reason: String(err?.message ?? err).split('\n')[0] };
+  }
+  const challenge = looksLikeChallenge(r.status, {}, r.html);
+  if (challenge) return { ok: false, url: r.url, kind: 'blocked', status: r.status, reason: `blocked by ${challenge}, even in a real browser` };
+  if (r.status >= 400) return { ok: false, url: r.url, kind: 'http-error', status: r.status, reason: `the page returned error ${r.status}` };
+  if (visibleWords(r.html) < MIN_WORDS) return { ok: false, url: r.url, kind: 'needs-js', status: r.status, reason: 'the page is still empty after JavaScript ran' };
+  return { ok: true, url: r.url, status: r.status, html: r.html, via: 'browser' };
+}
+
+/**
+ * Plain read first; a real browser only when that fails in a way a browser can fix
+ * (bot blocks, JavaScript-built pages). Not for missing pages or dead addresses.
+ */
+export async function fetchPage(url: string, opts: { fetchFn?: typeof fetch; browserFn?: BrowserFetch | null; preferBrowser?: boolean } = {}): Promise<FetchResult> {
+  const browserFn = opts.browserFn === undefined ? chromeFetch : opts.browserFn;
+  if (opts.preferBrowser && browserFn) return fetchBrowser(url, browserFn);
+  const first = await fetchHttp(url, opts.fetchFn);
+  const thin = (f: Failed): FetchResult | null =>
+    f.kind === 'needs-js' && f.html && visibleWords(f.html) > 0 ? { ok: true, url: f.url, status: f.status ?? 200, html: f.html, via: 'http' } : null;
+  if (first.ok) return first;
+  if (!browserFn || !(first.kind === 'blocked' || first.kind === 'needs-js')) return thin(first) ?? first;
+  const second = await fetchBrowser(url, browserFn);
+  if (second.ok) return second;
+  return thin(first) ?? { ...second, reason: `${first.reason}; in a real browser: ${second.reason}` };
+}

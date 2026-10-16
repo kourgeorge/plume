@@ -67,6 +67,34 @@ CREATE TABLE IF NOT EXISTS draft_events (
   to_status TEXT NOT NULL,
   note TEXT
 );
+CREATE TABLE IF NOT EXISTS gsc_rows (
+  pulled_on TEXT NOT NULL,        -- YYYY-MM-DD of the pull; each pull covers the 28 days before it
+  query TEXT NOT NULL,
+  page TEXT NOT NULL,
+  clicks INTEGER, impressions INTEGER, ctr REAL, position REAL,
+  PRIMARY KEY (pulled_on, query, page)
+);
+CREATE TABLE IF NOT EXISTS ga_pages (
+  pulled_on TEXT NOT NULL,
+  path TEXT NOT NULL,
+  views INTEGER, sessions INTEGER, engagement_rate REAL, avg_seconds REAL,
+  PRIMARY KEY (pulled_on, path)
+);
+CREATE TABLE IF NOT EXISTS logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  level TEXT NOT NULL,            -- info | warn | error
+  source TEXT NOT NULL,           -- task id, agent id, "server", ...
+  message TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,           -- running | done | failed | skipped
+  message TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON

@@ -3,6 +3,7 @@ import { getDb } from '../db';
 import { agentSystem } from '../context/profile';
 import { askJson } from '../llm/client';
 import { createDraft, usedKeywords } from '../queue';
+import { topQueries } from '../analytics/results';
 import type { Agent, Opportunity } from './types';
 
 const SEO_ROLE = `You are the SEO lead. You find search terms real buyers type that this business could rank for,
@@ -67,6 +68,8 @@ export function searchConsoleGaps(rows: { query: string; impressions: number; po
       kind: 'blog_post',
       reason: `Google already shows you for "${r.query}" (${r.impressions} times, average position ${r.position.toFixed(1)}). A focused page could move it onto page one.`,
       source: 'search-console',
+      impressions: r.impressions,
+      position: r.position,
     }));
 }
 
@@ -105,6 +108,9 @@ export const seoAgent: Agent = {
   label: 'SEO',
   description: 'Finds search terms you can win and drafts posts and landing pages for them. Also runs the daily site check.',
   async findOpportunities({ limit = 3, onProgress }) {
+    // Real data first: terms Google already shows us for, just not on page one.
+    const fromData = filterNew(searchConsoleGaps(topQueries(500)), usedKeywords(), sitePages().map((p) => p.title));
+    if (fromData.length >= limit) return fromData.slice(0, limit);
     onProgress?.('Looking for search terms you could rank for');
     const res = await askJson<{ opportunities: Opportunity[] }>({
       purpose: 'seo:opportunities',
@@ -118,7 +124,8 @@ export const seoAgent: Agent = {
         `and at questions buyers ask before buying. Our existing pages:\n` +
         sitePages().map((p) => `- ${p.title} (${p.url})`).join('\n'),
     });
-    return filterNew(res.opportunities, usedKeywords(), sitePages().map((p) => p.title)).slice(0, limit);
+    const used = new Set([...usedKeywords(), ...fromData.map((o) => o.keyword!.toLowerCase())]);
+    return [...fromData, ...filterNew(res.opportunities, used, sitePages().map((p) => p.title))].slice(0, limit);
   },
   draft: (opp) => writeArticle('seo', opp, SEO_ROLE),
 };

@@ -35,7 +35,7 @@ test('parseRobots reads Disallow under the wildcard agent only', () => {
 });
 
 test('crawlSite follows links, honours robots, saves SEO facts', async () => {
-  const pages = await crawlSite('https://acme.test/', { fetchFn: fakeFetch });
+  const pages = await crawlSite('https://acme.test/', { fetchFn: fakeFetch, browserFn: null });
   assert.deepEqual(pages.map((p) => p.url).sort(), ['https://acme.test/', 'https://acme.test/pricing']);
   assert.ok(!fetched.some((u) => u.includes('/private')), 'robots.txt disallow was ignored');
   const home = pages.find((p) => p.url === 'https://acme.test/');
@@ -47,6 +47,6 @@ test('crawlSite follows links, honours robots, saves SEO facts', async () => {
 });
 
 test('maxPages caps the crawl', async () => {
-  const pages = await crawlSite('https://acme.test/', { fetchFn: fakeFetch, maxPages: 1 });
+  const pages = await crawlSite('https://acme.test/', { fetchFn: fakeFetch, browserFn: null, maxPages: 1 });
   assert.equal(pages.length, 1);
 });

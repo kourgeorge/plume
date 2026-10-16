@@ -13,8 +13,10 @@
       <a href="#inbox">Inbox <span id="inbox-count" class="pill" hidden></span></a>
       <a href="#agents">Agents</a>
       <a href="#check">Site check</a>
+      <a href="#results">Results</a>
       <a href="#profile">Business profile</a>
       <a href="#usage">AI cost</a>
+      <a href="#logs">Logs</a>
     </nav>
   </header>
 
@@ -51,7 +53,7 @@
               <button id="save">Save</button>
             </span>
           </div>
-          <textarea id="doc-body" spellcheck="true"></textarea>
+          <textarea id="doc-body" dir="auto" spellcheck="true"></textarea>
           <p id="save-status" class="muted"></p>
         </div>
       </div>
@@ -71,13 +73,13 @@
       <div class="profile">
         <ul id="draft-list" class="draft-list"></ul>
         <div class="editor" id="draft-view" hidden>
-          <input id="draft-title" class="title-input">
+          <input id="draft-title" dir="auto" class="title-input">
           <p id="draft-reason" class="muted"></p>
           <div class="seo-fields">
             <label>Address <input id="draft-slug"></label>
-            <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta"></label>
+            <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta" dir="auto"></label>
           </div>
-          <textarea id="draft-body"></textarea>
+          <textarea id="draft-body" dir="auto"></textarea>
           <div class="editor-bar">
             <span>
               <select id="draft-target"></select>
@@ -119,9 +121,55 @@
       </div>
     </section>
 
+    <section id="results" hidden>
+      <div class="profile-head">
+        <h1>Results</h1>
+        <span id="google-actions"></span>
+      </div>
+      <p id="google-msg" class="muted"></p>
+      <div id="google-setup" class="card" hidden>
+        <h2>Connect Google</h2>
+        <p>Plume reads (never changes) your Search Console and Analytics data, so agents can see which searches bring visitors and which pages work.</p>
+        <ol>
+          <li>In Google Cloud Console, create an OAuth client of type <b>Desktop app</b>, and turn on the "Google Search Console API", "Google Analytics Data API" and "Google Analytics Admin API".</li>
+          <li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to <code>.env</code> and restart Plume.</li>
+        </ol>
+      </div>
+      <div id="google-pick" class="seo-fields" hidden>
+        <label>Search Console site <select id="gsc-site"></select></label>
+        <label>Analytics property <select id="ga-prop"></select></label>
+      </div>
+      <div id="results-body" hidden>
+        <h2>Nearly on page one</h2>
+        <p class="muted">Google already shows you for these, but on page 2–3. The SEO agent writes for these first.</p>
+        <table><thead><tr><th>Search</th><th>Shown</th><th>Position</th></tr></thead><tbody id="r-near"></tbody></table>
+        <h2>Plume's published work</h2>
+        <table><thead><tr><th>Title</th><th>Clicks</th><th>Shown</th><th>Position</th><th>Views</th><th>Best search</th></tr></thead><tbody id="r-mine"></tbody></table>
+        <h2>Top searches</h2>
+        <table><thead><tr><th>Search</th><th>Clicks</th><th>Shown</th><th>Click rate</th><th>Position</th></tr></thead><tbody id="r-queries"></tbody></table>
+        <h2>Top pages</h2>
+        <table><thead><tr><th>Page</th><th>Views</th><th>Engaged</th><th>Clicks from search</th></tr></thead><tbody id="r-pages"></tbody></table>
+        <details><summary>What the agents are told</summary><pre id="r-notes" class="notes"></pre></details>
+      </div>
+    </section>
+
+    <section id="logs" hidden>
+      <h1>Timetable and logs</h1>
+      <p class="muted">What Plume does on its own, and when. Tasks marked $ use AI and start switched off.</p>
+      <table><thead><tr><th>On</th><th>Task</th><th>When</th><th>Next</th><th>Last result</th><th></th></tr></thead><tbody id="task-rows"></tbody></table>
+      <h2>Log</h2>
+      <table><thead><tr><th>Time</th><th>From</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table>
+    </section>
+
     <section id="usage" hidden>
       <h1>AI cost</h1>
+      <div class="budget">
+        <div><strong id="budget-line"></strong><div class="meter"><div id="budget-bar"></div></div><small id="budget-reset" class="muted"></small></div>
+        <label>Monthly limit $ <input id="budget-limit" type="number" min="0" step="5" style="width:90px"></label>
+        <button id="budget-save" class="secondary">Save</button>
+      </div>
       <p id="usage-total"></p>
+      <p id="usage-llm" class="muted"></p>
       <table><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table>
     </section>
   </main>

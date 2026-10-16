@@ -2,7 +2,9 @@ import { MODELS } from '../config';
 import { ask } from '../llm/client';
 import { PROFILE_DOCS, ProfileDocId, readDoc, writeDoc } from '../context/profile';
 import { crawlSite, CrawledPage } from './crawl';
+import { closeBrowser } from './fetchPage';
 import { finishJob, startJob, updateJob } from '../jobs';
+import { detectLanguage, languageName, setContentLanguage } from '../context/language';
 
 /** The site as one block of text for the model: every page, full text, with its SEO facts. */
 export function siteDigest(pages: CrawledPage[]): string {
@@ -14,7 +16,9 @@ export function siteDigest(pages: CrawledPage[]): string {
 const RESEARCHER = `You are the research lead of a small marketing team. Your notes are the only thing the other team members
 (SEO writer, social media writer, community manager, outreach) will read about this business, so they must be specific,
 accurate and useful. Write in plain English. Quote facts from the site; mark anything you inferred as "(inferred)".
-Never invent customers, numbers or testimonials. Output only the document in Markdown, starting with a "# " title.
+Never invent customers, numbers or testimonials. Write the document in English, but when the site is in another
+language, quote its key phrases, product names and customer wording in the original (with a short English gloss),
+and note which search terms customers would type in that language. Output only the document in Markdown, starting with a "# " title.
 End with a "## Sources" list of the URLs you relied on.`;
 
 /**
@@ -49,7 +53,9 @@ export function startResearch(url: string, only?: ProfileDocId): number {
   const jobId = startJob('research', `Reading ${url}`);
   (async () => {
     const pages = await crawlSite(url, { onPage: (p, n) => updateJob(jobId, `Read ${n} pages (latest: ${p.url})`) });
-    if (!pages.length) throw new Error(`could not read any pages at ${url}`);
+    const lang = detectLanguage(pages);
+    setContentLanguage(lang);
+    updateJob(jobId, `Read ${pages.length} pages · site language: ${languageName(lang)}`);
     const digest = siteDigest(pages);
     for (const d of PROFILE_DOCS) {
       if (only && d.id !== only) continue;
@@ -57,6 +63,8 @@ export function startResearch(url: string, only?: ProfileDocId): number {
       await writeProfileDoc(d.id, url, digest);
     }
     finishJob(jobId);
-  })().catch((err) => finishJob(jobId, String(err?.message ?? err)));
+  })()
+    .catch((err) => finishJob(jobId, String(err?.message ?? err)))
+    .finally(() => closeBrowser());
   return jobId;
 }

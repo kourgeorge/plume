@@ -25,9 +25,11 @@ async function refresh() {
   updateInboxCount();
   const page = location.hash.slice(1) || 'inbox';
   if (page === 'usage') return loadUsage();
+  if (page === 'logs') return loadLogs();
   if (page === 'agents') return loadAgents();
   if (page === 'check') return loadAudit();
   if (page === 'profile') return loadProfile();
+  if (page.startsWith('results')) return loadResults();
   return loadInbox();
 }
 
@@ -197,11 +199,102 @@ async function loadAudit() {
   renderAudit(await api('/api/audit'));
 }
 
+// ---- results ----
+const n = (x) => (x == null ? '—' : Number(x).toLocaleString());
+const pos = (x) => (x == null || !x ? '—' : Number(x).toFixed(1));
+
+async function loadResults() {
+  show('results');
+  const msg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
+  const g = await api('/api/google');
+  $('google-setup').hidden = g.configured;
+  $('google-msg').textContent = msg ? `Google: ${msg}` : g.lastPull ? pullLine(g.lastPull) : '';
+  $('google-actions').innerHTML = !g.configured ? '' : g.connected
+    ? '<button id="g-pull">Get latest data</button> <button id="g-off" class="secondary">Disconnect</button>'
+    : '<a href="/api/google/connect"><button>Connect Google</button></a>';
+  $('google-pick').hidden = !g.connected;
+  $('results-body').hidden = !g.connected;
+  if (!g.connected) return;
+  $('g-pull').onclick = async () => {
+    $('g-pull').disabled = true;
+    $('google-msg').textContent = 'Getting data from Google…';
+    $('google-msg').textContent = pullLine(await post('/api/google/pull'));
+    renderResults(await api('/api/results'));
+    $('g-pull').disabled = false;
+  };
+  $('g-off').onclick = async () => confirm('Disconnect Google? Saved data stays.') && (await post('/api/google/disconnect'), loadResults());
+  try {
+    const opts = await api('/api/google/options');
+    $('gsc-site').innerHTML = '<option value="">— none —</option>' + opts.sites.map((s) => `<option ${s === g.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
+    $('ga-prop').innerHTML = '<option value="">— none —</option>' + opts.properties.map((p) => `<option value="${esc(p.id)}" ${p.id === g.property ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('');
+  } catch (err) {
+    $('google-msg').textContent = `Couldn't list your Google sites: ${err.message}`;
+  }
+  $('gsc-site').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ site: $('gsc-site').value }) });
+  $('ga-prop').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ property: $('ga-prop').value }) });
+  renderResults(await api('/api/results'));
+}
+
+function pullLine(p) {
+  const part = (label, s, what) => (s.error ? `${label} failed: ${s.error}` : (s.site ?? s.property) ? `${label}: ${n(s.rows)} ${what}` : `${label}: not selected`);
+  return `Last update ${new Date(p.at).toLocaleString()} · ${part('Search Console', p.searchConsole, 'rows')} · ${part('Analytics', p.analytics, 'pages')}`;
+}
+
+function renderResults(r) {
+  const empty = (cols) => `<tr><td colspan="${cols}" class="muted">No data yet.</td></tr>`;
+  $('r-near').innerHTML = r.nearlyThere.map((o) => `<tr><td>${esc(o.keyword)}</td><td>${n(o.impressions)}</td><td>${pos(o.position)}</td></tr>`).join('') || empty(3);
+  $('r-mine').innerHTML = r.published.map((m) => `<tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}</a> <small class="muted">${m.publishedDaysAgo}d ago</small></td><td>${n(m.clicks)}</td><td>${n(m.impressions)}</td><td>${pos(m.position)}</td><td>${n(m.views)}</td><td>${esc(m.topQuery ?? '—')}</td></tr>`).join('') || empty(6);
+  $('r-queries').innerHTML = r.queries.map((q) => `<tr><td>${esc(q.query)}</td><td>${n(q.clicks)}</td><td>${n(q.impressions)}</td><td>${(q.ctr * 100).toFixed(1)}%</td><td>${pos(q.position)}</td></tr>`).join('') || empty(5);
+  $('r-pages').innerHTML = r.pages.map((p) => `<tr><td>${esc(p.page)}</td><td>${n(p.views)}</td><td>${p.engagement == null ? '—' : (p.engagement * 100).toFixed(0) + '%'}</td><td>${n(p.clicks)}</td></tr>`).join('') || empty(4);
+  $('r-notes').textContent = r.notes ?? 'Nothing yet — agents will be told once there is data.';
+}
+
+// ---- timetable and logs ----
+const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const CRON_WORDS = { '* * * * *': 'every minute', '7 6 * * *': 'daily 06:07', '47 5 * * *': 'daily 05:47', '17 6 * * *': 'daily 06:17', '53 3 * * *': 'daily 03:53', '13 7 * * 1-5': 'weekdays 07:13' };
+
+async function loadLogs() {
+  show('logs');
+  const [tasks, logs] = await Promise.all([api('/api/tasks'), api('/api/logs?limit=200')]);
+  $('task-rows').innerHTML = tasks
+    .map((t) => `<tr>
+      <td><input type="checkbox" data-toggle="${esc(t.id)}" ${t.enabled ? 'checked' : ''}></td>
+      <td>${esc(t.label)}${t.costsMoney ? ' <small>$</small>' : ''}${t.costsMoney ? ` <small>· <input type="number" min="1" max="10" value="${t.limit ?? 1}" data-limit="${esc(t.id)}" style="width:52px"> per run</small>` : ''}</td>
+      <td><input value="${esc(t.cron)}" data-cron="${esc(t.id)}" title="${esc(CRON_WORDS[t.cron] ?? 'minute hour day month weekday')}" style="width:120px"> <small>${esc(CRON_WORDS[t.cron] ?? '')}</small></td>
+      <td>${t.running ? 'running now' : when(t.next)}</td>
+      <td>${t.last ? `<small>${when(t.last.started_at)} · ${esc(t.last.status)}</small> ${esc(t.last.message ?? '')}` : '<small>never run</small>'}</td>
+      <td><button class="secondary" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>Run now</button></td></tr>`)
+    .join('');
+  $('log-rows').innerHTML = logs.map((l) => `<tr class="level-${esc(l.level)}"><td><small>${when(l.at)}</small></td><td>${esc(l.source)}</td><td>${esc(l.message)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Nothing logged yet.</td></tr>';
+  const put = (id, body) => api(`/api/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }).then(loadLogs, (e) => (alert(e.message), loadLogs()));
+  for (const el of document.querySelectorAll('[data-toggle]')) el.onchange = () => put(el.dataset.toggle, { enabled: el.checked });
+  for (const el of document.querySelectorAll('[data-cron]')) el.onchange = () => put(el.dataset.cron, { cron: el.value.trim() });
+  for (const el of document.querySelectorAll('[data-limit]')) el.onchange = () => put(el.dataset.limit, { limit: Number(el.value) });
+  for (const el of document.querySelectorAll('[data-run]'))
+    el.onclick = async () => {
+      el.disabled = true;
+      el.textContent = 'Running…';
+      const r = await post(`/api/tasks/${encodeURIComponent(el.dataset.run)}/run`);
+      if (r.status === 'failed') alert(r.message);
+      loadLogs();
+    };
+}
+
 // ---- usage ----
 async function loadUsage() {
   show('usage');
   const u = await api('/api/usage');
   $('usage-total').textContent = `${u.total.calls} AI calls so far, $${u.total.cost.toFixed(2)} in total.`;
+  const b = u.budget;
+  const pct = b.limit ? Math.min(100, (100 * b.spent) / b.limit) : 0;
+  $('budget-line').textContent = b.limit ? `$${b.spent.toFixed(2)} of $${b.limit.toFixed(2)} used this month` : `$${b.spent.toFixed(2)} used this month (no limit)`;
+  $('budget-bar').style.width = `${pct}%`;
+  $('budget-bar').className = pct >= 80 ? 'high' : '';
+  $('budget-reset').textContent = `${b.remaining != null ? `$${b.remaining.toFixed(2)} left · ` : ''}starts again ${new Date(b.resets).toLocaleDateString()}`;
+  $('budget-limit').value = b.limit;
+  const l = state.llm;
+  const search = { server: "Claude's built-in search", local: 'Plume runs searches itself (Tavily)', off: 'off — add TAVILY_API_KEY to .env to turn it on' }[l.webSearch];
+  $('usage-llm').textContent = `Calls go to ${l.endpoint} (${l.auth}, from ${l.source}). Models: research ${l.models.research}, writing ${l.models.draft}, scoring ${l.models.score}. Web search: ${search}.`;
   $('usage-rows').innerHTML = u.byPurpose
     .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${r.input.toLocaleString()} / ${r.output.toLocaleString()}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
     .join('');
@@ -250,6 +343,14 @@ $('audit-run').onclick = async () => {
     alert(err.message);
   } finally {
     $('audit-run').disabled = false;
+  }
+};
+$('budget-save').onclick = async () => {
+  try {
+    await api('/api/budget', { method: 'PUT', body: JSON.stringify({ limit: Number($('budget-limit').value) }) });
+    loadUsage();
+  } catch (err) {
+    alert(err.message);
   }
 };
 window.onhashchange = () => refresh().catch((err) => alert(err.message));
