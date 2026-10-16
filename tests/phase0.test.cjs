@@ -6,16 +6,17 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
-const { getDb } = require('../src/db');
+process.env.PLUME_SITE = 'test.example';
+const { getDb, getGlobalDb } = require('../src/db');
 const budget = require('../src/llm/budget');
 const sched = require('../src/scheduler');
 const { recentLogs } = require('../src/log');
 const ps = require('../src/analytics/pagespeed');
 
 const spend = (usd, at = new Date().toISOString()) =>
-  getDb().prepare(`INSERT INTO llm_calls (at, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason) VALUES (?, 't', 'm', 0, 0, 0, 0, 0, ?, 'end_turn')`).run(at, usd);
+  getGlobalDb().prepare(`INSERT INTO llm_calls (at, site, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason) VALUES (?, 'other-site.example', 't', 'm', 0, 0, 0, 0, 0, ?, 'end_turn')`).run(at, usd);
 
-test('budget: counts this month only, warns once at 80%, stops at the limit', () => {
+test('budget: one limit for all sites, counts this month only, warns once at 80%, stops at the limit', () => {
   budget.setBudgetLimit(10);
   spend(100, '2020-01-05T00:00:00Z'); // an old month doesn't count
   spend(8.5);

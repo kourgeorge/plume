@@ -1,10 +1,10 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from '../config';
+import { currentSite, siteDir, slugFor } from '../site';
 
-let db: Database.Database | null = null;
-
-const SCHEMA = `
+const SITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pages (
   url TEXT PRIMARY KEY,
   status INTEGER,
@@ -27,19 +27,6 @@ CREATE TABLE IF NOT EXISTS jobs (
   error TEXT,
   started_at TEXT NOT NULL,
   finished_at TEXT
-);
-CREATE TABLE IF NOT EXISTS llm_calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at TEXT NOT NULL,
-  purpose TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_tokens INTEGER,
-  output_tokens INTEGER,
-  cache_read_tokens INTEGER,
-  cache_write_tokens INTEGER,
-  web_searches INTEGER,
-  cost_usd REAL,
-  stop_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS drafts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,13 +69,6 @@ CREATE TABLE IF NOT EXISTS ga_daily (
   path TEXT NOT NULL,
   views INTEGER, sessions INTEGER, engagement_rate REAL, avg_seconds REAL,
   PRIMARY KEY (date, path)
-);
-CREATE TABLE IF NOT EXISTS logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at TEXT NOT NULL,
-  level TEXT NOT NULL,            -- info | warn | error
-  source TEXT NOT NULL,           -- task id, agent id, "server", ...
-  message TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS task_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,20 +121,88 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
-/** One shared connection. `file` lets tests use ':memory:'. */
-export function getDb(file = path.join(DATA_DIR, 'plume.db')): Database.Database {
-  if (db) return db;
-  db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.exec(SCHEMA);
-  return db;
+/** Shared by every site: the site list, AI usage (one budget for all sites), the event log, app-wide settings. */
+const GLOBAL_SCHEMA = `
+CREATE TABLE IF NOT EXISTS sites (
+  slug TEXT PRIMARY KEY,          -- folder name under data/sites, e.g. "acme.com"
+  url TEXT NOT NULL,              -- origin, e.g. https://acme.com
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_opened_at TEXT
+);
+CREATE TABLE IF NOT EXISTS llm_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  site TEXT,                      -- which website the call was for; null = not site-specific
+  purpose TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  web_searches INTEGER,
+  cost_usd REAL,
+  stop_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  site TEXT,                      -- null = about Plume itself
+  level TEXT NOT NULL,            -- info | warn | error
+  source TEXT NOT NULL,           -- task id, agent id, "server", ...
+  message TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL     -- JSON
+);
+`;
+
+
+let globalDb: Database.Database | null = null;
+const siteDbs = new Map<string, Database.Database>();
+
+function open(file: string, schema: string): Database.Database {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const d = new Database(file);
+  d.pragma('journal_mode = WAL');
+  d.exec(schema);
+  return d;
+}
+
+/** The shared database (site list, AI usage, logs, app-wide settings). */
+export function getGlobalDb(): Database.Database {
+  if (globalDb) return globalDb;
+  migrateSingleSiteLayout();
+  globalDb = open(path.join(DATA_DIR, 'plume.db'), GLOBAL_SCHEMA);
+  return globalDb;
+}
+
+/** The database of the site this request or job is for (see `withSite`). */
+export function getDb(slug = currentSite()): Database.Database {
+  let d = siteDbs.get(slug);
+  if (!d) {
+    getGlobalDb(); // makes sure an old single-site layout has been moved first
+    d = open(path.join(siteDir(slug), 'site.db'), SITE_SCHEMA);
+    siteDbs.set(slug, d);
+  }
+  return d;
+}
+
+/** Close a site's database (before deleting its folder). */
+export function closeSiteDb(slug: string): void {
+  siteDbs.get(slug)?.close();
+  siteDbs.delete(slug);
 }
 
 export function resetDbForTests(): void {
-  db?.close();
-  db = null;
+  for (const d of siteDbs.values()) d.close();
+  siteDbs.clear();
+  globalDb?.close();
+  globalDb = null;
 }
 
+/** Settings for the current site. */
 export function getSetting<T>(key: string, fallback: T): T {
   const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row ? (JSON.parse(row.value) as T) : fallback;
@@ -164,4 +212,62 @@ export function setSetting(key: string, value: unknown): void {
   getDb()
     .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, JSON.stringify(value));
+}
+
+/** Settings shared by all sites (e.g. the monthly AI budget). */
+export function getGlobalSetting<T>(key: string, fallback: T): T {
+  const row = getGlobalDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row ? (JSON.parse(row.value) as T) : fallback;
+}
+
+export function setGlobalSetting(key: string, value: unknown): void {
+  getGlobalDb()
+    .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, JSON.stringify(value));
+}
+
+/**
+ * Before multiple sites, everything lived in data/plume.db + data/profile + data/exports.
+ * Move that into data/sites/<slug>/ and start a fresh shared database, keeping the AI usage and logs.
+ */
+function migrateSingleSiteLayout(): void {
+  const oldFile = path.join(DATA_DIR, 'plume.db');
+  if (!fs.existsSync(oldFile)) return;
+  const probe = new Database(oldFile, { readonly: true });
+  const hasSiteTables = !!probe.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pages'`).get();
+  const siteRow = hasSiteTables ? (probe.prepare(`SELECT value FROM settings WHERE key = 'siteUrl'`).get() as { value: string } | undefined) : undefined;
+  probe.close();
+  if (!hasSiteTables) return;
+
+  const url = siteRow ? (JSON.parse(siteRow.value) as string) : null;
+  const slug = url ? slugFor(url) : 'unnamed-site';
+  const dest = siteDir(slug);
+  fs.mkdirSync(dest, { recursive: true });
+  for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(oldFile + ext)) fs.renameSync(oldFile + ext, path.join(dest, 'site.db' + ext));
+  for (const sub of ['profile', 'exports']) {
+    const from = path.join(DATA_DIR, sub);
+    if (fs.existsSync(from) && !fs.existsSync(path.join(dest, sub))) fs.renameSync(from, path.join(dest, sub));
+  }
+
+  const g = open(oldFile, GLOBAL_SCHEMA);
+  const site = new Database(path.join(dest, 'site.db'));
+  const now = new Date().toISOString();
+  g.prepare('INSERT OR IGNORE INTO sites (slug, url, name, created_at) VALUES (?, ?, ?, ?)').run(slug, url ?? 'https://unknown.invalid', slug, now);
+  const copy = (table: string, cols: string[]) => {
+    if (!site.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table)) return;
+    const rows = site.prepare(`SELECT ${cols.join(', ')} FROM ${table}`).all() as Record<string, unknown>[];
+    const ins = g.prepare(`INSERT INTO ${table} (site, ${cols.join(', ')}) VALUES (?, ${cols.map(() => '?').join(', ')})`);
+    g.transaction(() => rows.forEach((r) => ins.run(slug, ...cols.map((c) => r[c]))))();
+    site.exec(`DROP TABLE ${table}`);
+  };
+  copy('llm_calls', ['at', 'purpose', 'model', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'web_searches', 'cost_usd', 'stop_reason']);
+  copy('logs', ['at', 'level', 'source', 'message']);
+  // App-wide settings move to the shared database.
+  for (const key of ['monthlyBudgetUsd', 'budgetWarned']) {
+    const r = site.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    if (r) g.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, r.value);
+  }
+  site.close();
+  g.close();
+  console.log(`Moved the existing site data into ${dest}`);
 }

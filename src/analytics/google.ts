@@ -9,7 +9,7 @@ import { DATA_DIR } from '../config';
  */
 export const SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly', 'https://www.googleapis.com/auth/analytics.readonly'];
 
-/** Overridable so tests can point at a fake server. */
+/** Overridable so tests can point at a fake server. One Google account serves every site; tokens live outside the site folders. */
 export const GOOGLE = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
   token: 'https://oauth2.googleapis.com/token',
@@ -45,13 +45,14 @@ export function disconnectGoogle(): void {
 }
 
 // One sign-in in flight at a time; state + PKCE verifier live only in memory.
-let pending: { state: string; verifier: string; redirectUri: string; at: number } | null = null;
+// `site` is which website started the sign-in, so the user lands back on that site's dashboard.
+let pending: { state: string; verifier: string; redirectUri: string; site: string; at: number } | null = null;
 
-export function authUrl(redirectUri: string, env = process.env): string {
+export function authUrl(redirectUri: string, site: string, env = process.env): string {
   if (!googleConfigured(env)) throw new Error('set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env first');
   const verifier = crypto.randomBytes(32).toString('base64url');
   const state = crypto.randomBytes(16).toString('base64url');
-  pending = { state, verifier, redirectUri, at: Date.now() };
+  pending = { state, verifier, redirectUri, site, at: Date.now() };
   const q = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID!,
     redirect_uri: redirectUri,
@@ -66,7 +67,8 @@ export function authUrl(redirectUri: string, env = process.env): string {
   return `${GOOGLE.auth}?${q}`;
 }
 
-export async function finishAuth(code: string, state: string, env = process.env): Promise<void> {
+/** Swap the code for tokens. Returns the site that started the sign-in. */
+export async function finishAuth(code: string, state: string, env = process.env): Promise<string> {
   const p = pending;
   pending = null;
   if (!p || p.state !== state || Date.now() - p.at > 10 * 60_000) throw new Error('sign-in expired or did not start here; try Connect again');
@@ -76,6 +78,7 @@ export async function finishAuth(code: string, state: string, env = process.env)
   );
   if (!t.refresh_token) throw new Error('Google did not return a refresh token; remove Plume from your Google account permissions and connect again');
   saveTokens(t);
+  return p.site;
 }
 
 async function tokenRequest(params: Record<string, string>, env: NodeJS.ProcessEnv): Promise<Tokens> {

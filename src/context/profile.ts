@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type Anthropic from '@anthropic-ai/sdk';
-import { PROFILE_DIR } from '../config';
+import { profileDir } from '../site';
 import { performanceNotes } from '../analytics/results';
 import { languageRule } from './language';
 import { feedbackNote } from '../feedback';
@@ -22,21 +22,21 @@ export function isProfileDocId(id: string): id is ProfileDocId {
   return PROFILE_DOCS.some((d) => d.id === id);
 }
 
-export function docPath(id: ProfileDocId, dir = PROFILE_DIR): string {
+export function docPath(id: ProfileDocId, dir = profileDir()): string {
   return path.join(dir, `${id}.md`);
 }
 
-export function readDoc(id: ProfileDocId, dir = PROFILE_DIR): string | null {
+export function readDoc(id: ProfileDocId, dir = profileDir()): string | null {
   const p = docPath(id, dir);
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
-export function writeDoc(id: ProfileDocId, body: string, dir = PROFILE_DIR): void {
+export function writeDoc(id: ProfileDocId, body: string, dir = profileDir()): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(docPath(id, dir), body.endsWith('\n') ? body : body + '\n');
 }
 
-export function profileComplete(dir = PROFILE_DIR): boolean {
+export function profileComplete(dir = profileDir()): boolean {
   return PROFILE_DOCS.every((d) => readDoc(d.id, dir) !== null);
 }
 
@@ -63,7 +63,7 @@ function safeNotes(): string | null {
  */
 export function agentSystem(
   role: string,
-  dir = PROFILE_DIR,
+  dir = profileDir(),
   notes: string | null = safeNotes(),
   /** When given, the agent also sees drafts the user recently turned down. */
   agent?: string,

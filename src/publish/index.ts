@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { marked } from 'marked';
-import { DATA_DIR } from '../config';
+import { siteDir } from '../site';
 import type { Draft } from '../queue';
 import { wordpress } from './wordpress';
 import { webflow } from './webflow';
@@ -31,14 +31,14 @@ export function stripTitle(markdown: string): string {
   return markdown.replace(/^\s*#\s+[^\n]*\n+/, '');
 }
 
-/** Writes HTML + Markdown to data/exports. Used for Framer (no write API) and for every dry run. */
+/** Writes HTML + Markdown to the site's exports folder. Used for Framer (no write API) and for every dry run. */
 export const exportFiles: Publisher = {
   id: 'export',
   label: 'Save as files (Framer / copy-paste)',
   needs: [],
   configured: () => true,
   async publish(draft, html) {
-    const dir = path.join(DATA_DIR, 'exports');
+    const dir = path.join(siteDir(), 'exports');
     fs.mkdirSync(dir, { recursive: true });
     const base = path.join(dir, `${draft.id}-${draft.meta.slug ?? 'item'}`);
     fs.writeFileSync(`${base}.md`, draft.body);

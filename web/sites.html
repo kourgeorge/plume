@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plume — your websites</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M26 4C14 6 7 14 6 27l3 1c1-4 3-8 6-11-1 3-1 6 0 9 8-3 12-11 11-22z' fill='%232f6f5e'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="logo">Plume</a>
+    <span class="site-name">Your websites</span>
+    <span class="spacer"></span>
+    <span id="budget" class="small"></span>
+  </header>
+
+  <main class="sites-page">
+    <section class="card add-site">
+      <h1>Add a website</h1>
+      <p class="muted">Each website gets its own documents, drafts, results and timetable, stored in its own folder.</p>
+      <form id="add-form">
+        <input id="add-url" placeholder="yourcompany.com" required autocomplete="url">
+        <label class="check small"><input type="checkbox" id="add-research" checked> Research it now (uses AI, about $1–3)</label>
+        <button type="submit">Add</button>
+      </form>
+      <p id="add-msg" class="warn"></p>
+    </section>
+
+    <div id="site-grid" class="site-grid"></div>
+
+    <section class="card llm-card" id="llm">
+      <div class="llm-head">
+        <h2>AI connection</h2>
+        <span id="llm-status" class="small"></span>
+      </div>
+      <p class="muted small">Shared by all websites. For LiteLLM or another gateway, enter its address and your key; leave the address empty to use Anthropic directly. The key is stored on this computer only (<code>data/tokens/llm.json</code>) and is never shown again.</p>
+      <form id="llm-form" class="form">
+        <label class="wide">Base URL <input id="llm-url" placeholder="https://litellm.yourcompany.com" autocomplete="off" spellcheck="false"></label>
+        <label class="wide">API key <input id="llm-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label>
+        <label>Research model <input id="llm-m-research" spellcheck="false"></label>
+        <label>Writing model <input id="llm-m-draft" spellcheck="false"></label>
+        <label>Scoring model <input id="llm-m-score" spellcheck="false"></label>
+        <label class="wide">Extra headers <span class="muted">(optional, one per line: Name: value)</span><textarea id="llm-headers" rows="2" spellcheck="false"></textarea></label>
+        <div class="wide llm-actions">
+          <button type="submit">Save</button>
+          <button type="button" id="llm-test" class="secondary">Test connection</button>
+          <button type="button" id="llm-clear" class="secondary">Forget saved connection</button>
+        </div>
+      </form>
+      <ul id="llm-checks" class="item-list"></ul>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    const api = async (path, opts = {}) => {
+      const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    };
+    const ago = (iso) => {
+      if (!iso) return 'never opened';
+      const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+      if (mins < 2) return 'opened just now';
+      if (mins < 60) return `opened ${mins} min ago`;
+      if (mins < 48 * 60) return `opened ${Math.round(mins / 60)} h ago`;
+      return `opened ${new Date(iso).toLocaleDateString()}`;
+    };
+    const open = (slug) => (location.href = `/s/${encodeURIComponent(slug)}/`);
+
+    async function load() {
+      const [sites, budget] = await Promise.all([api('/api/sites'), api('/api/budget').catch(() => null)]);
+      if (budget) $('budget').textContent = budget.limit ? `AI this month: $${budget.spent.toFixed(2)} of $${budget.limit} (all sites)` : `AI this month: $${budget.spent.toFixed(2)}`;
+      $('site-grid').innerHTML = sites.length
+        ? sites
+            .map(
+              (s) => `<div class="site-card" data-slug="${esc(s.slug)}">
+                <a class="site-main" href="/s/${encodeURIComponent(s.slug)}/">
+                  <span class="site-title">${esc(s.name)}</span>
+                  <span class="muted small">${esc(s.url)}</span>
+                  <span class="site-stats">
+                    <span>${s.docsWritten === 5 ? 'Research done' : s.docsWritten ? `Research ${s.docsWritten}/5` : 'Not researched yet'}</span>
+                    ${s.waiting ? `<span class="ready">${s.waiting} waiting for you</span>` : ''}
+                    ${s.published ? `<span>${s.published} published</span>` : ''}
+                  </span>
+                  <span class="muted small">${ago(s.lastOpenedAt)}</span>
+                </a>
+                <button class="secondary small-btn" data-remove="${esc(s.slug)}">Remove</button>
+              </div>`,
+            )
+            .join('')
+        : '<p class="muted">No websites yet. Add your first one above.</p>';
+      for (const b of document.querySelectorAll('[data-remove]'))
+        b.onclick = async () => {
+          const slug = b.dataset.remove;
+          const typed = prompt(`This deletes ${slug}'s folder: its documents, drafts, results and competitor history. AI cost records stay.\n\nType the site name to confirm:`);
+          if (typed === null) return;
+          if (typed.trim().toLowerCase() !== slug) return alert('The name did not match, so nothing was removed.');
+          try {
+            await api(`/api/sites/${encodeURIComponent(slug)}`, { method: 'DELETE' });
+            load();
+          } catch (err) {
+            alert(err.message);
+          }
+        };
+    }
+
+    $('add-form').onsubmit = async (e) => {
+      e.preventDefault();
+      $('add-msg').textContent = '';
+      try {
+        const r = await api('/api/sites', { method: 'POST', body: JSON.stringify({ url: $('add-url').value.trim(), research: $('add-research').checked }) });
+        if (!r.created) $('add-msg').textContent = `${r.site.slug} is already on your list — opening it.`;
+        setTimeout(() => open(r.site.slug), r.created ? 0 : 900);
+      } catch (err) {
+        $('add-msg').textContent = err.message;
+      }
+    };
+    // ---- AI connection ----
+    async function loadLlm() {
+      const c = await api('/api/llm');
+      $('llm-url').value = c.viaProxy ? c.endpoint : '';
+      $('llm-key').value = '';
+      $('llm-key').placeholder = c.keyHint ? `saved (ends ${c.keyHint.slice(1)}) — leave empty to keep it` : 'sk-…';
+      $('llm-m-research').value = c.models.research;
+      $('llm-m-draft').value = c.models.draft;
+      $('llm-m-score').value = c.models.score;
+      $('llm-headers').placeholder = c.headerNames.length ? `saved: ${c.headerNames.join(', ')}` : 'x-team-id: marketing';
+      $('llm-status').className = `small ${c.error ? 'warn' : 'good'}`;
+      $('llm-status').textContent = c.error
+        ? 'Not connected — AI tasks are off'
+        : `Connected to ${c.endpoint} (${c.source === 'saved' ? 'saved here' : 'from .env'}) · web search: ${{ server: 'built in', local: 'Plume runs it', off: 'off' }[c.webSearch]}`;
+      $('llm-clear').hidden = c.source !== 'saved';
+    }
+    const llmBody = () => ({
+      baseUrl: $('llm-url').value.trim(),
+      apiKey: $('llm-key').value.trim(),
+      ...($('llm-headers').value.trim() ? { headers: $('llm-headers').value } : {}),
+      models: { research: $('llm-m-research').value.trim(), draft: $('llm-m-draft').value.trim(), score: $('llm-m-score').value.trim() },
+    });
+    function showChecks(r) {
+      $('llm-checks').innerHTML = r.problem
+        ? `<li class="warn">${esc(r.problem)}</li>`
+        : r.checks
+            .map((c) => `<li><strong>${esc({ research: 'Research', draft: 'Writing', score: 'Scoring' }[c.role])}</strong> · <code>${esc(c.model)}</code> — <span class="${c.ok && c.json !== false ? 'good' : 'warn'}">${esc(c.message)}</span></li>`)
+            .join('');
+    }
+    $('llm-form').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('/api/llm', { method: 'PUT', body: JSON.stringify(llmBody()) });
+        await loadLlm();
+        $('llm-checks').innerHTML = '<li class="muted">Saved. Testing…</li>';
+        showChecks(await api('/api/llm/test', { method: 'POST', body: '{}' }));
+      } catch (err) {
+        $('llm-checks').innerHTML = `<li class="warn">${esc(err.message)}</li>`;
+      }
+    };
+    $('llm-test').onclick = async () => {
+      $('llm-test').disabled = true;
+      $('llm-checks').innerHTML = '<li class="muted">Testing each model (a few seconds, costs a fraction of a cent)…</li>';
+      try {
+        showChecks(await api('/api/llm/test', { method: 'POST', body: '{}' }));
+      } catch (err) {
+        $('llm-checks').innerHTML = `<li class="warn">${esc(err.message)}</li>`;
+      } finally {
+        $('llm-test').disabled = false;
+      }
+    };
+    $('llm-clear').onclick = async () => {
+      if (!confirm('Forget the saved AI connection? Settings in .env (if any) will be used instead.')) return;
+      await api('/api/llm', { method: 'DELETE' });
+      $('llm-checks').innerHTML = '';
+      loadLlm();
+    };
+
+    load().catch((err) => ($('site-grid').textContent = err.message));
+    loadLlm().catch((err) => ($('llm-status').textContent = err.message));
+    if (location.hash === '#llm') setTimeout(() => $('llm').scrollIntoView(), 300);
+  </script>
+</body>
+</html>

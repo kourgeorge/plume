@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
+process.env.PLUME_SITE = 'test.example';
 const { PROFILE_DOCS, agentSystem, writeDoc, profileComplete, isProfileDocId } = require('../src/context/profile');
 
 test('agentSystem includes every doc in full, in fixed order, cached', () => {

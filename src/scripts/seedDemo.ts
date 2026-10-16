@@ -1,24 +1,23 @@
 /**
- * Fill an EMPTY data folder with a made-up business so the workspace can be tried without a real site.
- * Usage: DATA_DIR=./data-demo npm run demo   (then: DATA_DIR=./data-demo PORT=4419 npm run dev)
+ * Add a made-up business as a site, so the workspace can be tried without a real website.
+ * Usage: npm run demo   (it appears in the site list as acme-widgets.example; remove it there when done)
  */
-import fs from 'fs';
-import path from 'path';
-import { DATA_DIR } from '../config';
-import { getDb, getSetting, setSetting } from '../db';
+import { getDb, setSetting } from '../db';
+import { withSite } from '../site';
+import { addSite } from '../sites';
 import { PROFILE_DOCS, writeDoc } from '../context/profile';
 import { createDraft } from '../queue';
 import { auditPages } from '../agents/seoAudit';
 import { parseReport } from '../analytics/pagespeed';
 import { addCompetitor, savePerson } from '../context/extra';
 
-if (getSetting('siteUrl', null) || fs.existsSync(path.join(DATA_DIR, 'profile', 'product.md'))) {
-  console.error(`${DATA_DIR} already has data. Point DATA_DIR at a new, empty folder.`);
+const { site: demo, created } = addSite('https://acme-widgets.example');
+if (!created) {
+  console.error('The demo site acme-widgets.example already exists. Remove it from the site list first.');
   process.exit(1);
 }
-getDb();
-const site = 'https://acme-widgets.example';
-setSetting('siteUrl', site);
+const site = demo.url;
+withSite(demo.slug, () => {
 writeDoc(
   'product',
   '# Product\n\nAcme Widgets makes modular desk widgets for small remote teams, sold online with free returns and a two-year warranty. Teams use them to keep cables, chargers and notes in one place.\n\n## Features\n- Modular pieces that click together\n',
@@ -80,4 +79,5 @@ getDb()
     { kind: 'prices', text: 'changed prices: $29/mo gone; now $24/mo' },
   ]));
 savePerson({ name: 'Dana Levi', role: 'Founder', bio: 'Former office designer. Writes short, practical posts; never uses buzzwords.', linkedinUrl: 'linkedin.com/in/dana-levi-example' });
-console.log(`Demo data written to ${DATA_DIR}. Start it with: DATA_DIR=${DATA_DIR} PORT=4419 npm run dev`);
+});
+console.log(`Demo site added: open http://127.0.0.1:${process.env.PORT ?? 4410}/s/${demo.slug}/`);

@@ -1,10 +1,12 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
-import { getDb, getSetting, setSetting } from '../db';
-import { LLM, MODELS } from '../config';
-import { describe } from '../llm/settings';
-import { searchMode } from '../llm/client';
+import { getDb, getGlobalDb, getSetting, setSetting } from '../db';
+import { currentSite, isSlug, withSite } from '../site';
+import { addSite, getSite, removeSite, renameSite, siteSummaries, touchSite } from '../sites';
+import { MODELS } from '../config';
+import { clearLlmConfig, describeLlm, getLlmConfig, llmProblem, saveLlmConfig } from '../llm/settings';
+import { searchMode, testConnection } from '../llm/client';
 import { RTL, contentLanguage, languageName } from '../context/language';
 import { PROFILE_DOCS, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
 import { startResearch } from '../research/profile';
@@ -18,7 +20,7 @@ import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnecte
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
 import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
-import { TaskSetting, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
+import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
 import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
@@ -48,28 +50,94 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
 
-  app.register(fastifyStatic, { root: path.resolve(__dirname, '../../web') });
+  // Which website a request is for: the dashboard sends it as a header; plain links (downloads, Google sign-in) as ?site=.
+  // Everything the request does, including background work it starts, then happens inside that site.
+  const SITE_FREE = [/^\/api\/sites(\/|$|\?)/, /^\/api\/budget(\?|$)/, /^\/api\/google\/callback/, /^\/api\/llm(\/|$|\?)/];
+  app.addHook('onRequest', (req, reply, done) => {
+    if (!req.url.startsWith('/api/')) return done();
+    const raw = (req.headers['x-plume-site'] as string | undefined) ?? (req.query as Record<string, string> | undefined)?.site;
+    if (!raw) {
+      if (SITE_FREE.some((r) => r.test(req.url))) return done();
+      reply.code(400).send({ error: 'pick a website first' });
+      return;
+    }
+    if (!isSlug(raw) || !getSite(raw)) {
+      reply.code(404).send({ error: `no website "${raw}" — it may have been removed` });
+      return;
+    }
+    withSite(raw, done);
+  });
+
+  const web = path.resolve(__dirname, '../../web');
+  app.register(fastifyStatic, { root: web, index: false });
+  app.get('/', async (_req, reply) => reply.sendFile('sites.html'));
+  app.get<{ Params: { slug: string } }>('/s/:slug', async (req, reply) => reply.redirect(`/s/${encodeURIComponent(req.params.slug)}/`));
+  app.get<{ Params: { slug: string } }>('/s/:slug/', async (req, reply) => {
+    if (!isSlug(req.params.slug) || !getSite(req.params.slug)) return reply.redirect('/');
+    touchSite(req.params.slug);
+    return reply.sendFile('index.html');
+  });
+
+  // ---- AI connection (shared by all sites) ----
+  app.get('/api/llm', async () => ({ ...describeLlm(), webSearch: searchMode() }));
+  app.put<{ Body: { baseUrl?: string; apiKey?: string; headers?: string; models?: Record<string, string> } }>('/api/llm', async (req, reply) => {
+    try {
+      saveLlmConfig(req.body ?? {});
+      return { ...describeLlm(), webSearch: searchMode() };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.delete('/api/llm', async () => (clearLlmConfig(), describeLlm()));
+  /** One tiny call per model, so the user sees at once which models their gateway allows. Costs a fraction of a cent. */
+  app.post('/api/llm/test', async () => testConnection(getLlmConfig()));
+
+  // ---- the site list ----
+  app.get('/api/sites', async () => siteSummaries());
+  app.post<{ Body: { url?: string; research?: boolean } }>('/api/sites', async (req, reply) => {
+    try {
+      const { site, created } = addSite(req.body?.url ?? '');
+      const jobId = created && req.body?.research ? withSite(site.slug, () => startResearch(site.url)) : null;
+      return { site, created, jobId };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.put<{ Params: { slug: string }; Body: { name?: string } }>('/api/sites/:slug', async (req, reply) => {
+    try {
+      return renameSite(req.params.slug, req.body?.name ?? '');
+    } catch (err: any) {
+      return reply.code(404).send({ error: err.message });
+    }
+  });
+  app.delete<{ Params: { slug: string } }>('/api/sites/:slug', async (req, reply) => {
+    try {
+      removeSite(req.params.slug);
+      reschedule();
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(404).send({ error: err.message });
+    }
+  });
 
   app.get('/api/state', async () => ({
     site: getSetting<string | null>('siteUrl', null),
+    slug: currentSite(),
+    siteName: getSite(currentSite())?.name ?? currentSite(),
     docs: PROFILE_DOCS.map((d) => ({ id: d.id, title: d.title, written: readDoc(d.id) !== null })),
-    hasApiKey: !!(LLM.ANTHROPIC_API_KEY || LLM.ANTHROPIC_AUTH_TOKEN),
-    llm: { ...describe(LLM), models: MODELS, webSearch: searchMode() },
+    hasApiKey: !llmProblem(),
+    llmError: llmProblem(),
+    llm: { ...describeLlm(), webSearch: searchMode() },
     language: { code: contentLanguage(), name: languageName(contentLanguage()), rtl: RTL.has(contentLanguage()) },
   }));
 
-  app.post<{ Body: { url?: string; only?: string } }>('/api/research', async (req, reply) => {
-    const raw = req.body?.url ?? getSetting<string | null>('siteUrl', null);
-    let url: URL;
-    try {
-      url = new URL(raw?.match(/^https?:\/\//) ? raw : `https://${raw}`);
-    } catch {
-      return reply.code(400).send({ error: 'enter a website address, e.g. example.com' });
-    }
+  /** Research always covers this site's own address; a different website is a different site in the list. */
+  app.post<{ Body: { only?: string } }>('/api/research', async (req, reply) => {
+    const site = getSite(currentSite())!;
     const only = req.body?.only;
     if (only && !isProfileDocId(only)) return reply.code(400).send({ error: `unknown document ${only}` });
-    setSetting('siteUrl', url.origin);
-    return { jobId: startResearch(url.origin, only as never) };
+    if (!getSetting<string | null>('siteUrl', null)) setSetting('siteUrl', site.url);
+    return { jobId: startResearch(getSetting<string>('siteUrl', site.url), only as never) };
   });
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
@@ -206,7 +274,7 @@ export function buildServer(port: number): FastifyInstance {
 
   app.get('/api/google/connect', async (_req, reply) => {
     try {
-      return reply.redirect(authUrl(redirectUri));
+      return reply.redirect(authUrl(redirectUri, currentSite()));
     } catch (err: any) {
       return reply.code(400).send({ error: err.message });
     }
@@ -214,18 +282,23 @@ export function buildServer(port: number): FastifyInstance {
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>('/api/google/callback', async (req, reply) => {
     const { code, state, error } = req.query;
-    if (error || !code || !state) return reply.redirect(`/#results?google=${encodeURIComponent(error ?? 'cancelled')}`);
+    const back = (slug: string | null, msg?: string) => reply.redirect(`${slug ? `/s/${encodeURIComponent(slug)}/` : '/'}#results${msg ? `?google=${encodeURIComponent(msg)}` : ''}`);
+    if (error || !code || !state) return back(null, error ?? 'cancelled');
+    let slug: string | null = null;
     try {
-      await finishAuth(code, state);
-      // Pick the matching site automatically when there's an obvious one.
-      const origin = getSetting<string | null>('siteUrl', null);
-      if (origin && !getSetting('gscSite', null)) {
-        const site = matchSite(await listSearchConsoleSites(), origin);
-        if (site) setSetting('gscSite', site);
-      }
-      return reply.redirect('/#results');
+      slug = await finishAuth(code, state);
+      if (!getSite(slug)) return back(null);
+      // Pick the matching Search Console site automatically when there's an obvious one.
+      await withSite(slug, async () => {
+        const origin = getSetting<string | null>('siteUrl', null);
+        if (origin && !getSetting('gscSite', null)) {
+          const match = matchSite(await listSearchConsoleSites(), origin);
+          if (match) setSetting('gscSite', match);
+        }
+      });
+      return back(slug);
     } catch (err: any) {
-      return reply.redirect(`/#results?google=${encodeURIComponent(err.message)}`);
+      return back(slug, err.message);
     }
   });
 
@@ -367,7 +440,7 @@ export function buildServer(port: number): FastifyInstance {
     const body = buildLlmsTxt();
     return body ? { body } : reply.code(404).send({ error: 'Plume has not read your site yet' });
   });
-  app.get('/llms.txt', async (_req, reply) => {
+  app.get('/api/llms-txt/download', async (_req, reply) => {
     const body = buildLlmsTxt();
     return body ? reply.type('text/plain; charset=utf-8').header('content-disposition', 'attachment; filename="llms.txt"').send(body) : reply.code(404).send('not ready');
   });
@@ -395,14 +468,17 @@ export function buildServer(port: number): FastifyInstance {
     return r.status === 'done' ? lastSpeed() : reply.code(502).send({ error: r.message });
   });
 
+  /** This site's AI spending, plus every site's total (the monthly limit covers them all together). */
   app.get('/api/usage', async () => {
-    const db = getDb();
+    const g = getGlobalDb();
+    const site = currentSite();
     return {
       budget: budgetStatus(),
-      total: db.prepare('SELECT COUNT(*) calls, COALESCE(SUM(cost_usd),0) cost FROM llm_calls').get(),
-      byPurpose: db
-        .prepare('SELECT purpose, model, COUNT(*) calls, SUM(input_tokens) input, SUM(output_tokens) output, SUM(cost_usd) cost FROM llm_calls GROUP BY purpose, model ORDER BY cost DESC')
-        .all(),
+      total: g.prepare('SELECT COUNT(*) calls, COALESCE(SUM(cost_usd),0) cost FROM llm_calls WHERE site = ?').get(site),
+      allSites: g.prepare('SELECT COUNT(*) calls, COALESCE(SUM(cost_usd),0) cost FROM llm_calls').get(),
+      byPurpose: g
+        .prepare('SELECT purpose, model, COUNT(*) calls, SUM(input_tokens) input, SUM(output_tokens) output, SUM(cost_usd) cost FROM llm_calls WHERE site = ? GROUP BY purpose, model ORDER BY cost DESC')
+        .all(site),
     };
   });
 

@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
+process.env.PLUME_SITE = 'test.example';
 const x = require('../src/context/extra');
 const watch = require('../src/watch');
 const { agentSystem } = require('../src/context/profile');

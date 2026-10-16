@@ -1,7 +1,11 @@
 const $ = (id) => document.getElementById(id);
+/** This dashboard's website, from its address: /s/<site>/. Every request says which site it is for. */
+const SITE = decodeURIComponent((location.pathname.match(/^\/s\/([^/]+)/) || [])[1] || '');
+if (!SITE) location.replace('/');
+const withSite = (url) => `${url}${url.includes('?') ? '&' : '?'}site=${encodeURIComponent(SITE)}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const api = async (path, opts = {}) => {
-  const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
+  const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', 'x-plume-site': SITE, ...(opts.headers || {}) } });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -54,9 +58,12 @@ function showView(id) {
 async function route() {
   state = await api('/api/state');
   $('key-warning').hidden = state.hasApiKey;
-  if (!state.site) {
+  document.title = `${state.siteName} — Plume`;
+  // Nothing researched yet: offer to start (unless research is already running).
+  if (!state.docs.some((d) => d.written) && $('view-job').hidden) {
     $('workspace').hidden = true;
     $('onboard').hidden = false;
+    $('onboard-site').textContent = new URL(state.site).hostname;
     return;
   }
   $('onboard').hidden = true;
@@ -84,7 +91,7 @@ async function route() {
 // ---------------------------------------------------------------- frame: top bar + left + right
 
 async function renderChrome() {
-  $('site-name').textContent = new URL(state.site).hostname;
+  $('site-name').textContent = `${state.siteName} ▾`;
   const lang = state.language;
   $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
   for (const b of $('range').querySelectorAll('button')) b.classList.toggle('on', Number(b.dataset.days) === days);
@@ -108,7 +115,7 @@ async function renderChrome() {
   // These don't block the page: each fills in when it arrives.
   api('/api/profile/product').then((d) => ($('summary').textContent = summaryOf(d.body) || 'The business summary appears here once research is done.'), () => {});
   api('/api/google').then((g) => {
-    $('google-pill').innerHTML = !g.configured ? '' : g.connected ? '<span title="Search Console and Analytics are connected">Google ✓</span>' : '<a href="/api/google/connect">Connect Google</a>';
+    $('google-pill').innerHTML = !g.configured ? '' : g.connected ? '<span title="Search Console and Analytics are connected">Google ✓</span>' : `<a href="${withSite('/api/google/connect')}">Connect Google</a>`;
   }, () => {});
   api('/api/speed').then((s) => {
     const r = s[speedDevice] ?? s.mobile ?? s.desktop;
@@ -622,7 +629,7 @@ async function loadResults() {
     ? ''
     : g.connected
       ? '<button id="g-pull">Get latest data</button> <button id="g-off" class="secondary">Disconnect</button>'
-      : '<a href="/api/google/connect"><button>Connect Google</button></a>';
+      : `<a href="${withSite('/api/google/connect')}"><button>Connect Google</button></a>`;
   $('google-pick').hidden = !g.connected;
   $('results-body').hidden = !g.connected;
   if (!g.connected) return;
@@ -713,7 +720,9 @@ async function loadUsage() {
   $('usage-total').textContent = `${u.total.calls} AI calls so far, $${u.total.cost.toFixed(2)} in total.`;
   const l = state.llm;
   const search = { server: "Claude's built-in search", local: 'Plume runs searches itself (Tavily)', off: 'off — add TAVILY_API_KEY to .env to turn it on' }[l.webSearch];
-  $('usage-llm').textContent = `Calls go to ${l.endpoint} (${l.auth}, from ${l.source}). Models: research ${l.models.research}, writing ${l.models.draft}, scoring ${l.models.score}. Web search: ${search}.`;
+  $('usage-llm').innerHTML = l.error
+    ? `AI is not connected. <a href="/#llm">Set up the AI connection</a>.`
+    : `Calls go to ${esc(l.endpoint)} (key ${esc(l.keyHint)}, ${l.source === 'saved' ? 'saved on the AI connection screen' : 'from .env'}). Models: research ${esc(l.models.research)}, writing ${esc(l.models.draft)}, scoring ${esc(l.models.score)}. Web search: ${esc(search)}. <a href="/#llm">Change</a>`;
   $('usage-rows').innerHTML = u.byPurpose
     .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${n(r.input)} / ${n(r.output)}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
     .join('');
@@ -766,8 +775,9 @@ $('onboard-form').onsubmit = (e) => {
   e.preventDefault();
   $('onboard').hidden = true;
   $('workspace').hidden = false;
-  runResearch({ url: $('site-url').value.trim() }).catch((err) => alert(err.message));
+  runResearch({}).catch((err) => alert(err.message));
 };
+$('llms-download').href = withSite('/api/llms-txt/download');
 $('regen').onclick = () => confirm('Rewrite this document from scratch? Your edits to it will be replaced.') && runResearch({ only: $('doc-body').dataset.id });
 $('save').onclick = async () => {
   await api(`/api/profile/${$('doc-body').dataset.id}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });

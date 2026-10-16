@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
+process.env.PLUME_SITE = 'test.example';
 const { setSetting, getDb } = require('../src/db');
 const q = require('../src/queue');
 const today = require('../src/today');

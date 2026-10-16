@@ -1,24 +1,36 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { LLM, priceFor, supportsEffort } from '../config';
-import { parseHeaders, viaProxy } from './settings';
+import { priceFor, supportsEffort } from '../config';
+import { LlmConfig, getLlmConfig, llmProblem, parseHeaders, viaProxy } from './settings';
 import { LOCAL_TOOLS, localSearchAvailable, runLocalTool } from './search';
 import { checkBudget } from './budget';
 import { log } from '../log';
-import { getDb } from '../db';
+import { getGlobalDb } from '../db';
+import { currentSiteOrNull } from '../site';
 
-let client: Anthropic | null = null;
+let client: { cfg: LlmConfig; sdk: Anthropic } | null = null;
+
+/**
+ * One client per connection setting: rebuilt when the AI connection is changed on the screen.
+ * Gateways (LiteLLM) take the key as a Bearer token; Anthropic directly takes it as x-api-key.
+ */
+export function clientFor(cfg: LlmConfig): Anthropic {
+  const proxy = viaProxy(cfg);
+  return new Anthropic({
+    baseURL: cfg.baseUrl || null,
+    apiKey: proxy ? null : cfg.apiKey,
+    authToken: proxy ? cfg.apiKey : null,
+    defaultHeaders: parseHeaders(cfg.headers),
+  });
+}
+
 function anthropic(): Anthropic {
-  // Exactly one credential, from one place: the settings file when given, else the environment.
-  return (client ??= new Anthropic({
-    baseURL: LLM.ANTHROPIC_BASE_URL ?? null,
-    apiKey: LLM.ANTHROPIC_AUTH_TOKEN ? null : (LLM.ANTHROPIC_API_KEY ?? null),
-    authToken: LLM.ANTHROPIC_AUTH_TOKEN ?? null,
-    defaultHeaders: parseHeaders(LLM.ANTHROPIC_CUSTOM_HEADERS),
-  }));
+  const cfg = getLlmConfig();
+  if (client?.cfg !== cfg) client = { cfg, sdk: clientFor(cfg) };
+  return client.sdk;
 }
 
 /** Server-side refusal fallback is an Anthropic API feature; gateways generally don't forward it. */
-const FALLBACKS = process.env.PLUME_FALLBACKS ? process.env.PLUME_FALLBACKS === '1' : !viaProxy(LLM);
+const fallbacksOn = () => (process.env.PLUME_FALLBACKS ? process.env.PLUME_FALLBACKS === '1' : !viaProxy());
 
 export interface AskOptions {
   /** Short label stored with the usage row, e.g. "research:product". */
@@ -52,7 +64,7 @@ export type SearchMode = 'server' | 'local' | 'off';
 export function searchMode(env = process.env): SearchMode {
   const forced = env.PLUME_SEARCH as SearchMode | undefined;
   if (forced === 'server' || forced === 'local' || forced === 'off') return forced;
-  if (!viaProxy(LLM)) return 'server';
+  if (!viaProxy()) return 'server';
   return localSearchAvailable(env) ? 'local' : 'off';
 }
 
@@ -66,7 +78,7 @@ const NO_SEARCH_NOTE =
  */
 export async function ask(opts: AskOptions): Promise<AskResult> {
   const mode = opts.webSearches ? searchMode() : 'off';
-  const fallbackOk = FALLBACKS && !/haiku/i.test(opts.model);
+  const fallbackOk = fallbacksOn() && !/haiku/i.test(opts.model);
   const prompt = opts.webSearches && mode === 'off' ? `${opts.prompt}\n\n${NO_SEARCH_NOTE}` : opts.prompt;
   const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: prompt }];
   const sources: string[] = [];
@@ -136,6 +148,8 @@ async function callOnce(
   fallbackOk: boolean,
   noMoreTools = false,
 ): Promise<Anthropic.Beta.BetaMessage> {
+  const problem = llmProblem();
+  if (problem) throw new Error(problem);
   for (let attempt = 0; ; attempt++) {
     checkBudget(opts.purpose);
     try {
@@ -199,10 +213,83 @@ function recordUsage(purpose: string, msg: Anthropic.Beta.BetaMessage): void {
     cacheWrite: u.cache_creation_input_tokens ?? 0,
     searches: u.server_tool_use?.web_search_requests ?? 0,
   };
-  getDb()
+  getGlobalDb()
     .prepare(
-      `INSERT INTO llm_calls (at, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO llm_calls (at, site, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(new Date().toISOString(), purpose, msg.model, row.input, row.output, row.cacheRead, row.cacheWrite, row.searches, costOf(msg.model, row), msg.stop_reason);
+    .run(new Date().toISOString(), currentSiteOrNull(), purpose, msg.model, row.input, row.output, row.cacheRead, row.cacheWrite, row.searches, costOf(msg.model, row), msg.stop_reason);
+}
+
+export interface ModelCheck {
+  role: 'research' | 'draft' | 'score';
+  model: string;
+  ok: boolean;
+  /** Plain English: "works", "your gateway doesn't allow this model", "wrong key", ... */
+  message: string;
+  json: boolean | null;
+}
+
+/** Explain a failed call in words a person can act on. */
+export function explainCallError(err: any): string {
+  const status = err?.status;
+  const raw = String(err?.error?.error?.message ?? err?.message ?? err);
+  if (status === 401 || /invalid.*(key|token|jwt)|unauthori[sz]ed|authentication/i.test(raw)) return 'the key was refused — check it, and that it belongs to this gateway';
+  if (status === 403 && /not allowed to access model|model/i.test(raw)) return "your gateway doesn't allow this model for your key — pick one it offers";
+  if (status === 404 || /model.*not found|no such model|invalid model/i.test(raw)) return 'this model name is unknown to the gateway';
+  if (status === 429) return 'the gateway is rate-limiting you — wait a minute and try again';
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return 'the gateway did not answer in time';
+  if (err instanceof Anthropic.APIConnectionError) return `could not reach the gateway (${String((err.cause as any)?.message ?? raw).slice(0, 120)})`;
+  return raw.slice(0, 200);
+}
+
+/**
+ * Check each model the connection uses: a two-word reply, then a tiny JSON answer (agents need JSON).
+ * Uses the given settings directly, so a connection can be tested before it is saved.
+ */
+export async function testConnection(cfg: LlmConfig): Promise<{ ok: boolean; problem: string | null; checks: ModelCheck[] }> {
+  const problem = llmProblem(cfg);
+  if (problem) return { ok: false, problem, checks: [] };
+  const sdk = clientFor(cfg);
+  const checks: ModelCheck[] = [];
+  const roles = ['research', 'draft', 'score'] as const;
+  const seen = new Map<string, ModelCheck>();
+  for (const role of roles) {
+    const model = cfg.models[role];
+    const prior = seen.get(model);
+    if (prior) {
+      checks.push({ ...prior, role });
+      continue;
+    }
+    const check: ModelCheck = { role, model, ok: false, message: '', json: null };
+    try {
+      const r = await sdk.messages.create({ model, max_tokens: 64, messages: [{ role: 'user', content: 'Reply with the single word: ok' }] }, { timeout: 60_000, maxRetries: 0 });
+      check.ok = r.content.some((b) => b.type === 'text');
+      check.message = check.ok ? 'works' : 'answered, but with no text';
+      try {
+        const j = await sdk.messages.create(
+          {
+            model,
+            max_tokens: 200,
+            messages: [{ role: 'user', content: 'Is the sky blue on a clear day?' }],
+            output_config: { format: { type: 'json_schema', schema: { type: 'object', additionalProperties: false, required: ['yes'], properties: { yes: { type: 'boolean' } } } } },
+          } as any,
+          { timeout: 60_000, maxRetries: 0 },
+        );
+        const text = j.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+        JSON.parse(text);
+        check.json = true;
+      } catch {
+        check.json = false;
+        check.message = 'works for writing, but ignores structured answers — agents that plan or score need another model';
+      }
+    } catch (err) {
+      check.message = explainCallError(err);
+    }
+    seen.set(model, check);
+    checks.push(check);
+  }
+  const ok = checks.every((c) => c.ok && c.json !== false);
+  log(ok ? 'info' : 'warn', 'llm', `connection test to ${cfg.baseUrl || 'Anthropic'}: ${checks.map((c) => `${c.role} ${c.model} ${c.ok ? (c.json === false ? 'no-json' : 'ok') : 'failed'}`).join(', ')}`);
+  return { ok, problem: null, checks };
 }

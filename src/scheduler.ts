@@ -11,6 +11,8 @@ import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
 import { checkWatched } from './watch';
 import { finishJob, startJob } from './jobs';
+import { currentSite, withSite } from './site';
+import { listSites } from './sites';
 
 export interface TaskDef {
   id: string;
@@ -137,14 +139,17 @@ export function updateTask(id: string, patch: Partial<TaskSetting>): TaskSetting
   return all[id];
 }
 
+/** Running tasks, as "site|task": the same task may run for two sites at once, but never twice for one. */
 const running = new Set<string>();
+const runKey = (id: string) => `${currentSite()}|${id}`;
 
 /** Run one task now: never twice at once, always recorded, errors logged rather than thrown. */
 export async function runTask(id: string): Promise<{ status: 'done' | 'failed' | 'skipped'; message: string }> {
   const def = taskDefs().find((t) => t.id === id);
   if (!def) throw new Error(`no task ${id}`);
-  if (running.has(id)) return { status: 'skipped', message: 'already running' };
-  running.add(id);
+  const key = runKey(id);
+  if (running.has(key)) return { status: 'skipped', message: 'already running' };
+  running.add(key);
   const quiet = id === 'publish';
   const jobId = quiet ? null : startJob(`task:${id}`, def.label);
   const runId = quiet ? null : Number(getDb().prepare(`INSERT INTO task_runs (task, started_at, status) VALUES (?, ?, 'running')`).run(id, new Date().toISOString()).lastInsertRowid);
@@ -163,7 +168,7 @@ export async function runTask(id: string): Promise<{ status: 'done' | 'failed' |
     log(err instanceof BudgetExceeded ? 'warn' : 'error', id, message);
     return end(err instanceof BudgetExceeded ? 'skipped' : 'failed', message);
   } finally {
-    running.delete(id);
+    running.delete(key);
   }
 }
 
@@ -171,16 +176,21 @@ let scheduled: ScheduledTask[] = [];
 
 export function startScheduler(): void {
   reschedule();
-  log('info', 'scheduler', `started: ${scheduled.length} timed task(s) on`);
+  log('info', 'scheduler', `started: ${scheduled.length} timed task(s) on across ${listSites().length} site(s)`);
 }
 
-function reschedule(): void {
+/** One timer per site per switched-on task; each run happens inside its own site. */
+export function reschedule(): void {
   for (const t of scheduled) t.stop();
   scheduled = [];
-  for (const def of taskDefs()) {
-    const s = taskSetting(def.id);
-    if (!s.enabled) continue;
-    scheduled.push(cron.schedule(s.cron, () => void runTask(def.id), { name: def.id }));
+  for (const site of listSites()) {
+    withSite(site.slug, () => {
+      for (const def of taskDefs()) {
+        const s = taskSetting(def.id);
+        if (!s.enabled) continue;
+        scheduled.push(cron.schedule(s.cron, () => void withSite(site.slug, () => runTask(def.id)), { name: `${site.slug}|${def.id}` }));
+      }
+    });
   }
 }
 
@@ -194,7 +204,7 @@ export function taskOverview() {
   const lastRun = getDb().prepare('SELECT started_at, finished_at, status, message FROM task_runs WHERE task = ? ORDER BY id DESC LIMIT 1');
   return taskDefs().map((d) => {
     const s = taskSetting(d.id);
-    const next = s.enabled ? scheduled.find((t) => (t as any).name === d.id)?.getNextRun() ?? null : null;
-    return { id: d.id, label: d.label, costsMoney: d.costsMoney, ...s, running: running.has(d.id), next: next?.toISOString() ?? null, last: lastRun.get(d.id) ?? null };
+    const next = s.enabled ? scheduled.find((t) => (t as any).name === runKey(d.id))?.getNextRun() ?? null : null;
+    return { id: d.id, label: d.label, costsMoney: d.costsMoney, ...s, running: running.has(runKey(d.id)), next: next?.toISOString() ?? null, last: lastRun.get(d.id) ?? null };
   });
 }

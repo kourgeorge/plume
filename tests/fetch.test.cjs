@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
+process.env.PLUME_SITE = 'test.example';
 const { fetchPage, fetchHttp, looksLikeChallenge } = require('../src/research/fetchPage');
 const { crawlSite, CrawlError } = require('../src/research/crawl');
 

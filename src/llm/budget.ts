@@ -1,7 +1,7 @@
-import { getDb, getSetting, setSetting } from '../db';
+import { getGlobalDb, getGlobalSetting as getSetting, setGlobalSetting as setSetting } from '../db';
 import { log } from '../log';
 
-/** Monthly spending limit for model calls, in US dollars. 0 = no limit. */
+/** Monthly spending limit for model calls across all sites, in US dollars. 0 = no limit. */
 export const DEFAULT_BUDGET_USD = Number(process.env.PLUME_MONTHLY_BUDGET_USD ?? 50);
 
 export class BudgetExceeded extends Error {
@@ -24,7 +24,7 @@ export function setBudgetLimit(usd: number): void {
 }
 
 export function spentThisMonth(now = new Date()): number {
-  const r = getDb().prepare('SELECT COALESCE(SUM(cost_usd), 0) s FROM llm_calls WHERE at >= ?').get(monthStart(now)) as { s: number };
+  const r = getGlobalDb().prepare('SELECT COALESCE(SUM(cost_usd), 0) s FROM llm_calls WHERE at >= ?').get(monthStart(now)) as { s: number };
   return r.s;
 }
 

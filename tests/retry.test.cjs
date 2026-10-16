@@ -19,10 +19,12 @@ const fullStream = sse([
   ['message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 3 } }],
   ['message_stop', {}],
 ]);
+let lastAuth = null;
 const server = http.createServer((req, res) => {
   req.resume();
   req.on('end', () => {
     calls++;
+    lastAuth = req.headers.authorization;
     if (mode === 'bad-request') return res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'nope' } }));
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     if ((mode === 'cut-then-ok' && calls === 1) || mode === 'always-cut') {
@@ -37,10 +39,11 @@ const server = http.createServer((req, res) => {
 let client;
 test.before(() => new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-retry-'));
-  const settings = path.join(dir, 'settings.json');
-  fs.writeFileSync(settings, JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.address().port}`, ANTHROPIC_AUTH_TOKEN: 'test-token' } }));
   process.env.DATA_DIR = dir;
-  process.env.CLAUDE_SETTINGS_FILE = settings;
+  process.env.PLUME_SITE = 'test.example';
+  // The fake gateway, configured the way a user would: base URL + key.
+  process.env.LLM_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.LLM_API_KEY = 'test-token';
   client = require('../src/llm/client');
   client.setSleepForTests(async () => {});
   resolve();
@@ -55,6 +58,7 @@ test('a reply cut off mid-stream is retried and the full answer comes back', asy
   const r = await ask();
   assert.equal(r.text, 'complete answer');
   assert.equal(calls, 2);
+  assert.equal(lastAuth, 'Bearer test-token', 'a gateway gets the key as a Bearer token');
   const { recentLogs } = require('../src/log');
   assert.ok(recentLogs({ source: 'llm' }).some((l) => /cut off/.test(l.message)), 'the retry should be logged');
 });

@@ -9,8 +9,8 @@
 </head>
 <body>
   <header class="topbar">
-    <a href="#today" class="logo">Plume</a>
-    <span id="site-name" class="site-name"></span>
+    <a href="/" class="logo" title="All your websites">Plume</a>
+    <a href="/" class="site-name" id="site-name" title="Switch website"></a>
     <span id="google-pill" class="pill-btn"></span>
     <a href="#speed" id="speed-chips" class="speed-chips" title="Page speed (Google Lighthouse)"></a>
     <span class="spacer"></span>
@@ -23,16 +23,16 @@
     <button id="tour-btn" class="icon-btn" title="Show the tour">?</button>
   </header>
 
-  <!-- First run: no site yet -->
+  <!-- First run for this site: nothing researched yet -->
   <section id="onboard" class="card onboard" hidden>
-    <h1>Start with your website</h1>
-    <p>Plume reads your site, looks at your market, and writes a five-part business profile.
+    <h1>Research <span id="onboard-site" class="site-big"></span></h1>
+    <p>Plume reads the site, looks at its market, and writes a five-part business profile.
        Every agent works from that profile, so check it and fix anything that's wrong.</p>
     <form id="onboard-form">
-      <input id="site-url" placeholder="yourcompany.com" required autocomplete="url">
-      <button type="submit">Read my site</button>
+      <button type="submit">Research this site</button>
+      <a href="/" class="small">← Back to all websites</a>
     </form>
-    <p id="key-warning" class="warn" hidden>No model access found. Set <code>ANTHROPIC_API_KEY</code> or <code>CLAUDE_SETTINGS_FILE</code> in <code>.env</code> and restart.</p>
+    <p id="key-warning" class="warn" hidden>AI isn't connected yet, so research can't run. <a href="/#llm">Add your LiteLLM base URL and key</a>.</p>
   </section>
 
   <div class="workspace" id="workspace" hidden>
@@ -140,7 +140,7 @@
 
       <section id="view-llms" class="view" hidden>
         <div class="view-head"><a href="#today" class="back">← Today</a><h1>llms.txt</h1>
-          <span class="actions"><button id="llms-copy" class="secondary">Copy</button><a href="/llms.txt"><button>Download</button></a></span></div>
+          <span class="actions"><button id="llms-copy" class="secondary">Copy</button><a id="llms-download" href="#"><button>Download</button></a></span></div>
         <p class="muted">A short map of your site for AI assistants (llmstxt.org). Put it at the root of your site, e.g. <code>yoursite.com/llms.txt</code>. Built from the pages Plume read; it updates when the site is re-read.</p>
         <pre id="llms-body" class="notes"></pre>
       </section>

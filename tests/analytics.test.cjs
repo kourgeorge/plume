@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
+process.env.PLUME_SITE = 'test.example';
 const g = require('../src/analytics/google');
 const pull = require('../src/analytics/pull');
 const results = require('../src/analytics/results');

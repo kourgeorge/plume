@@ -1,22 +1,26 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { loadLlmSettings } from './llm/settings';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? './data');
-export const PROFILE_DIR = path.join(DATA_DIR, 'profile');
 export const PORT = Number(process.env.PORT ?? 4410);
 
-fs.mkdirSync(PROFILE_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-/** Where model calls go and with which credential: a Claude Code settings file if CLAUDE_SETTINGS_FILE is set. */
-export const LLM = loadLlmSettings();
-
-/** Which model does which kind of work. Research needs judgment; drafting needs speed; scoring is bulk. */
+/**
+ * Which model does which kind of work. Research needs judgment; drafting needs speed; scoring is bulk.
+ * Read live from the AI connection settings, so a change on the screen applies to the next call.
+ */
 export const MODELS = {
-  research: process.env.PLUME_MODEL_RESEARCH ?? LLM.ANTHROPIC_DEFAULT_OPUS_MODEL ?? LLM.ANTHROPIC_MODEL ?? 'claude-opus-5-5',
-  draft: process.env.PLUME_MODEL_DRAFT ?? LLM.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-5-5',
-  score: process.env.PLUME_MODEL_SCORE ?? LLM.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? LLM.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-5-5',
+  get research() {
+    return require('./llm/settings').getLlmConfig().models.research as string;
+  },
+  get draft() {
+    return require('./llm/settings').getLlmConfig().models.draft as string;
+  },
+  get score() {
+    return require('./llm/settings').getLlmConfig().models.score as string;
+  },
 };
 
 /** Older models reject the effort setting; they get none. */
