@@ -75,12 +75,25 @@
         <div class="view-head">
           <a href="#today" class="back">← Today</a>
           <h1 id="doc-title"></h1>
-          <span class="actions">
+          <span class="actions" id="doc-read-actions">
+            <button id="doc-copy" class="secondary" title="Copy the text">Copy</button>
+            <a id="doc-download" download><button class="secondary" title="Download as a Markdown file">Download</button></a>
             <button id="regen" class="secondary">Rewrite with AI</button>
+            <button id="doc-edit">Edit</button>
+          </span>
+          <span class="actions" id="doc-edit-actions" hidden>
+            <button id="doc-cancel" class="secondary">Cancel</button>
             <button id="save">Save</button>
           </span>
         </div>
-        <textarea id="doc-body" class="editor-area" dir="auto" spellcheck="true"></textarea>
+        <p id="doc-meta" class="muted small"></p>
+        <article id="doc-view" class="doc" dir="auto"></article>
+        <textarea id="doc-body" class="editor-area" dir="auto" spellcheck="true" hidden></textarea>
+        <div id="doc-tech" hidden>
+          <h2>Detected on the site</h2>
+          <p class="muted small">Read from the site's own pages, not guessed. Each links to the page it was found on.</p>
+          <ul id="doc-tech-list" class="tech-list"></ul>
+        </div>
         <p id="save-status" class="muted"></p>
       </section>
 
@@ -152,6 +165,12 @@
           <span class="actions"><button id="folder-run">Find work and draft now</button></span>
         </div>
         <p id="folder-desc" class="muted"></p>
+        <details class="instructions" id="folder-instr-box">
+          <summary>Instructions for this agent <span id="folder-instr-tag" class="muted small"></span></summary>
+          <p class="muted small">Standing rules it follows every time it writes for this site, e.g. "never mention prices" or "always end with a question". They override the brand voice where the two disagree.</p>
+          <textarea id="folder-instr" rows="4" dir="auto"></textarea>
+          <div class="editor-bar"><span id="folder-instr-status" class="muted small"></span><span><button id="folder-instr-save" class="secondary">Save instructions</button></span></div>
+        </details>
         <div class="tabs" id="folder-tabs">
           <button data-status="draft">Waiting</button><button data-status="approved">Scheduled</button><button data-status="published">Published</button><button data-status="failed">Failed</button><button data-status="rejected">Turned down</button>
         </div>

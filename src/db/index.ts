@@ -119,6 +119,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON
 );
+-- Lookups the app makes on every page load or task run.
+CREATE INDEX IF NOT EXISTS drafts_by_status ON drafts (status, agent);
+CREATE INDEX IF NOT EXISTS draft_events_by_draft ON draft_events (draft_id);
+CREATE INDEX IF NOT EXISTS jobs_by_kind ON jobs (kind, status);
+CREATE INDEX IF NOT EXISTS task_runs_by_task ON task_runs (task, id);
+CREATE INDEX IF NOT EXISTS feedback_by_agent ON feedback (agent, id);
+CREATE INDEX IF NOT EXISTS snapshots_by_competitor ON competitor_snapshots (competitor_id, at);
+CREATE INDEX IF NOT EXISTS changes_by_competitor ON competitor_changes (competitor_id, dismissed);
+CREATE INDEX IF NOT EXISTS gsc_by_query ON gsc_daily (query, date);
+-- The site's address lives only in the shared site list; drop any old copy.
+DELETE FROM settings WHERE key = 'siteUrl';
 `;
 
 /** Shared by every site: the site list, AI usage (one budget for all sites), the event log, app-wide settings. */
@@ -156,6 +167,8 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON
 );
+CREATE INDEX IF NOT EXISTS llm_calls_by_month ON llm_calls (at, site);
+CREATE INDEX IF NOT EXISTS logs_by_site ON logs (site, id);
 `;
 
 
@@ -267,6 +280,7 @@ function migrateSingleSiteLayout(): void {
     const r = site.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     if (r) g.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, r.value);
   }
+  site.prepare(`DELETE FROM settings WHERE key = 'siteUrl'`).run();
   site.close();
   g.close();
   console.log(`Moved the existing site data into ${dest}`);

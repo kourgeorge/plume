@@ -10,6 +10,7 @@ import { createDraft } from '../queue';
 import { auditPages } from '../agents/seoAudit';
 import { parseReport } from '../analytics/pagespeed';
 import { addCompetitor, savePerson } from '../context/extra';
+import { saveTechSignals } from '../research/techSignals';
 
 const { site: demo, created } = addSite('https://acme-widgets.example');
 if (!created) {
@@ -20,7 +21,33 @@ const site = demo.url;
 withSite(demo.slug, () => {
 writeDoc(
   'product',
-  '# Product\n\nAcme Widgets makes modular desk widgets for small remote teams, sold online with free returns and a two-year warranty. Teams use them to keep cables, chargers and notes in one place.\n\n## Features\n- Modular pieces that click together\n',
+  [
+    '# Product',
+    '',
+    'Acme Widgets makes modular desk widgets for small remote teams, sold online with free returns and a two-year warranty. Teams use them to keep cables, chargers and notes in one place.',
+    '',
+    '## Who it is for',
+    '- Remote teams of 3–30 people who equip home desks',
+    '- Office managers buying in bulk (inferred)',
+    '',
+    '## Pricing',
+    '**Starter kit:** $49. **Team pack (10 kits):** $399.',
+    '',
+    '## Key features',
+    '1. Pieces click together in any order',
+    '2. Cable channel fits laptop, phone and monitor cables',
+    '3. Free returns within 60 days',
+    '',
+    '## Main action',
+    'Buy a starter kit',
+    '',
+    '## Tech signals',
+    '- Built on Shopify',
+    '- Contact by WhatsApp',
+    '',
+    '## Sources',
+    '- https://acme-widgets.example/',
+  ].join('\n'),
 );
 for (const d of PROFILE_DOCS.slice(1)) writeDoc(d.id, `# ${d.title}\n\n(Sample document — replace with real research.)`);
 
@@ -78,6 +105,12 @@ getDb()
     { kind: 'new-pages', text: 'added 2 pages', items: ['/compare/acme-widgets', '/blog/remote-desk-setup'] },
     { kind: 'prices', text: 'changed prices: $29/mo gone; now $24/mo' },
   ]));
+saveTechSignals([
+  { name: 'Shopify', kind: 'shop', seenOn: `${site}/` },
+  { name: 'Google Analytics', kind: 'analytics', seenOn: `${site}/` },
+  { name: 'WhatsApp', kind: 'chat', seenOn: `${site}/`, detail: 'https://wa.me/15550000000' },
+  { name: 'Instagram', kind: 'social', seenOn: `${site}/about`, detail: 'https://www.instagram.com/acmewidgets' },
+]);
 savePerson({ name: 'Dana Levi', role: 'Founder', bio: 'Former office designer. Writes short, practical posts; never uses buzzwords.', linkedinUrl: 'linkedin.com/in/dana-levi-example' });
 });
 console.log(`Demo site added: open http://127.0.0.1:${process.env.PORT ?? 4410}/s/${demo.slug}/`);

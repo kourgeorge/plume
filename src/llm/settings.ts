@@ -5,7 +5,7 @@ import { DATA_DIR } from '../config';
 /**
  * Where model calls go and with which key. Two sources, first wins:
  * 1. saved from the AI connection screen (data/tokens/llm.json, readable only by this user);
- * 2. .env: LLM_BASE_URL + LLM_API_KEY (a LiteLLM or other gateway), or ANTHROPIC_API_KEY (direct).
+ * 2. Plume's .env: LLM_BASE_URL + LLM_API_KEY (a LiteLLM or other gateway), or ANTHROPIC_API_KEY (direct).
  * Read on every use, so a change on the screen applies without a restart.
  */
 export interface LlmModels {
@@ -30,9 +30,14 @@ const file = () => path.join(DATA_DIR, 'tokens', 'llm.json');
 
 let cached: LlmConfig | null = null;
 
+/**
+ * Only Plume's own variables. ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN are deliberately ignored:
+ * other tools (Claude Code among them) set those in the shell for their own gateway, and Plume
+ * must not silently pick up someone else's connection.
+ */
 function fromEnv(env: NodeJS.ProcessEnv): LlmConfig {
-  const baseUrl = env.LLM_BASE_URL ?? env.ANTHROPIC_BASE_URL ?? '';
-  const apiKey = env.LLM_API_KEY ?? env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_AUTH_TOKEN ?? '';
+  const baseUrl = env.LLM_BASE_URL ?? '';
+  const apiKey = env.LLM_API_KEY ?? (baseUrl ? '' : (env.ANTHROPIC_API_KEY ?? ''));
   return {
     baseUrl: baseUrl.trim().replace(/\/+$/, ''),
     apiKey: apiKey.trim(),

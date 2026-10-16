@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import { getDb } from '../db';
 import { BrowserFetch, Failed, USER_AGENT, fetchPage } from './fetchPage';
+import { TechSignal, detectTech, mergeSignals, saveTechSignals } from './techSignals';
 
 export interface CrawledPage {
   url: string;
@@ -133,6 +134,7 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
     `INSERT OR REPLACE INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at)
      VALUES (@url, @status, @title, @metaDescription, @canonical, @h1, @headings, @imagesMissingAlt, @hasSchema, @wordCount, @text, @crawledAt)`,
   );
+  const signals: TechSignal[][] = [];
   // Once a page only opened in a real browser, use the browser for the rest of the site.
   let preferBrowser = false;
 
@@ -147,6 +149,7 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
     }
     if (r.via === 'browser') preferBrowser = true;
     const { page, links } = extractPage(url, r.status, r.html);
+    signals.push(detectTech(r.html, url));
     pages.push(page);
     const { lang: _lang, ...row } = page;
     save.run({ ...row, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString() });
@@ -154,6 +157,7 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
     for (const l of links) enqueue(l, r.url);
   }
   if (!pages.length) throw new CrawlError(startUrl, failures);
+  saveTechSignals(mergeSignals(signals));
   return pages;
 }
 

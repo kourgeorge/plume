@@ -4,6 +4,7 @@ import { PROFILE_DOCS, ProfileDocId, readDoc, writeDoc } from '../context/profil
 import { crawlSite, CrawledPage } from './crawl';
 import { closeBrowser } from './fetchPage';
 import { extractCompetitors } from './competitors';
+import { techSummary } from './techSignals';
 import { log } from '../log';
 import { finishJob, startJob, updateJob } from '../jobs';
 import { detectLanguage, languageName, setContentLanguage } from '../context/language';
@@ -33,6 +34,7 @@ async function writeProfileDoc(id: ProfileDocId, url: string, digest: string): P
     .map((d) => `<doc id="${d.id}">\n${readDoc(d.id) ?? ''}\n</doc>`)
     .join('\n\n');
   const needsWeb = id === 'competitors' || id === 'strategy' || id === 'content-plan';
+  const tech = id === 'product' ? techSummary() : null;
 
   const { text, sources } = await ask({
     purpose: `research:${id}`,
@@ -43,6 +45,7 @@ async function writeProfileDoc(id: ProfileDocId, url: string, digest: string): P
     prompt:
       `Write the "${spec.title}" document. It should cover: ${spec.brief}\n\n` +
       (earlier ? `Documents already written (stay consistent with them):\n${earlier}\n\n` : '') +
+      (tech ? `Detected from the site's code (facts — use them for the "Tech signals" section, add nothing):\n${tech}\n\n` : '') +
       (needsWeb ? 'Use web search to check competitors and the market; cite what you find.' : 'Work from the site content only.'),
   });
 

@@ -109,7 +109,8 @@ test('findPrices picks up common currencies including shekels', () => {
 });
 
 test('llms.txt: site name, summary, pages grouped by section, descriptions', () => {
-  setSetting('siteUrl', 'https://acme.example');
+  const { getGlobalDb } = require('../src/db');
+  getGlobalDb().prepare(`INSERT OR REPLACE INTO sites (slug, url, name, created_at) VALUES ('test.example', 'https://acme.example', 'Acme', 'now')`).run();
   const ins = getDb().prepare(`INSERT INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at) VALUES (?, ?, ?, ?, '', ?, '[]', 0, 0, 500, '', 'now')`);
   ins.run('https://acme.example/', 200, 'Acme Widgets | Home', 'Modular desk widgets.', 'Desk widgets');
   ins.run('https://acme.example/pricing', 200, 'Pricing', 'Plans from $9.', 'Pricing');

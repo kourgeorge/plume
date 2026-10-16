@@ -323,6 +323,8 @@ function renderFolders(folders) {
 
 // ---------------------------------------------------------------- documents
 
+const TECH_LABEL = { builder: 'Built with', shop: 'Sells through', hosting: 'Hosted on', analytics: 'Visitor measurement', ads: 'Advertising tags', chat: 'Contact', forms: 'Forms and booking', video: 'Video', social: 'Social profiles', fonts: 'Fonts' };
+
 async function loadDoc(id) {
   showView('doc');
   const d = state.docs.find((x) => x.id === id) ?? state.docs[0];
@@ -330,7 +332,29 @@ async function loadDoc(id) {
   $('doc-title').textContent = d.title;
   $('doc-body').value = doc.body;
   $('doc-body').dataset.id = d.id;
+  $('doc-view').innerHTML = doc.body ? doc.html : '<p class="muted">Not written yet. Research writes it, or click Edit to write it yourself.</p>';
+  $('doc-meta').textContent = doc.writtenAt ? `Last written ${when(doc.writtenAt)}` : '';
+  const file = new Blob([doc.body], { type: 'text/markdown' });
+  $('doc-download').href = URL.createObjectURL(file);
+  $('doc-download').download = `${new URL(state.site).hostname}-${d.id}.md`;
+  setDocEditing(takeFlash() === 'edit');
   $('save-status').textContent = '';
+  $('doc-tech').hidden = d.id !== 'product';
+  if (d.id === 'product') {
+    const t = await api('/api/tech');
+    $('doc-tech').hidden = !t.list.length;
+    $('doc-tech-list').innerHTML = t.list
+      .map((s) => `<li><span class="tech-kind">${esc(TECH_LABEL[s.kind] ?? s.kind)}</span> <strong>${esc(s.name)}</strong>${s.detail ? ` · <a href="${esc(s.detail)}" target="_blank" rel="noopener" dir="ltr">${esc(s.detail.replace(/^https?:\/\/(www\.)?/, ''))}</a>` : ''} <small>seen on <a href="${esc(s.seenOn)}" target="_blank" rel="noopener">${esc(new URL(s.seenOn).pathname)}</a></small></li>`)
+      .join('');
+  }
+}
+
+function setDocEditing(on) {
+  $('doc-view').hidden = on;
+  $('doc-body').hidden = !on;
+  $('doc-read-actions').hidden = on;
+  $('doc-edit-actions').hidden = !on;
+  if (on) $('doc-body').focus();
 }
 
 // ---------------------------------------------------------------- competitors, people, accounts, notes, llms.txt
@@ -454,6 +478,21 @@ async function loadFolder(id) {
   $('folder-title').textContent = f.label;
   $('folder-desc').textContent = f.description;
   $('folder-run').onclick = () => runAgentNow(id);
+  const instr = await api(`/api/agents/${encodeURIComponent(id)}/instructions`);
+  $('folder-instr').value = instr.text;
+  $('folder-instr-tag').textContent = instr.text ? '· set' : '· none yet';
+  $('folder-instr-box').open = $('folder-instr-box').open && $('folder-instr-box').dataset.agent === id;
+  $('folder-instr-box').dataset.agent = id;
+  $('folder-instr-status').textContent = '';
+  $('folder-instr-save').onclick = async () => {
+    try {
+      const r = await api(`/api/agents/${encodeURIComponent(id)}/instructions`, { method: 'PUT', body: JSON.stringify({ text: $('folder-instr').value }) });
+      $('folder-instr-tag').textContent = r.text ? '· set' : '· none yet';
+      $('folder-instr-status').textContent = r.text ? 'Saved. The agent follows these from its next run.' : 'Cleared.';
+    } catch (err) {
+      $('folder-instr-status').textContent = err.message;
+    }
+  };
   for (const b of $('folder-tabs').querySelectorAll('button')) {
     b.classList.toggle('on', b.dataset.status === folderStatus);
     b.onclick = () => ((folderStatus = b.dataset.status), loadFolder(id));
@@ -781,8 +820,12 @@ $('llms-download').href = withSite('/api/llms-txt/download');
 $('regen').onclick = () => confirm('Rewrite this document from scratch? Your edits to it will be replaced.') && runResearch({ only: $('doc-body').dataset.id });
 $('save').onclick = async () => {
   await api(`/api/profile/${$('doc-body').dataset.id}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });
+  await loadDoc($('doc-body').dataset.id);
   $('save-status').textContent = 'Saved. Every agent will use this from now on.';
 };
+$('doc-edit').onclick = () => setDocEditing(true);
+$('doc-cancel').onclick = () => loadDoc($('doc-body').dataset.id);
+$('doc-copy').onclick = () => navigator.clipboard.writeText($('doc-body').value).then(() => ($('doc-copy').textContent = 'Copied'), () => ($('doc-copy').textContent = 'Copy failed'));
 $('accounts-save').onclick = async () => {
   try {
     const r = await api('/api/profiles', { method: 'PUT', body: JSON.stringify({ x: $('acc-x').value, linkedin: $('acc-li').value }) });

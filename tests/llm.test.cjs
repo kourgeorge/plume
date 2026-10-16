@@ -47,6 +47,18 @@ test('.env gateway settings are used when nothing is saved', () => {
   withEnv({ ...NO_ENV, ANTHROPIC_API_KEY: 'sk-ant-direct' }, () => assert.equal(viaProxy(getLlmConfig()), false));
 });
 
+test("another tool's gateway in the shell (ANTHROPIC_BASE_URL / AUTH_TOKEN) is never picked up", () => {
+  clearLlmConfig();
+  withEnv({ ...NO_ENV, ANTHROPIC_BASE_URL: 'https://someone-elses-gateway.example', ANTHROPIC_AUTH_TOKEN: 'their-token' }, () => {
+    const c = getLlmConfig();
+    assert.equal(c.baseUrl, '');
+    assert.equal(c.apiKey, '');
+    assert.match(llmProblem(), /no AI connection yet/);
+  });
+  // A gateway address with a direct Anthropic key would send the wrong key to the gateway.
+  withEnv({ ...NO_ENV, LLM_BASE_URL: 'https://litellm.corp', ANTHROPIC_API_KEY: 'sk-ant-direct' }, () => assert.equal(getLlmConfig().apiKey, ''));
+});
+
 test('saving from the screen: stored privately, key never shown, empty key keeps the saved one', () => {
   withEnv({ ...NO_ENV, LLM_API_KEY: 'sk-env-should-lose' }, () => {
     saveLlmConfig({ baseUrl: 'https://gw.example/', apiKey: 'sk-secret-9f3a', headers: 'x-team: growth', models: { draft: 'aws/claude-sonnet-5-5' } });

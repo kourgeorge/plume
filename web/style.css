@@ -16,6 +16,8 @@
   --good: #6cc28d; --mid: #e0b04a; --bad: #ec7c5f; --top: #0f1412; --top-ink: #dfe7e1;
 }
 * { box-sizing: border-box; }
+/* "hidden" always wins, even over display rules like .actions { display: flex } */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color: var(--accent); }
@@ -192,3 +194,23 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .llm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .llm-card .item-list { margin-top: 12px; }
 @media (max-width: 760px) { .llm-card .form { grid-template-columns: 1fr; } }
+
+.instructions { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 6px 0 14px; }
+.instructions summary { cursor: pointer; font-weight: 600; }
+.instructions textarea { width: 100%; margin-top: 6px; }
+
+/* ---- formatted documents ---- */
+.doc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 28px; max-width: 860px; line-height: 1.65; }
+.doc h1 { font-size: 22px; margin: 0 0 12px; }
+.doc h2 { font-size: 17px; margin: 24px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.doc h3 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--ink); margin: 18px 0 6px; }
+.doc ul, .doc ol { padding-inline-start: 22px; }
+.doc li { margin: 4px 0; }
+.doc li::marker { color: var(--muted); }
+.doc table { margin: 10px 0; font-size: 14px; }
+.doc code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.doc blockquote { border-inline-start: 3px solid var(--line); margin: 10px 0; padding: 2px 14px; color: var(--muted); }
+.doc a { word-break: break-word; }
+.tech-list { list-style: none; padding: 0; display: grid; gap: 6px; max-width: 860px; }
+.tech-list li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.tech-kind { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-inline-end: 6px; }

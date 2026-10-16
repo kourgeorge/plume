@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { closeSiteDb, getDb, getGlobalDb } from './db';
-import { siteDir, slugFor, withSite } from './site';
+import { currentSiteOrNull, siteDir, slugFor, withSite } from './site';
 import { PROFILE_DOCS, readDoc } from './context/profile';
 
 export interface Site {
@@ -48,8 +48,13 @@ export function addSite(rawUrl: string): { site: Site; created: boolean } {
   const u = new URL(/^https?:\/\//i.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`);
   const url = `${u.protocol}//${u.hostname.toLowerCase()}`;
   getGlobalDb().prepare('INSERT INTO sites (slug, url, name, created_at) VALUES (?, ?, ?, ?)').run(slug, url, slug, new Date().toISOString());
-  withSite(slug, () => getDb().prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('siteUrl', ?)`).run(JSON.stringify(url)));
   return { site: getSite(slug)!, created: true };
+}
+
+/** The current site's address, from the site list (the only place it is stored). */
+export function siteUrl(): string | null {
+  const slug = currentSiteOrNull();
+  return slug ? (getSite(slug)?.url ?? null) : null;
 }
 
 export function touchSite(slug: string): void {

@@ -12,7 +12,7 @@ import { BudgetExceeded } from './llm/budget';
 import { checkWatched } from './watch';
 import { finishJob, startJob } from './jobs';
 import { currentSite, withSite } from './site';
-import { listSites } from './sites';
+import { listSites, siteUrl } from './sites';
 
 export interface TaskDef {
   id: string;
@@ -32,7 +32,7 @@ export interface TaskSetting {
   limit?: number;
 }
 
-const site = () => getSetting<string | null>('siteUrl', null);
+const site = () => siteUrl();
 
 /** Every timed thing Plume does. Agents are added from the agent list, so new agents get a timetable for free. */
 export function taskDefs(): TaskDef[] {

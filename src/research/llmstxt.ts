@@ -1,4 +1,5 @@
-import { getDb, getSetting } from '../db';
+import { getDb } from '../db';
+import { siteUrl } from '../sites';
 import { readDoc } from '../context/profile';
 
 /**
@@ -6,7 +7,7 @@ import { readDoc } from '../context/profile';
  * Built from the pages Plume read — no AI call, so it never claims anything the site doesn't.
  */
 export function buildLlmsTxt(summary?: string): string | null {
-  const site = getSetting<string | null>('siteUrl', null);
+  const site = siteUrl();
   const pages = getDb()
     .prepare(`SELECT url, title, meta_description, h1 FROM pages WHERE status < 400 AND title != '' ORDER BY length(url), url`)
     .all() as { url: string; title: string; meta_description: string; h1: string }[];

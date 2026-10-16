@@ -75,3 +75,15 @@ test('jobs left running by a restart are closed on startup', () => {
   assert.equal(getJob(id).status, 'failed');
   assert.match(getJob(id).error, /restarted/);
 });
+
+test('per-agent instructions reach only that agent, are trimmed, capped, and clearable', () => {
+  const ins = require('../src/agents/instructions');
+  assert.equal(ins.setAgentInstructions('writer', '  Always end with a question.\r\n  '), 'Always end with a question.');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p-'));
+  assert.match(agentSystem('role', dir, null, 'writer').at(-1).text, /Standing instructions[\s\S]*Always end with a question\./);
+  assert.doesNotMatch(agentSystem('role', dir, null, 'seo').at(-1).text, /Always end with a question/);
+  assert.throws(() => ins.setAgentInstructions('writer', 'x'.repeat(ins.MAX_INSTRUCTIONS + 1)), /keep instructions under/);
+  ins.setAgentInstructions('writer', '');
+  assert.equal(ins.agentInstructions('writer'), '');
+  assert.doesNotMatch(agentSystem('role', dir, null, 'writer').at(-1).text, /Standing instructions/);
+});

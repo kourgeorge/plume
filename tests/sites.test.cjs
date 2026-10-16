@@ -38,7 +38,8 @@ test('the old single-site layout moves into its own site folder, keeping usage, 
   assert.ok(!fs.existsSync(path.join(DIR, 'profile')), 'old profile folder should have moved');
   withSite('oldsite.example', () => {
     assert.equal(readDoc('product'), '# Old product\n');
-    assert.equal(getSetting('siteUrl', null), 'https://www.oldsite.example');
+    assert.equal(sites.siteUrl(), 'https://www.oldsite.example');
+    assert.equal(getSetting('siteUrl', null), null, 'the copy in site settings should be gone');
     assert.equal(db.getDb().prepare('SELECT title FROM pages').get().title, 'Old home');
   });
   const g = db.getGlobalDb();
@@ -55,7 +56,7 @@ test('adding sites: one folder each, same site twice is the same site, bad addre
   assert.equal(sites.addSite('alpha.example').created, false);
   sites.addSite('beta.example');
   assert.throws(() => sites.addSite('not a site'), /not a website address/);
-  withSite('alpha.example', () => assert.equal(getSetting('siteUrl', null), 'https://www.alpha.example'));
+  withSite('alpha.example', () => assert.equal(sites.siteUrl(), 'https://www.alpha.example'));
 });
 
 test("two sites never see each other's data, even when their work interleaves", async () => {

@@ -30,5 +30,10 @@ export function recentLogs(opts: { limit?: number; source?: string; level?: Leve
 export function pruneLogs(days = 60): void {
   const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
   getGlobalDb().prepare('DELETE FROM logs WHERE at < ?').run(cutoff);
-  if (currentSiteOrNull()) getDb().prepare('DELETE FROM task_runs WHERE started_at < ?').run(cutoff);
+  if (currentSiteOrNull()) {
+    getDb().prepare('DELETE FROM task_runs WHERE started_at < ?').run(cutoff);
+    // Finished jobs only matter for "working…" and a progress page; keep a month.
+    const jobCutoff = new Date(Date.now() - 30 * 86400e3).toISOString();
+    getDb().prepare(`DELETE FROM jobs WHERE status != 'running' AND started_at < ?`).run(jobCutoff);
+  }
 }

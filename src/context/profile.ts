@@ -6,10 +6,11 @@ import { performanceNotes } from '../analytics/results';
 import { languageRule } from './language';
 import { feedbackNote } from '../feedback';
 import { extraContext } from './extra';
+import { instructionsNote } from '../agents/instructions';
 
 /** The five documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable. */
 export const PROFILE_DOCS = [
-  { id: 'product', title: 'Product', brief: 'What the product is, who it is for, the problems it solves, features, pricing, proof points.' },
+  { id: 'product', title: 'Product', brief: 'Overview, who it is for, the problems it solves, key features, pricing, proof points, the main action the site asks visitors to take, and a "Tech signals" section (what the site is built with and connected to).' },
   { id: 'strategy', title: 'Marketing strategy', brief: 'Positioning, ideal customer profiles, the main channels to win on and why, 90-day goals.' },
   { id: 'competitors', title: 'Competitors', brief: 'Main competitors, how each positions itself, their strengths and gaps, where we can win.' },
   { id: 'voice', title: 'Brand voice', brief: 'Tone, vocabulary to use and avoid, sentence style, examples of on-brand and off-brand lines.' },
@@ -34,6 +35,15 @@ export function readDoc(id: ProfileDocId, dir = profileDir()): string | null {
 export function writeDoc(id: ProfileDocId, body: string, dir = profileDir()): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(docPath(id, dir), body.endsWith('\n') ? body : body + '\n');
+}
+
+/** When the document was last saved (by research or by the user), or null if it doesn't exist. */
+export function docWrittenAt(id: ProfileDocId, dir = profileDir()): string | null {
+  try {
+    return fs.statSync(docPath(id, dir)).mtime.toISOString();
+  } catch {
+    return null;
+  }
 }
 
 export function profileComplete(dir = profileDir()): boolean {
@@ -69,6 +79,7 @@ export function agentSystem(
   agent?: string,
 ): Anthropic.Beta.BetaTextBlockParam[] {
   const rejected = agent ? feedbackNote(agent) : null;
+  const standing = agent ? instructionsNote(agent) : null;
   const extra = safeExtra();
   const docs = PROFILE_DOCS.map((d) => `<doc id="${d.id}" title="${d.title}">\n${readDoc(d.id, dir) ?? '(not written yet)'}\n</doc>`).join('\n\n');
   return [
@@ -83,6 +94,6 @@ export function agentSystem(
     // After the cached docs: these change more often, so they must not sit inside the cached prefix.
     ...(extra ? [{ type: 'text' as const, text: `<more-context>\n${extra}\n</more-context>` }] : []),
     ...(notes ? [{ type: 'text' as const, text: `<results>\n${notes}\n</results>` }] : []),
-    { type: 'text', text: [role, languageRule(), rejected].filter(Boolean).join('\n\n') },
+    { type: 'text', text: [role, languageRule(), standing, rejected].filter(Boolean).join('\n\n') },
   ];
 }

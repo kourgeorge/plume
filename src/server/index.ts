@@ -3,15 +3,18 @@ import fastifyStatic from '@fastify/static';
 import path from 'path';
 import { getDb, getGlobalDb, getSetting, setSetting } from '../db';
 import { currentSite, isSlug, withSite } from '../site';
-import { addSite, getSite, removeSite, renameSite, siteSummaries, touchSite } from '../sites';
+import { addSite, getSite, removeSite, renameSite, siteSummaries, siteUrl, touchSite } from '../sites';
 import { MODELS } from '../config';
 import { clearLlmConfig, describeLlm, getLlmConfig, llmProblem, saveLlmConfig } from '../llm/settings';
 import { searchMode, testConnection } from '../llm/client';
 import { RTL, contentLanguage, languageName } from '../context/language';
-import { PROFILE_DOCS, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
+import { PROFILE_DOCS, docWrittenAt, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
+import { renderMarkdown } from '../render';
+import { techSignals } from '../research/techSignals';
 import { startResearch } from '../research/profile';
 import { getJob, runningJob } from '../jobs';
-import { AGENTS, startAgentRun } from '../agents';
+import { AGENTS, getAgent, startAgentRun } from '../agents';
+import { agentInstructions, setAgentInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher } from '../publish';
@@ -121,7 +124,7 @@ export function buildServer(port: number): FastifyInstance {
   });
 
   app.get('/api/state', async () => ({
-    site: getSetting<string | null>('siteUrl', null),
+    site: siteUrl(),
     slug: currentSite(),
     siteName: getSite(currentSite())?.name ?? currentSite(),
     docs: PROFILE_DOCS.map((d) => ({ id: d.id, title: d.title, written: readDoc(d.id) !== null })),
@@ -136,8 +139,7 @@ export function buildServer(port: number): FastifyInstance {
     const site = getSite(currentSite())!;
     const only = req.body?.only;
     if (only && !isProfileDocId(only)) return reply.code(400).send({ error: `unknown document ${only}` });
-    if (!getSetting<string | null>('siteUrl', null)) setSetting('siteUrl', site.url);
-    return { jobId: startResearch(getSetting<string>('siteUrl', site.url), only as never) };
+    return { jobId: startResearch(site.url, only as never) };
   });
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
@@ -147,7 +149,8 @@ export function buildServer(port: number): FastifyInstance {
 
   app.get<{ Params: { id: string } }>('/api/profile/:id', async (req, reply) => {
     if (!isProfileDocId(req.params.id)) return reply.code(404).send({ error: 'no such document' });
-    return { id: req.params.id, body: readDoc(req.params.id) ?? '' };
+    const body = readDoc(req.params.id) ?? '';
+    return { id: req.params.id, body, html: renderMarkdown(body), writtenAt: docWrittenAt(req.params.id) };
   });
 
   app.put<{ Params: { id: string }; Body: { body?: string } }>('/api/profile/:id', async (req, reply) => {
@@ -185,10 +188,23 @@ export function buildServer(port: number): FastifyInstance {
         waiting: audit ? dailyFixes(audit).length : 0,
         total: audit?.issues.length ?? 0,
         working: runningJob('task:site-check')?.progress ?? null,
-        needs: getSetting('siteUrl', null) ? null : 'your website',
+        needs: siteUrl() ? null : 'your website',
         schedule: taskSetting('site-check'),
       },
     ];
+  });
+
+  app.get<{ Params: { id: string } }>('/api/agents/:id/instructions', async (req, reply) =>
+    getAgent(req.params.id) ? { text: agentInstructions(req.params.id) } : reply.code(404).send({ error: 'no such agent' }),
+  );
+  app.put<{ Params: { id: string }; Body: { text?: string } }>('/api/agents/:id/instructions', async (req, reply) => {
+    if (!getAgent(req.params.id)) return reply.code(404).send({ error: 'no such agent' });
+    if (typeof req.body?.text !== 'string') return reply.code(400).send({ error: 'text must be text' });
+    try {
+      return { text: setAgentInstructions(req.params.id, req.body.text) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
   });
 
   app.post<{ Params: { id: string }; Body: { limit?: number } }>('/api/agents/:id/run', async (req, reply) => {
@@ -205,7 +221,7 @@ export function buildServer(port: number): FastifyInstance {
     return { audit, today: audit ? dailyFixes(audit) : [] };
   });
   app.post('/api/audit', async () => {
-    const audit = await runAudit(getSetting<string | null>('siteUrl', null) ?? undefined);
+    const audit = await runAudit(siteUrl() ?? undefined);
     return { audit, today: dailyFixes(audit) };
   });
   app.post<{ Body: { id?: string } }>('/api/audit/done', async (req, reply) => {
@@ -290,7 +306,7 @@ export function buildServer(port: number): FastifyInstance {
       if (!getSite(slug)) return back(null);
       // Pick the matching Search Console site automatically when there's an obvious one.
       await withSite(slug, async () => {
-        const origin = getSetting<string | null>('siteUrl', null);
+        const origin = siteUrl();
         if (origin && !getSetting('gscSite', null)) {
           const match = matchSite(await listSearchConsoleSites(), origin);
           if (match) setSetting('gscSite', match);
@@ -436,6 +452,7 @@ export function buildServer(port: number): FastifyInstance {
     setUserNotes(req.body.notes);
     return { ok: true };
   });
+  app.get('/api/tech', async () => techSignals());
   app.get('/api/llms-txt', async (_req, reply) => {
     const body = buildLlmsTxt();
     return body ? { body } : reply.code(404).send({ error: 'Plume has not read your site yet' });
@@ -462,7 +479,7 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
   app.post('/api/speed', async (_req, reply) => {
-    const url = getSetting<string | null>('siteUrl', null);
+    const url = siteUrl();
     if (!url) return reply.code(400).send({ error: 'add your site first' });
     const r = await runTask('speed');
     return r.status === 'done' ? lastSpeed() : reply.code(502).send({ error: r.message });
