@@ -9,6 +9,7 @@ import { dailyFixes, runAudit } from './agents/seoAudit';
 import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
+import { finishJob, startJob } from './jobs';
 
 export interface TaskDef {
   id: string;
@@ -129,9 +130,11 @@ export async function runTask(id: string): Promise<{ status: 'done' | 'failed' |
   if (running.has(id)) return { status: 'skipped', message: 'already running' };
   running.add(id);
   const quiet = id === 'publish';
+  const jobId = quiet ? null : startJob(`task:${id}`, def.label);
   const runId = quiet ? null : Number(getDb().prepare(`INSERT INTO task_runs (task, started_at, status) VALUES (?, ?, 'running')`).run(id, new Date().toISOString()).lastInsertRowid);
   const end = (status: 'done' | 'failed' | 'skipped', message: string) => {
     if (runId) getDb().prepare('UPDATE task_runs SET status = ?, message = ?, finished_at = ? WHERE id = ?').run(status, message, new Date().toISOString(), runId);
+    if (jobId) finishJob(jobId, status === 'failed' ? message : undefined);
     return { status, message };
   };
   try {

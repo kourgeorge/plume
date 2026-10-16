@@ -6,11 +6,11 @@ import { LLM, MODELS } from '../config';
 import { describe } from '../llm/settings';
 import { searchMode } from '../llm/client';
 import { RTL, contentLanguage, languageName } from '../context/language';
-import { PROFILE_DOCS, isProfileDocId, readDoc, writeDoc } from '../context/profile';
+import { PROFILE_DOCS, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
 import { startResearch } from '../research/profile';
-import { getJob } from '../jobs';
+import { getJob, runningJob } from '../jobs';
 import { AGENTS, startAgentRun } from '../agents';
-import { AuditResult, dailyFixes, markFixDone, runAudit } from '../agents/seoAudit';
+import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher } from '../publish';
 import { publishOne } from '../publish/runner';
@@ -18,7 +18,8 @@ import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnecte
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
 import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
-import { TaskSetting, runTask, taskDefs, taskOverview, updateTask } from '../scheduler';
+import { TaskSetting, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
+import { countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
 import { Level, recentLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
@@ -81,7 +82,38 @@ export function buildServer(port: number): FastifyInstance {
   });
 
   // ---- agents ----
-  app.get('/api/agents', async () => AGENTS.map((a) => ({ id: a.id, label: a.label, description: a.description })));
+  /** Agent folders: how much is waiting, whether it's working right now, and what (if anything) it needs. */
+  app.get('/api/agents', async () => {
+    const ready = profileComplete();
+    const audit = getSetting<AuditResult | null>('lastAudit', null);
+    const folders = AGENTS.map((a) => {
+      const drafts = listDrafts({ agent: a.id });
+      const job = runningJob(`agent:${a.id}`);
+      return {
+        id: a.id,
+        label: a.label,
+        description: a.description,
+        waiting: drafts.filter((d) => d.status === 'draft').length,
+        total: drafts.length,
+        working: job?.progress ?? null,
+        needs: ready ? null : 'business profile',
+        schedule: taskSetting(`agent:${a.id}`),
+      };
+    });
+    return [
+      ...folders,
+      {
+        id: 'site-check',
+        label: 'Site fixes',
+        description: "Your site's technical health, with two fixes a day.",
+        waiting: audit ? dailyFixes(audit).length : 0,
+        total: audit?.issues.length ?? 0,
+        working: runningJob('task:site-check')?.progress ?? null,
+        needs: getSetting('siteUrl', null) ? null : 'your website',
+        schedule: taskSetting('site-check'),
+      },
+    ];
+  });
 
   app.post<{ Params: { id: string }; Body: { limit?: number } }>('/api/agents/:id/run', async (req, reply) => {
     try {
@@ -102,7 +134,7 @@ export function buildServer(port: number): FastifyInstance {
   });
   app.post<{ Body: { id?: string } }>('/api/audit/done', async (req, reply) => {
     if (!req.body?.id) return reply.code(400).send({ error: 'id required' });
-    markFixDone(req.body.id);
+    fixDone(req.body.id);
     return { ok: true };
   });
 
@@ -135,6 +167,7 @@ export function buildServer(port: number): FastifyInstance {
     if (when && isNaN(when.getTime())) return reply.code(400).send({ error: 'bad date' });
     try {
       const d = moveDraft(Number(req.params.id), 'approved', { target, scheduledFor: when?.toISOString() ?? null, note: when ? `scheduled for ${when.toISOString()}` : 'approved' });
+      countDone();
       return when && when > new Date() ? d : await publishOne(d.id);
     } catch (err: any) {
       return reply.code(400).send({ error: err.message });
@@ -210,13 +243,17 @@ export function buildServer(port: number): FastifyInstance {
 
   app.post('/api/google/pull', async () => pullAll());
 
-  app.get('/api/results', async () => ({
-    queries: topQueries(50),
-    nearlyThere: searchConsoleGaps(topQueries(500)).slice(0, 20),
-    pages: topPages(30),
-    published: publishedResults(),
-    notes: performanceNotes(),
-  }));
+  app.get<{ Querystring: { days?: string } }>('/api/results', async (req) => {
+    const days = req.query.days === '7' ? 7 : 30;
+    return {
+      days,
+      queries: topQueries(50, days),
+      nearlyThere: searchConsoleGaps(topQueries(500, days), days === 7 ? 15 : 50).slice(0, 20),
+      pages: topPages(30, days),
+      published: publishedResults(new Date(), days),
+      notes: performanceNotes(),
+    };
+  });
 
   // ---- timetable, logs, budget, speed ----
   app.get('/api/tasks', async () => taskOverview());
@@ -248,6 +285,27 @@ export function buildServer(port: number): FastifyInstance {
   });
 
   app.get('/api/speed', async () => lastSpeed());
+  app.post<{ Body: { strategy?: string } }>('/api/speed/send', async (req, reply) => {
+    const strategy = req.body?.strategy === 'desktop' ? 'desktop' : 'mobile';
+    const fix = sendSpeedToSeo(strategy);
+    return fix ? { fix } : reply.code(400).send({ error: `nothing to fix on ${strategy} — every measurement passes` });
+  });
+
+  // ---- Today ----
+  app.get('/api/today', async () => ({ items: todayFeed(), ...todayProgress() }));
+  app.post<{ Body: { key?: string } }>('/api/today/skip', async (req, reply) => {
+    if (!req.body?.key) return reply.code(400).send({ error: 'key required' });
+    skipItem(req.body.key);
+    return { ok: true };
+  });
+  app.post<{ Params: { id: string }; Body: { reason?: string } }>('/api/drafts/:id/not-useful', async (req, reply) => {
+    try {
+      notUseful(Number(req.params.id), req.body?.reason ?? null);
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
   app.post('/api/speed', async (_req, reply) => {
     const url = getSetting<string | null>('siteUrl', null);
     if (!url) return reply.code(400).send({ error: 'add your site first' });

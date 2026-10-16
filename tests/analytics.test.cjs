@@ -34,15 +34,17 @@ const server = http.createServer((req, res) => {
     if (req.url === '/gsc/sites') return json(200, { siteEntry: [{ siteUrl: 'sc-domain:acme.com', permissionLevel: 'siteOwner' }, { siteUrl: 'https://x.com/', permissionLevel: 'siteUnverifiedUser' }] });
     if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query'))
       return json(200, { rows: [
-        { keys: ['widget pricing', 'https://acme.com/pricing'], clicks: 30, impressions: 600, ctr: 0.05, position: 4 },
-        { keys: ['best widgets', 'https://acme.com/blog/best-widgets/'], clicks: 2, impressions: 400, ctr: 0.005, position: 14 },
-        { keys: ['best widgets 2026', 'https://www.acme.com/blog/best-widgets'], clicks: 1, impressions: 100, ctr: 0.01, position: 18 },
+        { keys: ['2026-10-13', 'widget pricing', 'https://acme.com/pricing'], clicks: 20, impressions: 400, position: 4 },
+        { keys: ['2026-09-20', 'widget pricing', 'https://acme.com/pricing'], clicks: 10, impressions: 200, position: 4 },
+        { keys: ['2026-10-12', 'best widgets', 'https://acme.com/blog/best-widgets/'], clicks: 2, impressions: 400, position: 14 },
+        { keys: ['2026-10-11', 'best widgets 2026', 'https://www.acme.com/blog/best-widgets'], clicks: 1, impressions: 100, position: 18 },
       ] });
     if (req.url.startsWith('/admin/accountSummaries')) return json(200, { accountSummaries: [{ propertySummaries: [{ property: 'properties/123', displayName: 'Acme' }] }] });
     if (req.url === '/data/properties/123:runReport')
       return json(200, { rows: [
-        { dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '900' }, { value: '700' }, { value: '0.61' }, { value: '45' }] },
-        { dimensionValues: [{ value: '/blog/best-widgets' }], metricValues: [{ value: '120' }, { value: '100' }, { value: '0.4' }, { value: '80' }] },
+        { dimensionValues: [{ value: '20261015' }, { value: '/pricing' }], metricValues: [{ value: '600' }, { value: '500' }, { value: '0.7' }, { value: '45' }] },
+        { dimensionValues: [{ value: '20261001' }, { value: '/pricing' }], metricValues: [{ value: '300' }, { value: '100' }, { value: '0.2' }, { value: '45' }] },
+        { dimensionValues: [{ value: '20261014' }, { value: '/blog/best-widgets' }], metricValues: [{ value: '120' }, { value: '100' }, { value: '0.4' }, { value: '80' }] },
       ] });
     json(404, { error: { message: `no route ${req.url}` } });
   });
@@ -92,16 +94,17 @@ test('pullAll stores both sources; a failure in one does not stop the other', as
   setSetting('gscSite', 'sc-domain:acme.com');
   setSetting('ga4Property', '123');
   const s = await pull.pullAll(new Date('2026-10-16T12:00:00Z'));
-  assert.equal(s.searchConsole.rows, 3);
-  assert.equal(s.analytics.rows, 2);
+  assert.equal(s.searchConsole.rows, 4);
+  assert.equal(s.analytics.rows, 3);
   const gscCall = calls.find((c) => c.url.includes('searchAnalytics'));
-  assert.deepEqual(JSON.parse(gscCall.body).dimensions, ['query', 'page']);
+  assert.deepEqual(JSON.parse(gscCall.body).dimensions, ['date', 'query', 'page']);
   assert.equal(JSON.parse(gscCall.body).endDate, '2026-10-14');
+  assert.equal(JSON.parse(gscCall.body).startDate, '2026-09-15');
 
   setSetting('ga4Property', '999');
   const s2 = await pull.pullAll(new Date('2026-10-16T12:00:00Z'));
   assert.match(s2.analytics.error, /404/);
-  assert.equal(s2.searchConsole.rows, 3);
+  assert.equal(s2.searchConsole.rows, 4);
   setSetting('ga4Property', '123');
   await pull.pullAll(new Date('2026-10-16T12:00:00Z'));
 });
@@ -115,6 +118,21 @@ test('results merge by path across www, trailing slash and full URL', () => {
   assert.equal(pages[0].page, '/pricing');
   const q1 = results.topQueries().find((r) => r.query === 'widget pricing');
   assert.equal(q1.position, 4);
+  assert.equal(q1.clicks, 30, '28-day window should include both days');
+});
+
+test('7-day window counts only the last 7 days; engagement is averaged by sessions', () => {
+  const week = results.topQueries(50, 7).find((r) => r.query === 'widget pricing');
+  assert.equal(week.clicks, 20, 'the 2026-09-20 row is outside the last 7 days');
+  const pricing28 = results.topPages(50, 28).find((p) => p.page === '/pricing');
+  assert.equal(pricing28.views, 900);
+  assert.ok(Math.abs(pricing28.engagement - (0.7 * 500 + 0.2 * 100) / 600) < 1e-9, `engagement ${pricing28.engagement}`);
+  assert.equal(results.topPages(50, 7).find((p) => p.page === '/pricing').views, 600);
+});
+
+test('GA dates convert from YYYYMMDD', () => {
+  assert.equal(pull.gaDate('20261015'), '2026-10-15');
+  assert.equal(pull.gaDate('2026-10-15'), '2026-10-15');
 });
 
 test('published drafts get their numbers; dry runs are ignored', () => {

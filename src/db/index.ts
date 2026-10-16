@@ -67,18 +67,21 @@ CREATE TABLE IF NOT EXISTS draft_events (
   to_status TEXT NOT NULL,
   note TEXT
 );
-CREATE TABLE IF NOT EXISTS gsc_rows (
-  pulled_on TEXT NOT NULL,        -- YYYY-MM-DD of the pull; each pull covers the 28 days before it
+-- One row per day, so any window (7, 28, 30 days) can be summed. Replaces the old 28-day snapshot tables.
+DROP TABLE IF EXISTS gsc_rows;
+DROP TABLE IF EXISTS ga_pages;
+CREATE TABLE IF NOT EXISTS gsc_daily (
+  date TEXT NOT NULL,             -- YYYY-MM-DD
   query TEXT NOT NULL,
   page TEXT NOT NULL,
-  clicks INTEGER, impressions INTEGER, ctr REAL, position REAL,
-  PRIMARY KEY (pulled_on, query, page)
+  clicks INTEGER, impressions INTEGER, position REAL,
+  PRIMARY KEY (date, query, page)
 );
-CREATE TABLE IF NOT EXISTS ga_pages (
-  pulled_on TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS ga_daily (
+  date TEXT NOT NULL,
   path TEXT NOT NULL,
   views INTEGER, sessions INTEGER, engagement_rate REAL, avg_seconds REAL,
-  PRIMARY KEY (pulled_on, path)
+  PRIMARY KEY (date, path)
 );
 CREATE TABLE IF NOT EXISTS logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,6 +97,13 @@ CREATE TABLE IF NOT EXISTS task_runs (
   finished_at TEXT,
   status TEXT NOT NULL,           -- running | done | failed | skipped
   message TEXT
+);
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  title TEXT NOT NULL,
+  reason TEXT                     -- the user's words, may be empty
 );
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,

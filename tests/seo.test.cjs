@@ -43,6 +43,7 @@ test('two fixes a day, stable within the day, new ones the next day', () => {
   assert.equal(d1.length, 2);
   assert.deepEqual(dailyFixes(r, 2, '2026-10-16').map((i) => i.id), d1.map((i) => i.id));
   markFixDone(d1[0].id);
+  assert.deepEqual(dailyFixes(r, 2, '2026-10-16').map((i) => i.id), [d1[1].id], 'a fix marked done must leave today\'s list');
   const d2 = dailyFixes(r, 2, '2026-10-17');
   assert.ok(!d2.some((i) => d1.some((j) => j.id === i.id)), 'repeated a fix');
 });

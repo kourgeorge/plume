@@ -10,7 +10,8 @@
     "dev": "ts-node src/main.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.cjs"
+    "test": "node --test tests/*.test.cjs",
+    "demo": "ts-node src/scripts/seedDemo.ts"
   },
   "keywords": [],
   "author": "",

@@ -4,6 +4,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { PROFILE_DIR } from '../config';
 import { performanceNotes } from '../analytics/results';
 import { languageRule } from './language';
+import { feedbackNote } from '../feedback';
 
 /** The five documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable. */
 export const PROFILE_DOCS = [
@@ -51,7 +52,14 @@ function safeNotes(): string | null {
  * System-prompt blocks for any agent: its own role first, then all five docs in one cached block.
  * Docs are never shortened — an agent working from a clipped voice guide drifts off-brand.
  */
-export function agentSystem(role: string, dir = PROFILE_DIR, notes: string | null = safeNotes()): Anthropic.Beta.BetaTextBlockParam[] {
+export function agentSystem(
+  role: string,
+  dir = PROFILE_DIR,
+  notes: string | null = safeNotes(),
+  /** When given, the agent also sees drafts the user recently turned down. */
+  agent?: string,
+): Anthropic.Beta.BetaTextBlockParam[] {
+  const rejected = agent ? feedbackNote(agent) : null;
   const docs = PROFILE_DOCS.map((d) => `<doc id="${d.id}" title="${d.title}">\n${readDoc(d.id, dir) ?? '(not written yet)'}\n</doc>`).join('\n\n');
   return [
     {
@@ -64,6 +72,6 @@ export function agentSystem(role: string, dir = PROFILE_DIR, notes: string | nul
     },
     // After the cached docs: these change daily, so they must not sit inside the cached prefix.
     ...(notes ? [{ type: 'text' as const, text: `<results>\n${notes}\n</results>` }] : []),
-    { type: 'text', text: `${role}\n\n${languageRule()}` },
+    { type: 'text', text: [role, languageRule(), rejected].filter(Boolean).join('\n\n') },
   ];
 }

@@ -40,7 +40,7 @@ export const writerAgent: Agent = {
     const res = await askJson<{ topics: { title: string; angle: string; reason: string }[] }>({
       purpose: 'writer:topics',
       model: MODELS.draft,
-      system: agentSystem(WRITER_ROLE),
+      system: agentSystem(WRITER_ROLE, undefined, undefined, 'writer'),
       schema: TOPICS_SCHEMA,
       prompt: `Pick the next ${limit} long-form articles from the content plan.\nAlready written or in review (don't repeat):\n${done.map((t) => `- ${t}`).join('\n') || '(none)'}`,
     });

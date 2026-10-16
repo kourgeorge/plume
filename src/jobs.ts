@@ -30,3 +30,15 @@ export function finishJob(id: number, error?: string): void {
 export function getJob(id: number): Job | undefined {
   return getDb().prepare('SELECT * FROM jobs WHERE id = ?').get(id) as Job | undefined;
 }
+
+/** The newest still-running job of this kind, if any (for "working…" on agent folders). */
+export function runningJob(kind: string): Job | undefined {
+  return getDb().prepare(`SELECT * FROM jobs WHERE kind = ? AND status = 'running' ORDER BY id DESC LIMIT 1`).get(kind) as Job | undefined;
+}
+
+/** On startup: anything still marked running was cut off by a restart. */
+export function closeStaleJobs(): number {
+  return getDb()
+    .prepare(`UPDATE jobs SET status = 'failed', error = 'stopped because Plume was restarted', finished_at = ? WHERE status = 'running'`)
+    .run(new Date().toISOString()).changes;
+}

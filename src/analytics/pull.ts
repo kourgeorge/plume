@@ -26,52 +26,64 @@ export function matchSite(sites: string[], origin: string): string | null {
 
 // ---- pulls ----
 
-/** Last 28 days of query × page rows. Search Console data lags ~2 days, so the window ends 2 days ago. */
+/** Days kept per pull. Search Console data lags ~2 days, so its window ends 2 days ago. */
+export const PULL_DAYS = 30;
+
+/** Last 30 days of date × query × page rows. Re-pulling replaces those days (late data fills in). */
 export async function pullSearchConsole(site: string, today = new Date()): Promise<number> {
-  const rows: { keys: [string, string]; clicks: number; impressions: number; ctr: number; position: number }[] = [];
+  type Row = { keys: [string, string, string]; clicks: number; impressions: number; position: number };
+  const rows: Row[] = [];
+  const startDate = daysAgo(PULL_DAYS + 1, today);
+  const endDate = daysAgo(2, today);
   for (let start = 0; ; start += 25000) {
-    const r = await googleApi<{ rows?: typeof rows }>(`${GOOGLE.gsc}/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
-      startDate: daysAgo(30, today),
-      endDate: daysAgo(2, today),
-      dimensions: ['query', 'page'],
+    const r = await googleApi<{ rows?: Row[] }>(`${GOOGLE.gsc}/sites/${encodeURIComponent(site)}/searchAnalytics/query`, {
+      startDate,
+      endDate,
+      dimensions: ['date', 'query', 'page'],
       rowLimit: 25000,
       startRow: start,
     });
     rows.push(...(r.rows ?? []));
     if ((r.rows ?? []).length < 25000) break;
   }
-  const on = day(today);
   const db = getDb();
-  const ins = db.prepare('INSERT OR REPLACE INTO gsc_rows VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const ins = db.prepare('INSERT OR REPLACE INTO gsc_daily VALUES (?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
-    db.prepare('DELETE FROM gsc_rows WHERE pulled_on = ?').run(on);
-    for (const r of rows) ins.run(on, r.keys[0], r.keys[1], r.clicks, r.impressions, r.ctr, r.position);
+    db.prepare('DELETE FROM gsc_daily WHERE date BETWEEN ? AND ?').run(startDate, endDate);
+    for (const r of rows) ins.run(r.keys[0], r.keys[1], r.keys[2], r.clicks, r.impressions, r.position);
   })();
   return rows.length;
 }
 
+/** GA4 dates come as YYYYMMDD. */
+export function gaDate(d: string): string {
+  return /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}` : d;
+}
+
 export async function pullAnalytics(property: string, today = new Date()): Promise<number> {
-  const r = await googleApi<{ rows?: { dimensionValues: { value: string }[]; metricValues: { value: string }[] }[] }>(
-    `${GOOGLE.gaData}/properties/${property}:runReport`,
-    {
-      dateRanges: [{ startDate: '28daysAgo', endDate: 'yesterday' }],
-      dimensions: [{ name: 'pagePath' }],
+  type Row = { dimensionValues: { value: string }[]; metricValues: { value: string }[] };
+  const rows: Row[] = [];
+  for (let offset = 0; ; offset += 10000) {
+    const r = await googleApi<{ rows?: Row[] }>(`${GOOGLE.gaData}/properties/${property}:runReport`, {
+      dateRanges: [{ startDate: `${PULL_DAYS}daysAgo`, endDate: 'yesterday' }],
+      dimensions: [{ name: 'date' }, { name: 'pagePath' }],
       metrics: [{ name: 'screenPageViews' }, { name: 'sessions' }, { name: 'engagementRate' }, { name: 'averageSessionDuration' }],
-      orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
-      limit: 1000,
-    },
-  );
-  const on = day(today);
+      limit: 10000,
+      offset,
+    });
+    rows.push(...(r.rows ?? []));
+    if ((r.rows ?? []).length < 10000) break;
+  }
   const db = getDb();
-  const ins = db.prepare('INSERT OR REPLACE INTO ga_pages VALUES (?, ?, ?, ?, ?, ?)');
+  const ins = db.prepare('INSERT OR REPLACE INTO ga_daily VALUES (?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
-    db.prepare('DELETE FROM ga_pages WHERE pulled_on = ?').run(on);
-    for (const row of r.rows ?? []) {
+    db.prepare('DELETE FROM ga_daily WHERE date BETWEEN ? AND ?').run(daysAgo(PULL_DAYS, today), daysAgo(1, today));
+    for (const row of rows) {
       const [views, sessions, eng, secs] = row.metricValues.map((m) => Number(m.value));
-      ins.run(on, row.dimensionValues[0].value, views, sessions, eng, secs);
+      ins.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value, views, sessions, eng, secs);
     }
   })();
-  return (r.rows ?? []).length;
+  return rows.length;
 }
 
 export interface PullStatus {

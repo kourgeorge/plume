@@ -174,15 +174,30 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
  */
 export function dailyFixes(audit: AuditResult, perDay = 2, today = new Date().toISOString().slice(0, 10)): Issue[] {
   const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
-  if (log.day === today) return log.ids.map((id) => audit.issues.find((i) => i.id === id)).filter((i): i is Issue => !!i);
+  // Problems the user sent over by hand come first, on top of the daily two, until marked fixed.
+  const pinned = pinnedIssues().filter((i) => !log.done.includes(i.id));
+  if (log.day === today)
+    return [...pinned, ...log.ids.filter((id) => !log.done.includes(id)).map((id) => audit.issues.find((i) => i.id === id)).filter((i): i is Issue => !!i)];
   const skip = new Set([...log.given, ...log.done]);
   const pick = audit.issues.filter((i) => !skip.has(i.id)).slice(0, perDay);
   setSetting('dailyFixes', { day: today, ids: pick.map((i) => i.id), given: [...log.given, ...pick.map((i) => i.id)], done: log.done });
-  return pick;
+  return [...pinned, ...pick];
 }
 
 export function markFixDone(id: string): void {
   const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
   if (!log.done.includes(id)) log.done.push(id);
   setSetting('dailyFixes', log);
+  setSetting('pinnedIssues', pinnedIssues().filter((i) => i.id !== id));
+}
+
+export function pinnedIssues(): Issue[] {
+  return getSetting<Issue[]>('pinnedIssues', []);
+}
+
+/** Put a problem in today's fixes now (e.g. from the speed panel). Re-sending replaces the old copy. */
+export function pinIssue(issue: Issue): void {
+  const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
+  setSetting('dailyFixes', { ...log, done: log.done.filter((d) => d !== issue.id) });
+  setSetting('pinnedIssues', [issue, ...pinnedIssues().filter((i) => i.id !== issue.id)]);
 }

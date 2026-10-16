@@ -5,8 +5,14 @@ export interface QueryRow { query: string; clicks: number; impressions: number; 
 export interface PageRow { page: string; clicks: number; impressions: number; position: number; views: number | null; engagement: number | null }
 export interface PublishedResult { id: number; title: string; agent: string; url: string; publishedDaysAgo: number; clicks: number; impressions: number; position: number | null; views: number | null; topQuery: string | null }
 
-function latest(table: 'gsc_rows' | 'ga_pages'): string | null {
-  return (getDb().prepare(`SELECT MAX(pulled_on) d FROM ${table}`).get() as { d: string | null }).d;
+/**
+ * The window to sum: the last `days` days that have data. Each source ends on its own latest day
+ * (Search Console lags Analytics by a day or two), so both windows are the same length.
+ */
+function since(table: 'gsc_daily' | 'ga_daily', days: number): string | null {
+  const last = (getDb().prepare(`SELECT MAX(date) d FROM ${table}`).get() as { d: string | null }).d;
+  if (!last) return null;
+  return new Date(new Date(`${last}T00:00:00Z`).getTime() - (days - 1) * 86400e3).toISOString().slice(0, 10);
 }
 
 /** Compare by path only: Search Console gives full URLs, Analytics gives paths, and www/trailing slashes vary. */
@@ -19,28 +25,33 @@ export function pathOf(url: string): string {
   }
 }
 
-export function topQueries(limit = 50): QueryRow[] {
-  const on = latest('gsc_rows');
-  if (!on) return [];
+export function topQueries(limit = 50, days = 28): QueryRow[] {
+  const from = since('gsc_daily', days);
+  if (!from) return [];
   return getDb()
     .prepare(
       `SELECT query, SUM(clicks) clicks, SUM(impressions) impressions,
               CAST(SUM(clicks) AS REAL) / MAX(SUM(impressions), 1) ctr,
               SUM(position * impressions) / MAX(SUM(impressions), 1) position
-       FROM gsc_rows WHERE pulled_on = ? GROUP BY query ORDER BY impressions DESC LIMIT ?`,
+       FROM gsc_daily WHERE date >= ? GROUP BY query ORDER BY impressions DESC LIMIT ?`,
     )
-    .all(on, limit) as QueryRow[];
+    .all(from, limit) as QueryRow[];
 }
 
-export function topPages(limit = 50): PageRow[] {
-  const gscOn = latest('gsc_rows');
-  const gaOn = latest('ga_pages');
-  const search = gscOn
+export function topPages(limit = 50, days = 28): PageRow[] {
+  const gscFrom = since('gsc_daily', days);
+  const gaFrom = since('ga_daily', days);
+  const search = gscFrom
     ? (getDb()
-        .prepare(`SELECT page, SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / MAX(SUM(impressions), 1) position FROM gsc_rows WHERE pulled_on = ? GROUP BY page`)
-        .all(gscOn) as { page: string; clicks: number; impressions: number; position: number }[])
+        .prepare(`SELECT page, SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / MAX(SUM(impressions), 1) position FROM gsc_daily WHERE date >= ? GROUP BY page`)
+        .all(gscFrom) as { page: string; clicks: number; impressions: number; position: number }[])
     : [];
-  const ga = gaOn ? (getDb().prepare('SELECT path, views, engagement_rate FROM ga_pages WHERE pulled_on = ?').all(gaOn) as { path: string; views: number; engagement_rate: number }[]) : [];
+  // Engagement is a rate, so it's averaged by sessions rather than added up.
+  const ga = gaFrom
+    ? (getDb()
+        .prepare('SELECT path, SUM(views) views, SUM(sessions) sessions, SUM(engagement_rate * sessions) / MAX(SUM(sessions), 1) engagement_rate FROM ga_daily WHERE date >= ? GROUP BY path')
+        .all(gaFrom) as { path: string; views: number; sessions: number; engagement_rate: number }[])
+    : [];
   const byPath = new Map<string, PageRow>();
   for (const s of search) {
     const p = pathOf(s.page);
@@ -52,21 +63,27 @@ export function topPages(limit = 50): PageRow[] {
     row.impressions = shown;
     byPath.set(p, row);
   }
+  const sessionsByPath = new Map<string, number>();
   for (const g of ga) {
     const p = pathOf(g.path);
     const row = byPath.get(p) ?? { page: p, clicks: 0, impressions: 0, position: 0, views: null, engagement: null };
+    const before = sessionsByPath.get(p) ?? 0;
+    const total = before + g.sessions;
+    row.engagement = total ? ((row.engagement ?? 0) * before + g.engagement_rate * g.sessions) / total : g.engagement_rate;
+    sessionsByPath.set(p, total);
     row.views = (row.views ?? 0) + g.views;
-    row.engagement = g.engagement_rate;
     byPath.set(p, row);
   }
   return [...byPath.values()].sort((a, b) => (b.views ?? 0) - (a.views ?? 0) || b.clicks - a.clicks).slice(0, limit);
 }
 
 /** How each published item is doing. Dry runs and file exports have no live page, so they're skipped. */
-export function publishedResults(now = new Date()): PublishedResult[] {
-  const pages = new Map(topPages(10000).map((p) => [p.page, p]));
-  const on = latest('gsc_rows');
-  const q = on ? getDb().prepare('SELECT query, page, impressions FROM gsc_rows WHERE pulled_on = ? ORDER BY impressions DESC').all(on) as { query: string; page: string; impressions: number }[] : [];
+export function publishedResults(now = new Date(), days = 28): PublishedResult[] {
+  const pages = new Map(topPages(10000, days).map((p) => [p.page, p]));
+  const from = since('gsc_daily', days);
+  const q = from
+    ? (getDb().prepare('SELECT query, page, SUM(impressions) impressions FROM gsc_daily WHERE date >= ? GROUP BY query, page ORDER BY impressions DESC').all(from) as { query: string; page: string; impressions: number }[])
+    : [];
   return listDrafts({ status: 'published' })
     .filter((d) => !d.dryRun && d.publishedUrl?.startsWith('http'))
     .map((d) => {

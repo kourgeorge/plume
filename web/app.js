@@ -7,35 +7,121 @@ const api = async (path, opts = {}) => {
   return data;
 };
 const post = (path, body = {}) => api(path, { method: 'POST', body: JSON.stringify(body) });
+const n = (x) => (x == null ? '—' : Number(x).toLocaleString());
+const pos = (x) => (x == null || !x ? '—' : Number(x).toFixed(1));
+const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const band = (score) => (score >= 90 ? 'good' : score >= 50 ? 'mid' : 'bad');
+
+/** Small per-browser preferences. Storage can be unavailable (private mode); everything works without it. */
+const pref = {
+  get(k, d) { try { const v = localStorage.getItem(`plume:${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`plume:${k}`, JSON.stringify(v)); } catch { /* fine */ } },
+};
 
 let state = null;
-let currentDoc = null;
-let currentDraft = null;
 let publishers = [];
+let folderStatus = 'draft';
+let currentDraft = null;
+let draftBack = '#today';
+let speedDevice = pref.get('speedDevice', 'mobile');
+let days = pref.get('days', 30);
 
-function show(id) {
-  for (const s of document.querySelectorAll('main > section')) s.hidden = s.id !== id;
-  for (const a of document.querySelectorAll('nav a')) a.classList.toggle('active', a.hash === `#${id}`);
+// ---------------------------------------------------------------- routing
+
+const VIEWS = ['today', 'job', 'doc', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage'];
+
+function showView(id) {
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== id;
+  for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
+  $('col-center').scrollTop = 0;
 }
 
-async function refresh() {
+async function route() {
   state = await api('/api/state');
   $('key-warning').hidden = state.hasApiKey;
-  if (!state.site) return show('onboard');
-  updateInboxCount();
-  const page = location.hash.slice(1) || 'inbox';
-  if (page === 'usage') return loadUsage();
-  if (page === 'logs') return loadLogs();
-  if (page === 'agents') return loadAgents();
-  if (page === 'check') return loadAudit();
-  if (page === 'profile') return loadProfile();
-  if (page.startsWith('results')) return loadResults();
-  return loadInbox();
+  if (!state.site) {
+    $('workspace').hidden = true;
+    $('onboard').hidden = false;
+    return;
+  }
+  $('onboard').hidden = true;
+  $('workspace').hidden = false;
+  renderChrome();
+  const [page, arg] = (location.hash.slice(1) || 'today').split(/[/?]/);
+  switch (page) {
+    case 'doc': return loadDoc(arg);
+    case 'folder': return loadFolder(arg);
+    case 'draft': return loadDraft(Number(arg));
+    case 'check': return loadAudit();
+    case 'speed': return loadSpeed();
+    case 'results': return loadResults();
+    case 'logs': return loadLogs();
+    case 'usage': return loadUsage();
+    default: return loadToday();
+  }
 }
 
+// ---------------------------------------------------------------- frame: top bar + left + right
+
+async function renderChrome() {
+  $('site-name').textContent = new URL(state.site).hostname;
+  const lang = state.language;
+  $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
+  for (const b of $('range').querySelectorAll('button')) b.classList.toggle('on', Number(b.dataset.days) === days);
+
+  $('doc-list').innerHTML = state.docs
+    .map((d) => `<li><a href="#doc/${d.id}">${esc(d.title)}<span class="tag">${d.written ? '' : 'not written'}</span></a></li>`)
+    .join('');
+  for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
+
+  // These don't block the page: each fills in when it arrives.
+  api('/api/profile/product').then((d) => ($('summary').textContent = summaryOf(d.body) || 'The business summary appears here once research is done.'), () => {});
+  api('/api/google').then((g) => {
+    $('google-pill').innerHTML = !g.configured ? '' : g.connected ? '<span title="Search Console and Analytics are connected">Google ✓</span>' : '<a href="/api/google/connect">Connect Google</a>';
+  }, () => {});
+  api('/api/speed').then((s) => {
+    const r = s[speedDevice] ?? s.mobile ?? s.desktop;
+    $('speed-chips').innerHTML = r
+      ? [['performance', 'Speed'], ['accessibility', 'Access'], ['bestPractices', 'Practices'], ['seo', 'SEO']]
+          .map(([k, label]) => `<span class="chip"><b class="${band(r.scores[k])}">${r.scores[k]}</b>${label}</span>`)
+          .join('')
+      : '<span class="chip">Check speed</span>';
+  }, () => {});
+  api('/api/budget').then((b) => {
+    $('cost-link').textContent = b.limit ? `AI $${b.spent.toFixed(2)} / $${b.limit}` : `AI $${b.spent.toFixed(2)}`;
+  }, () => {});
+  renderQuick();
+}
+
+/** First real paragraph of the product document: the one-paragraph business summary. */
+function summaryOf(markdown) {
+  const para = (markdown || '')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p && !p.startsWith('#') && !p.startsWith('-') && !p.startsWith('|') && p.length > 60);
+  if (!para) return '';
+  const plain = para.replace(/[*_`]|\[([^\]]+)\]\([^)]+\)/g, '$1');
+  return plain.length > 320 ? `${plain.slice(0, 320).replace(/\s\S*$/, '')}…` : plain;
+}
+
+function renderQuick() {
+  const actions = [
+    ['Write SEO drafts now', () => runAgentNow('seo')],
+    ['Write an article now', () => runAgentNow('writer')],
+    ['Check my site', async () => ((location.hash = '#check'), await runAudit())],
+    ['Check page speed', async () => ((location.hash = '#speed'), await runSpeed())],
+    ['Get latest Google data', async () => ((location.hash = '#results'), await pullGoogle())],
+    ['Research my site again', () => confirm('Research the whole site again? This replaces all five documents, including your edits.') && runResearch({})],
+  ];
+  $('quick').innerHTML = actions.map(([label], i) => `<button class="secondary" data-q="${i}">${esc(label)}</button>`).join('');
+  for (const b of $('quick').querySelectorAll('button')) b.onclick = () => actions[Number(b.dataset.q)][1]().catch?.((e) => alert(e.message));
+}
+
+// ---------------------------------------------------------------- jobs
+
 async function waitForJob(jobId, label) {
-  show('job');
-  $('job').querySelector('h2').textContent = label;
+  showView('job');
+  $('job-title').textContent = label;
   for (;;) {
     const job = await api(`/api/jobs/${jobId}`);
     $('job-progress').textContent = job.progress || '';
@@ -45,86 +131,194 @@ async function waitForJob(jobId, label) {
   }
 }
 
-// ---- profile ----
-async function loadProfile() {
-  $('site-label').textContent = state.site;
-  renderDocList();
-  show('profile');
-  await openDoc(currentDoc ?? state.docs.find((d) => d.written)?.id ?? state.docs[0].id);
-}
-
-function renderDocList() {
-  $('doc-list').innerHTML = '';
-  for (const d of state.docs) {
-    const li = document.createElement('li');
-    li.textContent = d.written ? d.title : `${d.title} (not written)`;
-    li.className = (d.id === currentDoc ? 'active ' : '') + (d.written ? '' : 'missing');
-    li.onclick = () => openDoc(d.id);
-    $('doc-list').append(li);
-  }
-}
-
-async function openDoc(id) {
-  currentDoc = id;
-  renderDocList();
-  const doc = await api(`/api/profile/${id}`);
-  $('doc-title').textContent = state.docs.find((d) => d.id === id).title;
-  $('doc-body').value = doc.body;
-  $('save-status').textContent = '';
-}
-
 async function runResearch(body) {
   const { jobId } = await post('/api/research', body);
   try {
-    await waitForJob(jobId, 'Researching…');
+    await waitForJob(jobId, 'Researching your site…');
   } catch (err) {
     alert(`Research stopped: ${err.message}`);
   }
-  location.hash = '#profile';
-  await refresh();
+  location.hash = '#doc/product';
+  route();
 }
 
-// ---- inbox ----
-async function updateInboxCount() {
-  const waiting = await api('/api/drafts?status=draft');
-  $('inbox-count').hidden = !waiting.length;
-  $('inbox-count').textContent = waiting.length;
+async function runAgentNow(id) {
+  try {
+    const { jobId } = await post(`/api/agents/${id}/run`);
+    await waitForJob(jobId, 'Agent at work…');
+  } catch (err) {
+    alert(err.message);
+  }
+  location.hash = '#today';
+  route();
 }
 
-async function loadInbox() {
-  show('inbox');
+// ---------------------------------------------------------------- Today
+
+async function loadToday() {
+  showView('today');
+  const [t, folders] = await Promise.all([api('/api/today'), api('/api/agents')]);
+  const total = t.left + t.doneToday;
+  $('today-progress').textContent = total ? `${t.doneToday} of ${total} done` : '';
+  renderTodayCard(t.items[0], t.items.length);
+  renderFolders(folders);
   publishers = await api('/api/publishers');
-  const drafts = await api(`/api/drafts?status=${$('inbox-filter').value}`);
-  $('draft-list').innerHTML = drafts.length
-    ? drafts.map((d) => `<li data-id="${d.id}" class="${d.id === currentDraft ? 'active' : ''}">${esc(d.title)}<small>${esc(d.agent)} · ${d.words} words${d.dryRun ? ' · dry run' : ''}</small></li>`).join('')
-    : '<li class="muted">Nothing here.</li>';
-  for (const li of $('draft-list').querySelectorAll('li[data-id]')) li.onclick = () => openDraft(Number(li.dataset.id));
-  if (currentDraft && drafts.some((d) => d.id === currentDraft)) openDraft(currentDraft);
-  else if (drafts[0]) openDraft(drafts[0].id);
-  else $('draft-view').hidden = true;
 }
 
-async function openDraft(id) {
+function renderTodayCard(item, left) {
+  const box = $('today-card');
+  if (!item) {
+    box.innerHTML = `<div class="today empty">Nothing waiting. Agents put new drafts and fixes here as they finish.<br><small>Switch agents on under <a href="#logs">Timetable</a>, or use Quick actions.</small></div>`;
+    return;
+  }
+  const more = left > 1 ? `<span class="muted small">${left - 1} more after this</span>` : '';
+  if (item.kind === 'draft') {
+    const d = item.draft;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span>${esc(agentLabel(d.agent))}</span><span>·</span><span>${esc(kindLabel(d.kind))}</span><span>·</span><span>${d.words} words</span></div>
+      <h2 dir="auto">${esc(d.title)}</h2>
+      ${d.meta.reason ? `<p class="why">${esc(d.meta.reason)}</p>` : ''}
+      <p class="body" dir="auto">${esc(d.preview)}</p>
+      <div class="acts">
+        <select id="t-target">${publishers.map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' (dry run)'}</option>`).join('')}</select>
+        <button id="t-approve">Approve</button>
+        <a href="#draft/${d.id}"><button class="secondary">Read and edit</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button><button class="secondary" id="t-no">Not useful</button></span>
+      </div>${more}</div>`;
+    const firstLive = publishers.find((p) => p.configured && p.id !== 'export');
+    if (firstLive) $('t-target').value = firstLive.id;
+    $('t-approve').onclick = act(async () => post(`/api/drafts/${d.id}/approve`, { target: $('t-target').value }));
+    $('t-no').onclick = act(async () => {
+      const reason = prompt('What was wrong with it? (optional — the agent will learn from this)');
+      if (reason === null) return 'cancel';
+      await post(`/api/drafts/${d.id}/not-useful`, { reason });
+    });
+  } else if (item.kind === 'fix') {
+    const f = item.fix;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span class="sev ${f.severity}">${esc(f.severity)}</span><span>·</span><span>Site fix · ${esc(f.area)}</span></div>
+      <h2>${esc(f.title)}</h2>
+      <p class="why">${esc(f.url)}</p>
+      <p class="body">${esc(f.why)}</p>
+      <ol>${f.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+      ${f.snippet ? `<pre><code>${esc(f.snippet)}</code></pre>` : ''}
+      <div class="acts">
+        <button id="t-done">Mark as fixed</button>
+        ${f.snippet ? '<button class="secondary" id="t-copy">Copy code</button>' : ''}
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div>${more}</div>`;
+    $('t-done').onclick = act(async () => post('/api/audit/done', { id: f.id }));
+    if (f.snippet) $('t-copy').onclick = () => navigator.clipboard.writeText(f.snippet).then(() => ($('t-copy').textContent = 'Copied'));
+  } else if (item.kind === 'speed') {
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span class="sev critical">Speed</span><span>·</span><span>${item.strategy === 'mobile' ? 'Phones' : 'Computers'} · score ${item.performance}</span></div>
+      <h2>${esc(item.headline)}</h2>
+      <p class="why">Slow pages rank lower, and visitors leave before they see anything.</p>
+      <div class="acts">
+        <button id="t-send">Send to SEO agent</button>
+        <a href="#speed"><button class="secondary">See details</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div>${more}</div>`;
+    $('t-send').onclick = act(async () => post('/api/speed/send', { strategy: item.strategy }));
+  }
+  $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
+}
+
+/** Wrap a card action: run it, then show the next card. Returning 'cancel' keeps the card. */
+function act(fn) {
+  return async (e) => {
+    e.target.disabled = true;
+    try {
+      if ((await fn()) !== 'cancel') await loadToday();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      e.target.disabled = false;
+    }
+  };
+}
+
+const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙' };
+function agentLabel(id) {
+  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes' }[id] ?? id;
+}
+function kindLabel(k) {
+  return { blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article' }[k] ?? k;
+}
+
+function renderFolders(folders) {
+  $('folders').innerHTML = folders
+    .map((f) => {
+      const href = f.id === 'site-check' ? '#check' : `#folder/${f.id}`;
+      const status = f.working
+        ? `<span class="state working">${esc(f.working.replace(/^[^:]+:\s*/, ''))}</span>`
+        : f.needs
+          ? `<span class="state">Needs ${esc(f.needs)}</span>`
+          : f.waiting
+            ? `<span class="state ready">${f.waiting} ready</span>`
+            : `<span class="state">${f.schedule?.enabled ? 'On' : 'Off'} · ${f.total} made</span>`;
+      return `<a class="folder" href="${href}"><span class="glyph">${AGENT_GLYPH[f.id] ?? '•'}</span><span class="name">${esc(f.label)}</span>${status}</a>`;
+    })
+    .join('');
+}
+
+// ---------------------------------------------------------------- documents
+
+async function loadDoc(id) {
+  showView('doc');
+  const d = state.docs.find((x) => x.id === id) ?? state.docs[0];
+  const doc = await api(`/api/profile/${d.id}`);
+  $('doc-title').textContent = d.title;
+  $('doc-body').value = doc.body;
+  $('doc-body').dataset.id = d.id;
+  $('save-status').textContent = '';
+}
+
+// ---------------------------------------------------------------- folders and drafts
+
+async function loadFolder(id) {
+  showView('folder');
+  const folders = await api('/api/agents');
+  const f = folders.find((x) => x.id === id);
+  if (!f) return (location.hash = '#today');
+  $('folder-title').textContent = f.label;
+  $('folder-desc').textContent = f.description;
+  $('folder-run').onclick = () => runAgentNow(id);
+  for (const b of $('folder-tabs').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.status === folderStatus);
+    b.onclick = () => ((folderStatus = b.dataset.status), loadFolder(id));
+  }
+  const drafts = await api(`/api/drafts?agent=${encodeURIComponent(id)}&status=${folderStatus}`);
+  $('folder-list').innerHTML = drafts.length
+    ? drafts
+        .map((d) => `<li><a href="#draft/${d.id}" dir="auto">${esc(d.title)}</a><small>${esc(kindLabel(d.kind))} · ${d.words} words · ${when(d.updatedAt)}${d.dryRun ? ' · dry run' : ''}${d.publishedUrl ? ` · <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">open</a>` : ''}</small></li>`)
+        .join('')
+    : '<li class="muted">Nothing here yet.</li>';
+  draftBack = `#folder/${id}`;
+}
+
+async function loadDraft(id) {
+  showView('draft');
   currentDraft = id;
-  for (const li of $('draft-list').querySelectorAll('li[data-id]')) li.classList.toggle('active', Number(li.dataset.id) === id);
+  publishers = publishers.length ? publishers : await api('/api/publishers');
   const d = await api(`/api/drafts/${id}`);
-  $('draft-view').hidden = false;
+  $('draft-back').href = draftBack;
+  $('draft-back').textContent = draftBack === '#today' ? '← Today' : `← ${agentLabel(d.agent)}`;
+  $('draft-agent').textContent = `${agentLabel(d.agent)} · ${kindLabel(d.kind)}`;
   $('draft-title').value = d.title;
   $('draft-reason').textContent = d.meta.reason ? `Why: ${d.meta.reason}` : '';
   $('draft-slug').value = d.meta.slug ?? '';
   $('draft-meta').value = d.meta.metaDescription ?? '';
   updateMetaLen();
   $('draft-body').value = d.body;
-  $('draft-target').innerHTML = publishers
-    .map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`)
-    .join('');
+  $('draft-target').innerHTML = publishers.map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`).join('');
   if (d.target) $('draft-target').value = d.target;
   const editable = d.status === 'draft' || d.status === 'failed';
   for (const el of ['draft-title', 'draft-slug', 'draft-meta', 'draft-body', 'draft-save', 'draft-approve', 'draft-target', 'draft-when']) $(el).disabled = !editable;
-  $('draft-reject').textContent = d.status === 'rejected' ? 'Reopen' : 'Reject';
+  $('draft-reject').textContent = d.status === 'rejected' ? 'Reopen' : 'Not useful';
   $('draft-reject').disabled = d.status === 'published' || d.status === 'approved';
   $('draft-status').innerHTML = statusLine(d);
-  $('draft-events').innerHTML = d.events.map((e) => `<li>${esc(new Date(e.at).toLocaleString())}: ${esc(e.to_status)}${e.note ? ` — ${esc(e.note)}` : ''}</li>`).join('');
+  $('draft-events').innerHTML = d.events.map((e) => `<li>${esc(when(e.at))}: ${esc(e.to_status)}${e.note ? ` — ${esc(e.note)}` : ''}</li>`).join('');
   $('draft-sources').innerHTML = (d.meta.sources ?? []).map((s) => `<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a></li>`).join('');
 }
 
@@ -134,13 +328,14 @@ function statusLine(d) {
     return d.dryRun ? `Dry run: ${esc(d.target)} isn't connected, so the files were saved instead.${where}` : `Published to ${esc(d.target)}.${where}`;
   }
   if (d.status === 'failed') return `Publishing failed: ${esc(d.error)}`;
-  if (d.status === 'approved') return `Scheduled for ${esc(new Date(d.scheduledFor).toLocaleString())} on ${esc(d.target)}.`;
+  if (d.status === 'approved') return `Scheduled for ${esc(when(d.scheduledFor))} on ${esc(d.target)}.`;
+  if (d.status === 'rejected') return 'Turned down.';
   return '';
 }
 
 function updateMetaLen() {
-  const n = $('draft-meta').value.length;
-  $('meta-len').textContent = `${n} chars${n > 155 ? ' — too long' : n && n < 120 ? ' — a bit short' : ''}`;
+  const len = $('draft-meta').value.length;
+  $('meta-len').textContent = `${len} chars${len > 155 ? ' — too long' : len && len < 120 ? ' — a bit short' : ''}`;
 }
 
 async function saveDraft() {
@@ -150,35 +345,30 @@ async function saveDraft() {
   });
 }
 
-// ---- agents ----
-async function loadAgents() {
-  show('agents');
-  const agents = await api('/api/agents');
-  $('agent-cards').innerHTML = agents
-    .map((a) => `<div class="card"><h2>${esc(a.label)}</h2><p class="muted">${esc(a.description)}</p><button data-agent="${a.id}">Find work and draft</button></div>`)
-    .join('');
-  for (const b of $('agent-cards').querySelectorAll('button')) {
-    b.onclick = async () => {
-      try {
-        const { jobId } = await post(`/api/agents/${b.dataset.agent}/run`);
-        await waitForJob(jobId, 'Agent at work…');
-        location.hash = '#inbox';
-        $('inbox-filter').value = 'draft';
-      } catch (err) {
-        alert(err.message);
-      }
-      refresh();
-    };
+// ---------------------------------------------------------------- site check
+
+async function loadAudit() {
+  showView('check');
+  renderAudit(await api('/api/audit'));
+}
+
+async function runAudit() {
+  $('audit-run').disabled = true;
+  try {
+    renderAudit(await post('/api/audit'));
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    $('audit-run').disabled = false;
   }
 }
 
-// ---- site check ----
 function renderAudit({ audit, today }) {
   $('audit-empty').hidden = !!audit;
   $('audit-body').hidden = !audit;
   if (!audit) return;
   $('audit-score').textContent = audit.score;
-  $('audit-counts').textContent = `${audit.counts.critical} critical · ${audit.counts.warnings} warnings · ${audit.counts.passed} passed · ${audit.pagesChecked} pages · checked ${new Date(audit.at).toLocaleString()}`;
+  $('audit-counts').textContent = `${audit.counts.critical} critical · ${audit.counts.warnings} warnings · ${audit.counts.passed} passed · ${audit.pagesChecked} pages · checked ${when(audit.at)}`;
   $('audit-today').innerHTML = today.length
     ? today
         .map(
@@ -190,38 +380,90 @@ function renderAudit({ audit, today }) {
         .join('')
     : '<p class="muted">Nothing left to fix today.</p>';
   for (const b of $('audit-today').querySelectorAll('[data-copy]')) b.onclick = () => navigator.clipboard.writeText(b.dataset.copy);
-  for (const b of $('audit-today').querySelectorAll('[data-done]')) b.onclick = async () => (await post('/api/audit/done', { id: b.dataset.done }), (b.textContent = 'Marked fixed'), (b.disabled = true));
+  for (const b of $('audit-today').querySelectorAll('[data-done]'))
+    b.onclick = async () => (await post('/api/audit/done', { id: b.dataset.done }), (b.textContent = 'Marked fixed'), (b.disabled = true));
   $('audit-rows').innerHTML = audit.issues.map((i) => `<tr><td><span class="sev ${i.severity}">${i.severity}</span></td><td>${esc(i.title)}</td><td>${esc(new URL(i.url).pathname)}</td></tr>`).join('');
 }
 
-async function loadAudit() {
-  show('check');
-  renderAudit(await api('/api/audit'));
+// ---------------------------------------------------------------- speed
+
+async function loadSpeed() {
+  showView('speed');
+  renderSpeed(await api('/api/speed'));
 }
 
-// ---- results ----
-const n = (x) => (x == null ? '—' : Number(x).toLocaleString());
-const pos = (x) => (x == null || !x ? '—' : Number(x).toFixed(1));
+async function runSpeed() {
+  $('speed-run').disabled = true;
+  $('speed-run').textContent = 'Checking… (about a minute)';
+  try {
+    renderSpeed(await post('/api/speed'));
+    renderChrome();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    $('speed-run').disabled = false;
+    $('speed-run').textContent = 'Check speed now';
+  }
+}
+
+function renderSpeed(all) {
+  for (const b of $('speed-device').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.device === speedDevice);
+    b.onclick = () => ((speedDevice = b.dataset.device), pref.set('speedDevice', speedDevice), renderSpeed(all), renderChrome());
+  }
+  const r = all[speedDevice];
+  $('speed-empty').hidden = !!r;
+  $('speed-body').hidden = !r;
+  if (!r) return;
+  $('speed-headline').className = `headline${r.headline ? '' : ' ok'}`;
+  $('speed-headline').innerHTML = r.headline
+    ? `<span>${esc(r.headline)}</span><button id="speed-send">Send to SEO agent</button>`
+    : `<span>Every loading measurement passes on ${speedDevice === 'mobile' ? 'phones' : 'computers'}.</span>`;
+  if (r.headline)
+    $('speed-send').onclick = async () => {
+      try {
+        await post('/api/speed/send', { strategy: speedDevice });
+        $('speed-send').textContent = 'Added to today’s fixes';
+        $('speed-send').disabled = true;
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  const labels = { performance: 'Performance', accessibility: 'Accessibility', bestPractices: 'Best practices', seo: 'SEO' };
+  $('speed-scores').innerHTML = Object.entries(labels)
+    .map(([k, label]) => {
+      const v = r.scores[k];
+      const c = band(v);
+      return `<div class="gauge"><div class="ring ${c}" style="background: conic-gradient(currentColor ${v * 3.6}deg, var(--line) 0); "><span style="background: var(--panel); width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center;">${v}</span></div>${label}</div>`;
+    })
+    .join('');
+  $('speed-vitals').innerHTML = r.vitals
+    .map((v) => `<div class="vital"><div class="t">${esc(v.label)}</div><div class="v ${v.rating === 'good' ? 'good' : v.rating === 'poor' ? 'bad' : 'mid'}">${esc(v.display)}</div><div class="t">${esc(v.target)}</div></div>`)
+    .join('');
+  $('speed-when').textContent = `on ${when(r.at)}`;
+  $('speed-opps').innerHTML = r.opportunities.length
+    ? r.opportunities.map((o) => `<li><strong>${esc(o.title)}</strong> <small>could save about ${(o.savingsMs / 1000).toFixed(1)}s</small><small>${esc(o.description)}</small></li>`).join('')
+    : '<li class="muted">Google has no big suggestions for this page.</li>';
+}
+
+// ---------------------------------------------------------------- results
 
 async function loadResults() {
-  show('results');
+  showView('results');
+  $('results-days').textContent = `· last ${days} days`;
   const msg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
   const g = await api('/api/google');
   $('google-setup').hidden = g.configured;
   $('google-msg').textContent = msg ? `Google: ${msg}` : g.lastPull ? pullLine(g.lastPull) : '';
-  $('google-actions').innerHTML = !g.configured ? '' : g.connected
-    ? '<button id="g-pull">Get latest data</button> <button id="g-off" class="secondary">Disconnect</button>'
-    : '<a href="/api/google/connect"><button>Connect Google</button></a>';
+  $('google-actions').innerHTML = !g.configured
+    ? ''
+    : g.connected
+      ? '<button id="g-pull">Get latest data</button> <button id="g-off" class="secondary">Disconnect</button>'
+      : '<a href="/api/google/connect"><button>Connect Google</button></a>';
   $('google-pick').hidden = !g.connected;
   $('results-body').hidden = !g.connected;
   if (!g.connected) return;
-  $('g-pull').onclick = async () => {
-    $('g-pull').disabled = true;
-    $('google-msg').textContent = 'Getting data from Google…';
-    $('google-msg').textContent = pullLine(await post('/api/google/pull'));
-    renderResults(await api('/api/results'));
-    $('g-pull').disabled = false;
-  };
+  $('g-pull').onclick = pullGoogle;
   $('g-off').onclick = async () => confirm('Disconnect Google? Saved data stays.') && (await post('/api/google/disconnect'), loadResults());
   try {
     const opts = await api('/api/google/options');
@@ -232,35 +474,48 @@ async function loadResults() {
   }
   $('gsc-site').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ site: $('gsc-site').value }) });
   $('ga-prop').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ property: $('ga-prop').value }) });
-  renderResults(await api('/api/results'));
+  renderResults(await api(`/api/results?days=${days}`));
+}
+
+async function pullGoogle() {
+  const b = $('g-pull');
+  if (b) b.disabled = true;
+  $('google-msg').textContent = 'Getting data from Google…';
+  try {
+    $('google-msg').textContent = pullLine(await post('/api/google/pull'));
+    renderResults(await api(`/api/results?days=${days}`));
+  } finally {
+    if (b) b.disabled = false;
+  }
 }
 
 function pullLine(p) {
   const part = (label, s, what) => (s.error ? `${label} failed: ${s.error}` : (s.site ?? s.property) ? `${label}: ${n(s.rows)} ${what}` : `${label}: not selected`);
-  return `Last update ${new Date(p.at).toLocaleString()} · ${part('Search Console', p.searchConsole, 'rows')} · ${part('Analytics', p.analytics, 'pages')}`;
+  return `Last update ${when(p.at)} · ${part('Search Console', p.searchConsole, 'rows')} · ${part('Analytics', p.analytics, 'rows')}`;
 }
 
 function renderResults(r) {
   const empty = (cols) => `<tr><td colspan="${cols}" class="muted">No data yet.</td></tr>`;
-  $('r-near').innerHTML = r.nearlyThere.map((o) => `<tr><td>${esc(o.keyword)}</td><td>${n(o.impressions)}</td><td>${pos(o.position)}</td></tr>`).join('') || empty(3);
-  $('r-mine').innerHTML = r.published.map((m) => `<tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}</a> <small class="muted">${m.publishedDaysAgo}d ago</small></td><td>${n(m.clicks)}</td><td>${n(m.impressions)}</td><td>${pos(m.position)}</td><td>${n(m.views)}</td><td>${esc(m.topQuery ?? '—')}</td></tr>`).join('') || empty(6);
-  $('r-queries').innerHTML = r.queries.map((q) => `<tr><td>${esc(q.query)}</td><td>${n(q.clicks)}</td><td>${n(q.impressions)}</td><td>${(q.ctr * 100).toFixed(1)}%</td><td>${pos(q.position)}</td></tr>`).join('') || empty(5);
+  $('r-near').innerHTML = r.nearlyThere.map((o) => `<tr><td dir="auto">${esc(o.keyword)}</td><td>${n(o.impressions)}</td><td>${pos(o.position)}</td></tr>`).join('') || empty(3);
+  $('r-mine').innerHTML =
+    r.published.map((m) => `<tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener" dir="auto">${esc(m.title)}</a> <small class="muted">${m.publishedDaysAgo}d ago</small></td><td>${n(m.clicks)}</td><td>${n(m.impressions)}</td><td>${pos(m.position)}</td><td>${n(m.views)}</td><td dir="auto">${esc(m.topQuery ?? '—')}</td></tr>`).join('') || empty(6);
+  $('r-queries').innerHTML = r.queries.map((q) => `<tr><td dir="auto">${esc(q.query)}</td><td>${n(q.clicks)}</td><td>${n(q.impressions)}</td><td>${(q.ctr * 100).toFixed(1)}%</td><td>${pos(q.position)}</td></tr>`).join('') || empty(5);
   $('r-pages').innerHTML = r.pages.map((p) => `<tr><td>${esc(p.page)}</td><td>${n(p.views)}</td><td>${p.engagement == null ? '—' : (p.engagement * 100).toFixed(0) + '%'}</td><td>${n(p.clicks)}</td></tr>`).join('') || empty(4);
   $('r-notes').textContent = r.notes ?? 'Nothing yet — agents will be told once there is data.';
 }
 
-// ---- timetable and logs ----
-const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—');
+// ---------------------------------------------------------------- timetable and logs
+
 const CRON_WORDS = { '* * * * *': 'every minute', '7 6 * * *': 'daily 06:07', '47 5 * * *': 'daily 05:47', '17 6 * * *': 'daily 06:17', '53 3 * * *': 'daily 03:53', '13 7 * * 1-5': 'weekdays 07:13' };
 
 async function loadLogs() {
-  show('logs');
+  showView('logs');
   const [tasks, logs] = await Promise.all([api('/api/tasks'), api('/api/logs?limit=200')]);
   $('task-rows').innerHTML = tasks
     .map((t) => `<tr>
       <td><input type="checkbox" data-toggle="${esc(t.id)}" ${t.enabled ? 'checked' : ''}></td>
       <td>${esc(t.label)}${t.costsMoney ? ' <small>$</small>' : ''}${t.costsMoney ? ` <small>· <input type="number" min="1" max="10" value="${t.limit ?? 1}" data-limit="${esc(t.id)}" style="width:52px"> per run</small>` : ''}</td>
-      <td><input value="${esc(t.cron)}" data-cron="${esc(t.id)}" title="${esc(CRON_WORDS[t.cron] ?? 'minute hour day month weekday')}" style="width:120px"> <small>${esc(CRON_WORDS[t.cron] ?? '')}</small></td>
+      <td><input value="${esc(t.cron)}" data-cron="${esc(t.id)}" title="minute hour day month weekday" style="width:120px"> <small>${esc(CRON_WORDS[t.cron] ?? '')}</small></td>
       <td>${t.running ? 'running now' : when(t.next)}</td>
       <td>${t.last ? `<small>${when(t.last.started_at)} · ${esc(t.last.status)}</small> ${esc(t.last.message ?? '')}` : '<small>never run</small>'}</td>
       <td><button class="secondary" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>Run now</button></td></tr>`)
@@ -280,11 +535,11 @@ async function loadLogs() {
     };
 }
 
-// ---- usage ----
+// ---------------------------------------------------------------- AI cost
+
 async function loadUsage() {
-  show('usage');
+  showView('usage');
   const u = await api('/api/usage');
-  $('usage-total').textContent = `${u.total.calls} AI calls so far, $${u.total.cost.toFixed(2)} in total.`;
   const b = u.budget;
   const pct = b.limit ? Math.min(100, (100 * b.spent) / b.limit) : 0;
   $('budget-line').textContent = b.limit ? `$${b.spent.toFixed(2)} of $${b.limit.toFixed(2)} used this month` : `$${b.spent.toFixed(2)} used this month (no limit)`;
@@ -292,66 +547,124 @@ async function loadUsage() {
   $('budget-bar').className = pct >= 80 ? 'high' : '';
   $('budget-reset').textContent = `${b.remaining != null ? `$${b.remaining.toFixed(2)} left · ` : ''}starts again ${new Date(b.resets).toLocaleDateString()}`;
   $('budget-limit').value = b.limit;
+  $('usage-total').textContent = `${u.total.calls} AI calls so far, $${u.total.cost.toFixed(2)} in total.`;
   const l = state.llm;
   const search = { server: "Claude's built-in search", local: 'Plume runs searches itself (Tavily)', off: 'off — add TAVILY_API_KEY to .env to turn it on' }[l.webSearch];
   $('usage-llm').textContent = `Calls go to ${l.endpoint} (${l.auth}, from ${l.source}). Models: research ${l.models.research}, writing ${l.models.draft}, scoring ${l.models.score}. Web search: ${search}.`;
   $('usage-rows').innerHTML = u.byPurpose
-    .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${r.input.toLocaleString()} / ${r.output.toLocaleString()}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
+    .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${n(r.input)} / ${n(r.output)}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
     .join('');
 }
 
-// ---- wiring ----
+// ---------------------------------------------------------------- tour
+
+const TOUR = [
+  { el: 'col-left', title: 'What your agents know', text: 'Every agent reads these documents before it writes anything. Correct something here once and every agent gets it right from then on.' },
+  { el: 'today-card', title: 'Today', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Approve, edit, skip it for today, or mark it not useful so the agent learns.' },
+  { el: 'folders', title: 'Agents', text: 'One folder per agent. “Ready” means work is waiting for you, a pulsing dot means it is working right now. Open a folder to see everything it has made.' },
+  { el: 'speed-chips', title: 'Health at a glance', text: 'Your site’s speed, accessibility, best-practice and SEO scores from Google, checked every morning. Click them for details and fixes.' },
+  { el: 'col-right', title: 'Quick actions', text: 'Start any job straight away. Agents that cost money start switched off — turn them on, and pick when they run, under Timetable.' },
+  { el: 'cost-link', title: 'Cost and safety', text: 'See exactly what the AI has cost this month and set a monthly limit. Nothing is ever published until you approve it.' },
+];
+let tourStep = 0;
+
+function showTour(step) {
+  tourStep = step;
+  for (const el of document.querySelectorAll('.tour-target')) el.classList.remove('tour-target');
+  const s = TOUR[step];
+  const target = $(s.el);
+  if (!target || target.offsetParent === null) return step + 1 < TOUR.length ? showTour(step + 1) : endTour();
+  $('tour').hidden = false;
+  target.classList.add('tour-target');
+  target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  $('tour-title').textContent = s.title;
+  $('tour-text').textContent = s.text;
+  $('tour-step').textContent = `${step + 1} of ${TOUR.length}`;
+  $('tour-back').disabled = step === 0;
+  $('tour-next').textContent = step === TOUR.length - 1 ? 'Done' : 'Next';
+  const r = target.getBoundingClientRect();
+  const box = $('tour').querySelector('.tour-box');
+  const w = Math.min(340, window.innerWidth - 32);
+  const left = Math.min(Math.max(16, r.left), window.innerWidth - w - 16);
+  const below = r.bottom + 12 + 200 < window.innerHeight;
+  box.style.left = `${left}px`;
+  box.style.top = below ? `${Math.min(r.bottom + 12, window.innerHeight - 220)}px` : `${Math.max(70, r.top - 210)}px`;
+}
+
+function endTour() {
+  $('tour').hidden = true;
+  for (const el of document.querySelectorAll('.tour-target')) el.classList.remove('tour-target');
+  pref.set('tourDone', true);
+}
+
+// ---------------------------------------------------------------- wiring
+
 $('onboard-form').onsubmit = (e) => {
   e.preventDefault();
+  $('onboard').hidden = true;
+  $('workspace').hidden = false;
   runResearch({ url: $('site-url').value.trim() }).catch((err) => alert(err.message));
 };
-$('rerun').onclick = () => confirm('Research the whole site again? This replaces all five documents, including your edits.') && runResearch({});
-$('regen').onclick = () => confirm('Rewrite this document from scratch? Your edits to it will be replaced.') && runResearch({ only: currentDoc });
+$('regen').onclick = () => confirm('Rewrite this document from scratch? Your edits to it will be replaced.') && runResearch({ only: $('doc-body').dataset.id });
 $('save').onclick = async () => {
-  await api(`/api/profile/${currentDoc}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });
-  $('save-status').textContent = 'Saved.';
-  state.docs.find((d) => d.id === currentDoc).written = true;
-  renderDocList();
+  await api(`/api/profile/${$('doc-body').dataset.id}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });
+  $('save-status').textContent = 'Saved. Every agent will use this from now on.';
 };
-$('inbox-filter').onchange = () => ((currentDraft = null), loadInbox());
 $('draft-meta').oninput = updateMetaLen;
 $('draft-save').onclick = async () => (await saveDraft(), ($('draft-status').textContent = 'Saved.'));
 $('draft-approve').onclick = async () => {
   try {
     await saveDraft();
-    const when = $('draft-when').value ? new Date($('draft-when').value).toISOString() : null;
-    const d = await post(`/api/drafts/${currentDraft}/approve`, { target: $('draft-target').value, when });
-    $('inbox-filter').value = d.status;
-    await loadInbox();
-    updateInboxCount();
+    const at = $('draft-when').value ? new Date($('draft-when').value).toISOString() : null;
+    await post(`/api/drafts/${currentDraft}/approve`, { target: $('draft-target').value, when: at });
+    await loadDraft(currentDraft);
   } catch (err) {
     alert(err.message);
   }
 };
 $('draft-reject').onclick = async () => {
-  const reopen = $('draft-reject').textContent === 'Reopen';
-  await post(`/api/drafts/${currentDraft}/${reopen ? 'reopen' : 'reject'}`);
-  currentDraft = null;
-  await loadInbox();
-  updateInboxCount();
-};
-$('audit-run').onclick = async () => {
-  $('audit-run').disabled = true;
   try {
-    renderAudit(await post('/api/audit'));
+    if ($('draft-reject').textContent === 'Reopen') await post(`/api/drafts/${currentDraft}/reopen`);
+    else {
+      const reason = prompt('What was wrong with it? (optional — the agent will learn from this)');
+      if (reason === null) return;
+      await post(`/api/drafts/${currentDraft}/not-useful`, { reason });
+    }
+    await loadDraft(currentDraft);
   } catch (err) {
     alert(err.message);
-  } finally {
-    $('audit-run').disabled = false;
   }
 };
+$('audit-run').onclick = runAudit;
+$('speed-run').onclick = runSpeed;
+for (const b of $('range').querySelectorAll('button'))
+  b.onclick = () => {
+    days = Number(b.dataset.days);
+    pref.set('days', days);
+    for (const x of $('range').querySelectorAll('button')) x.classList.toggle('on', x === b);
+    if (location.hash.startsWith('#results')) loadResults();
+  };
 $('budget-save').onclick = async () => {
   try {
     await api('/api/budget', { method: 'PUT', body: JSON.stringify({ limit: Number($('budget-limit').value) }) });
     loadUsage();
+    renderChrome();
   } catch (err) {
     alert(err.message);
   }
 };
-window.onhashchange = () => refresh().catch((err) => alert(err.message));
-refresh().catch((err) => alert(err.message));
+$('tour-btn').onclick = () => showTour(0);
+$('tour-next').onclick = () => (tourStep + 1 < TOUR.length ? showTour(tourStep + 1) : endTour());
+$('tour-back').onclick = () => showTour(Math.max(0, tourStep - 1));
+$('tour-close').onclick = endTour;
+document.addEventListener('keydown', (e) => e.key === 'Escape' && !$('tour').hidden && endTour());
+
+window.onhashchange = () => {
+  if (location.hash === '#today') draftBack = '#today';
+  route().catch((err) => alert(err.message));
+};
+route()
+  .then(() => {
+    if (state?.site && !pref.get('tourDone', false)) setTimeout(() => showTour(0), 600);
+  })
+  .catch((err) => alert(err.message));

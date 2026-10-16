@@ -85,7 +85,7 @@ export async function writeArticle(agent: string, opp: Opportunity, role: string
     effort: 'high',
     maxTokens: 32000,
     webSearches: 4,
-    system: agentSystem(role),
+    system: agentSystem(role, undefined, undefined, agent),
     schema: ARTICLE_SCHEMA,
     prompt:
       `Write a ${opp.kind === 'landing_page' ? 'landing page' : 'blog post'} targeting "${opp.keyword ?? opp.title}".\n` +
@@ -117,7 +117,7 @@ export const seoAgent: Agent = {
       model: MODELS.research,
       effort: 'high',
       webSearches: 10,
-      system: agentSystem(SEO_ROLE),
+      system: agentSystem(SEO_ROLE, undefined, undefined, 'seo'),
       schema: OPP_SCHEMA,
       prompt:
         `Find ${limit * 3} keyword opportunities. Look at what competitors rank for that we have no page about, ` +

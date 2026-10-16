@@ -131,3 +131,23 @@ export async function checkSpeed(url: string): Promise<SpeedState> {
 export function lastSpeed(): SpeedState {
   return getSetting<SpeedState>('pagespeed', { mobile: null, desktop: null });
 }
+
+/** The worst speed problem as a site-check fix, with Google's top suggestions as the steps. */
+export function speedIssue(r: SpeedReport): import('../agents/seoAudit').Issue | null {
+  const bad = r.vitals.filter((v) => v.rating !== 'good').sort((a, b) => b.value / LIMITS[b.id].poor - a.value / LIMITS[a.id].poor)[0];
+  if (!bad || !r.headline) return null;
+  const steps = r.opportunities.length
+    ? r.opportunities.slice(0, 4).map((o) => `${o.title} (could save about ${formatValue('lcp', o.savingsMs)}): ${o.description}`)
+    : ['Run the page through PageSpeed Insights and work through the "Opportunities" list from the top.'];
+  steps.push('After changing the site, click "Check speed" again to confirm the improvement.');
+  return {
+    id: `speed:${r.strategy}:${bad.id}`,
+    check: 'page-speed',
+    severity: bad.rating === 'poor' ? 'critical' : 'medium',
+    area: 'performance',
+    url: r.url,
+    title: `${bad.label}: ${bad.display} on ${r.strategy} (${bad.target})`,
+    why: `${r.headline} Slow pages rank lower and lose visitors before they see anything.`,
+    steps,
+  };
+}

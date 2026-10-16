@@ -4,175 +4,230 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Plume</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M26 4C14 6 7 14 6 27l3 1c1-4 3-8 6-11-1 3-1 6 0 9 8-3 12-11 11-22z' fill='%232f6f5e'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="top">
-    <span class="logo">Plume</span>
-    <nav>
-      <a href="#inbox">Inbox <span id="inbox-count" class="pill" hidden></span></a>
-      <a href="#agents">Agents</a>
-      <a href="#check">Site check</a>
-      <a href="#results">Results</a>
-      <a href="#profile">Business profile</a>
-      <a href="#usage">AI cost</a>
-      <a href="#logs">Logs</a>
-    </nav>
+  <header class="topbar">
+    <a href="#today" class="logo">Plume</a>
+    <span id="site-name" class="site-name"></span>
+    <span id="google-pill" class="pill-btn"></span>
+    <a href="#speed" id="speed-chips" class="speed-chips" title="Page speed (Google Lighthouse)"></a>
+    <span class="spacer"></span>
+    <span class="range" id="range" role="group" aria-label="Results period">
+      <button data-days="7">7 days</button><button data-days="30">30 days</button>
+    </span>
+    <a href="#results">Results</a>
+    <a href="#logs">Timetable</a>
+    <a href="#usage" id="cost-link">AI cost</a>
+    <button id="tour-btn" class="icon-btn" title="Show the tour">?</button>
   </header>
 
-  <main>
-    <section id="onboard" class="card" hidden>
-      <h1>Start with your website</h1>
-      <p>Plume reads your site, looks at your market, and writes a five-part business profile.
-         Every writer on the team works from that profile, so check it and edit anything that's wrong.</p>
-      <form id="onboard-form">
-        <input id="site-url" placeholder="yourcompany.com" required autocomplete="url">
-        <button type="submit">Read my site</button>
-      </form>
-      <p id="key-warning" class="warn" hidden>No Anthropic API key found. Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart.</p>
-    </section>
+  <!-- First run: no site yet -->
+  <section id="onboard" class="card onboard" hidden>
+    <h1>Start with your website</h1>
+    <p>Plume reads your site, looks at your market, and writes a five-part business profile.
+       Every agent works from that profile, so check it and fix anything that's wrong.</p>
+    <form id="onboard-form">
+      <input id="site-url" placeholder="yourcompany.com" required autocomplete="url">
+      <button type="submit">Read my site</button>
+    </form>
+    <p id="key-warning" class="warn" hidden>No model access found. Set <code>ANTHROPIC_API_KEY</code> or <code>CLAUDE_SETTINGS_FILE</code> in <code>.env</code> and restart.</p>
+  </section>
 
-    <section id="job" class="card" hidden>
-      <h2>Researching…</h2>
-      <p id="job-progress" class="muted"></p>
-      <div class="bar"><div></div></div>
-    </section>
+  <div class="workspace" id="workspace" hidden>
+    <!-- Left: what the agents know -->
+    <aside class="col left" id="col-left">
+      <h2 class="col-title">What your agents know</h2>
+      <p id="summary" class="summary"></p>
+      <h3>Documents</h3>
+      <ul id="doc-list" class="nav-list"></ul>
+      <h3>Competitors</h3>
+      <p class="muted small">Listed in your <a href="#doc/competitors">Competitors</a> document for now. An editable list with competitor watch is coming next.</p>
+      <p id="lang-line" class="muted small"></p>
+    </aside>
 
-    <section id="profile" hidden>
-      <div class="profile-head">
-        <h1>Business profile <small id="site-label" class="muted"></small></h1>
-        <button id="rerun" class="secondary">Research again</button>
-      </div>
-      <div class="profile">
-        <ul id="doc-list"></ul>
-        <div class="editor">
-          <div class="editor-bar">
-            <strong id="doc-title"></strong>
-            <span>
-              <button id="regen" class="secondary">Rewrite this one</button>
-              <button id="save">Save</button>
-            </span>
-          </div>
-          <textarea id="doc-body" dir="auto" spellcheck="true"></textarea>
-          <p id="save-status" class="muted"></p>
+    <!-- Middle: Today + agents, and every detail view -->
+    <main class="col center" id="col-center">
+      <section id="view-today" class="view">
+        <div class="today-head">
+          <h1>Today</h1>
+          <span id="today-progress" class="muted"></span>
         </div>
-      </div>
-    </section>
-
-    <section id="inbox" hidden>
-      <div class="profile-head">
-        <h1>Inbox</h1>
-        <select id="inbox-filter">
-          <option value="draft">Waiting for you</option>
-          <option value="approved">Scheduled</option>
-          <option value="published">Published</option>
-          <option value="failed">Failed</option>
-          <option value="rejected">Rejected</option>
-        </select>
-      </div>
-      <div class="profile">
-        <ul id="draft-list" class="draft-list"></ul>
-        <div class="editor" id="draft-view" hidden>
-          <input id="draft-title" dir="auto" class="title-input">
-          <p id="draft-reason" class="muted"></p>
-          <div class="seo-fields">
-            <label>Address <input id="draft-slug"></label>
-            <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta" dir="auto"></label>
-          </div>
-          <textarea id="draft-body" dir="auto"></textarea>
-          <div class="editor-bar">
-            <span>
-              <select id="draft-target"></select>
-              <input id="draft-when" type="datetime-local" title="Leave empty to publish now">
-            </span>
-            <span>
-              <button id="draft-reject" class="secondary">Reject</button>
-              <button id="draft-save" class="secondary">Save edits</button>
-              <button id="draft-approve">Approve</button>
-            </span>
-          </div>
-          <p id="draft-status" class="muted"></p>
-          <details><summary>History and sources</summary><ul id="draft-events"></ul><ul id="draft-sources"></ul></details>
+        <div id="today-card"></div>
+        <div class="section-head">
+          <h2>Agents</h2>
+          <span class="muted small">Each works on its own channel. Open one to see everything it made.</span>
         </div>
-      </div>
-    </section>
+        <div id="folders" class="folders"></div>
+      </section>
 
-    <section id="agents" hidden>
-      <h1>Agents</h1>
-      <p class="muted">Each agent reads your business profile, finds work worth doing, and puts drafts in your inbox. Nothing goes out until you approve it.</p>
-      <div id="agent-cards" class="cards"></div>
-    </section>
+      <section id="view-job" class="view card" hidden>
+        <h2 id="job-title">Working…</h2>
+        <p id="job-progress" class="muted"></p>
+        <div class="bar"><div></div></div>
+      </section>
 
-    <section id="check" hidden>
-      <div class="profile-head">
-        <h1>Site check</h1>
-        <button id="audit-run">Check my site now</button>
-      </div>
-      <div id="audit-empty" class="muted">No check yet. It uses the pages Plume read during research.</div>
-      <div id="audit-body" hidden>
-        <div class="score-row">
-          <div class="score"><span id="audit-score"></span><small>/ 100</small></div>
-          <div id="audit-counts" class="muted"></div>
+      <section id="view-doc" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1 id="doc-title"></h1>
+          <span class="actions">
+            <button id="regen" class="secondary">Rewrite with AI</button>
+            <button id="save">Save</button>
+          </span>
         </div>
-        <h2>Today's two fixes</h2>
-        <div id="audit-today"></div>
-        <h2>Everything else</h2>
-        <table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table>
-      </div>
-    </section>
+        <textarea id="doc-body" class="editor-area" dir="auto" spellcheck="true"></textarea>
+        <p id="save-status" class="muted"></p>
+      </section>
 
-    <section id="results" hidden>
-      <div class="profile-head">
-        <h1>Results</h1>
-        <span id="google-actions"></span>
-      </div>
-      <p id="google-msg" class="muted"></p>
-      <div id="google-setup" class="card" hidden>
-        <h2>Connect Google</h2>
-        <p>Plume reads (never changes) your Search Console and Analytics data, so agents can see which searches bring visitors and which pages work.</p>
-        <ol>
-          <li>In Google Cloud Console, create an OAuth client of type <b>Desktop app</b>, and turn on the "Google Search Console API", "Google Analytics Data API" and "Google Analytics Admin API".</li>
-          <li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to <code>.env</code> and restart Plume.</li>
-        </ol>
-      </div>
-      <div id="google-pick" class="seo-fields" hidden>
-        <label>Search Console site <select id="gsc-site"></select></label>
-        <label>Analytics property <select id="ga-prop"></select></label>
-      </div>
-      <div id="results-body" hidden>
-        <h2>Nearly on page one</h2>
-        <p class="muted">Google already shows you for these, but on page 2–3. The SEO agent writes for these first.</p>
-        <table><thead><tr><th>Search</th><th>Shown</th><th>Position</th></tr></thead><tbody id="r-near"></tbody></table>
-        <h2>Plume's published work</h2>
-        <table><thead><tr><th>Title</th><th>Clicks</th><th>Shown</th><th>Position</th><th>Views</th><th>Best search</th></tr></thead><tbody id="r-mine"></tbody></table>
-        <h2>Top searches</h2>
-        <table><thead><tr><th>Search</th><th>Clicks</th><th>Shown</th><th>Click rate</th><th>Position</th></tr></thead><tbody id="r-queries"></tbody></table>
-        <h2>Top pages</h2>
-        <table><thead><tr><th>Page</th><th>Views</th><th>Engaged</th><th>Clicks from search</th></tr></thead><tbody id="r-pages"></tbody></table>
-        <details><summary>What the agents are told</summary><pre id="r-notes" class="notes"></pre></details>
-      </div>
-    </section>
+      <section id="view-folder" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1 id="folder-title"></h1>
+          <span class="actions"><button id="folder-run">Find work and draft now</button></span>
+        </div>
+        <p id="folder-desc" class="muted"></p>
+        <div class="tabs" id="folder-tabs">
+          <button data-status="draft">Waiting</button><button data-status="approved">Scheduled</button><button data-status="published">Published</button><button data-status="failed">Failed</button><button data-status="rejected">Turned down</button>
+        </div>
+        <ul id="folder-list" class="item-list"></ul>
+      </section>
 
-    <section id="logs" hidden>
-      <h1>Timetable and logs</h1>
-      <p class="muted">What Plume does on its own, and when. Tasks marked $ use AI and start switched off.</p>
-      <table><thead><tr><th>On</th><th>Task</th><th>When</th><th>Next</th><th>Last result</th><th></th></tr></thead><tbody id="task-rows"></tbody></table>
-      <h2>Log</h2>
-      <table><thead><tr><th>Time</th><th>From</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table>
-    </section>
+      <section id="view-draft" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back" id="draft-back">← Back</a>
+          <span class="muted" id="draft-agent"></span>
+        </div>
+        <input id="draft-title" class="title-input" dir="auto">
+        <p id="draft-reason" class="muted"></p>
+        <div class="seo-fields">
+          <label>Address <input id="draft-slug"></label>
+          <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta" dir="auto"></label>
+        </div>
+        <textarea id="draft-body" class="editor-area" dir="auto"></textarea>
+        <div class="editor-bar">
+          <span><select id="draft-target"></select><input id="draft-when" type="datetime-local" title="Leave empty to publish now"></span>
+          <span>
+            <button id="draft-reject" class="secondary">Not useful</button>
+            <button id="draft-save" class="secondary">Save edits</button>
+            <button id="draft-approve">Approve</button>
+          </span>
+        </div>
+        <p id="draft-status" class="muted"></p>
+        <details><summary>History and sources</summary><ul id="draft-events"></ul><ul id="draft-sources"></ul></details>
+      </section>
 
-    <section id="usage" hidden>
-      <h1>AI cost</h1>
-      <div class="budget">
-        <div><strong id="budget-line"></strong><div class="meter"><div id="budget-bar"></div></div><small id="budget-reset" class="muted"></small></div>
-        <label>Monthly limit $ <input id="budget-limit" type="number" min="0" step="5" style="width:90px"></label>
-        <button id="budget-save" class="secondary">Save</button>
+      <section id="view-check" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1>Site fixes</h1>
+          <span class="actions"><button id="audit-run">Check my site now</button></span>
+        </div>
+        <div id="audit-empty" class="muted">No check yet. It runs every morning, or click the button.</div>
+        <div id="audit-body" hidden>
+          <div class="score-row"><div class="score"><span id="audit-score"></span><small>/ 100</small></div><div id="audit-counts" class="muted"></div></div>
+          <h2>Today's fixes</h2>
+          <div id="audit-today"></div>
+          <h2>Everything else</h2>
+          <table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table>
+        </div>
+      </section>
+
+      <section id="view-speed" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1>Page speed</h1>
+          <span class="actions">
+            <span class="range" id="speed-device"><button data-device="mobile">Phone</button><button data-device="desktop">Computer</button></span>
+            <button id="speed-run" class="secondary">Check speed now</button>
+          </span>
+        </div>
+        <div id="speed-empty" class="muted">No speed check yet. It runs every morning, or click "Check speed now" (takes about a minute).</div>
+        <div id="speed-body" hidden>
+          <div id="speed-headline" class="headline"></div>
+          <div id="speed-scores" class="gauges"></div>
+          <h2>Loading measurements</h2>
+          <div id="speed-vitals" class="vitals"></div>
+          <p class="muted small">Score colours: 0–49 poor · 50–89 needs work · 90–100 good. Measured by Google Lighthouse <span id="speed-when"></span>.</p>
+          <h2>What would help most</h2>
+          <ul id="speed-opps" class="item-list"></ul>
+        </div>
+      </section>
+
+      <section id="view-results" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1>Results <small class="muted" id="results-days"></small></h1>
+          <span id="google-actions" class="actions"></span>
+        </div>
+        <p id="google-msg" class="muted"></p>
+        <div id="google-setup" class="card" hidden>
+          <h2>Connect Google</h2>
+          <p>Plume reads (never changes) your Search Console and Analytics data, so agents can see which searches bring visitors and which pages work.</p>
+          <ol>
+            <li>In Google Cloud Console, create an OAuth client of type <b>Desktop app</b>, and turn on the "Google Search Console API", "Google Analytics Data API" and "Google Analytics Admin API".</li>
+            <li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to <code>.env</code> and restart Plume.</li>
+          </ol>
+        </div>
+        <div id="google-pick" class="seo-fields" hidden>
+          <label>Search Console site <select id="gsc-site"></select></label>
+          <label>Analytics property <select id="ga-prop"></select></label>
+        </div>
+        <div id="results-body" hidden>
+          <h2>Nearly on page one</h2>
+          <p class="muted">Google already shows you for these, but on page 2–3. The SEO agent writes for these first.</p>
+          <table><thead><tr><th>Search</th><th>Shown</th><th>Position</th></tr></thead><tbody id="r-near"></tbody></table>
+          <h2>Plume's published work</h2>
+          <table><thead><tr><th>Title</th><th>Clicks</th><th>Shown</th><th>Position</th><th>Views</th><th>Best search</th></tr></thead><tbody id="r-mine"></tbody></table>
+          <h2>Top searches</h2>
+          <table><thead><tr><th>Search</th><th>Clicks</th><th>Shown</th><th>Click rate</th><th>Position</th></tr></thead><tbody id="r-queries"></tbody></table>
+          <h2>Top pages</h2>
+          <table><thead><tr><th>Page</th><th>Views</th><th>Engaged</th><th>Clicks from search</th></tr></thead><tbody id="r-pages"></tbody></table>
+          <details><summary>What the agents are told</summary><pre id="r-notes" class="notes"></pre></details>
+        </div>
+      </section>
+
+      <section id="view-logs" class="view" hidden>
+        <div class="view-head"><a href="#today" class="back">← Today</a><h1>Timetable and logs</h1></div>
+        <p class="muted">What Plume does on its own, and when. Tasks marked $ use AI and start switched off.</p>
+        <table><thead><tr><th>On</th><th>Task</th><th>When</th><th>Next</th><th>Last result</th><th></th></tr></thead><tbody id="task-rows"></tbody></table>
+        <h2>Log</h2>
+        <table><thead><tr><th>Time</th><th>From</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table>
+      </section>
+
+      <section id="view-usage" class="view" hidden>
+        <div class="view-head"><a href="#today" class="back">← Today</a><h1>AI cost</h1></div>
+        <div class="budget">
+          <div><strong id="budget-line"></strong><div class="meter"><div id="budget-bar"></div></div><small id="budget-reset" class="muted"></small></div>
+          <label>Monthly limit $ <input id="budget-limit" type="number" min="0" step="5" style="width:90px"></label>
+          <button id="budget-save" class="secondary">Save</button>
+        </div>
+        <p id="usage-total"></p>
+        <p id="usage-llm" class="muted"></p>
+        <table><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table>
+      </section>
+    </main>
+
+    <!-- Right: quick actions (the chat assistant replaces this next) -->
+    <aside class="col right" id="col-right">
+      <h2 class="col-title">Quick actions</h2>
+      <div id="quick" class="quick"></div>
+      <p class="muted small">A chat assistant that does these for you in plain English is coming next.</p>
+    </aside>
+  </div>
+
+  <div id="tour" class="tour" hidden>
+    <div class="tour-box" role="dialog" aria-live="polite">
+      <h3 id="tour-title"></h3>
+      <p id="tour-text"></p>
+      <div class="tour-foot">
+        <span id="tour-step" class="muted small"></span>
+        <span><button id="tour-back" class="secondary">Back</button> <button id="tour-next">Next</button></span>
       </div>
-      <p id="usage-total"></p>
-      <p id="usage-llm" class="muted"></p>
-      <table><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table>
-    </section>
-  </main>
+      <button id="tour-close" class="icon-btn tour-x" title="Close">×</button>
+    </div>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
