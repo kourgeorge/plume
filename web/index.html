@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plume</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <span class="logo">Plume</span>
+    <nav>
+      <a href="#inbox">Inbox <span id="inbox-count" class="pill" hidden></span></a>
+      <a href="#agents">Agents</a>
+      <a href="#check">Site check</a>
+      <a href="#profile">Business profile</a>
+      <a href="#usage">AI cost</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="onboard" class="card" hidden>
+      <h1>Start with your website</h1>
+      <p>Plume reads your site, looks at your market, and writes a five-part business profile.
+         Every writer on the team works from that profile, so check it and edit anything that's wrong.</p>
+      <form id="onboard-form">
+        <input id="site-url" placeholder="yourcompany.com" required autocomplete="url">
+        <button type="submit">Read my site</button>
+      </form>
+      <p id="key-warning" class="warn" hidden>No Anthropic API key found. Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart.</p>
+    </section>
+
+    <section id="job" class="card" hidden>
+      <h2>Researching…</h2>
+      <p id="job-progress" class="muted"></p>
+      <div class="bar"><div></div></div>
+    </section>
+
+    <section id="profile" hidden>
+      <div class="profile-head">
+        <h1>Business profile <small id="site-label" class="muted"></small></h1>
+        <button id="rerun" class="secondary">Research again</button>
+      </div>
+      <div class="profile">
+        <ul id="doc-list"></ul>
+        <div class="editor">
+          <div class="editor-bar">
+            <strong id="doc-title"></strong>
+            <span>
+              <button id="regen" class="secondary">Rewrite this one</button>
+              <button id="save">Save</button>
+            </span>
+          </div>
+          <textarea id="doc-body" spellcheck="true"></textarea>
+          <p id="save-status" class="muted"></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="inbox" hidden>
+      <div class="profile-head">
+        <h1>Inbox</h1>
+        <select id="inbox-filter">
+          <option value="draft">Waiting for you</option>
+          <option value="approved">Scheduled</option>
+          <option value="published">Published</option>
+          <option value="failed">Failed</option>
+          <option value="rejected">Rejected</option>
+        </select>
+      </div>
+      <div class="profile">
+        <ul id="draft-list" class="draft-list"></ul>
+        <div class="editor" id="draft-view" hidden>
+          <input id="draft-title" class="title-input">
+          <p id="draft-reason" class="muted"></p>
+          <div class="seo-fields">
+            <label>Address <input id="draft-slug"></label>
+            <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta"></label>
+          </div>
+          <textarea id="draft-body"></textarea>
+          <div class="editor-bar">
+            <span>
+              <select id="draft-target"></select>
+              <input id="draft-when" type="datetime-local" title="Leave empty to publish now">
+            </span>
+            <span>
+              <button id="draft-reject" class="secondary">Reject</button>
+              <button id="draft-save" class="secondary">Save edits</button>
+              <button id="draft-approve">Approve</button>
+            </span>
+          </div>
+          <p id="draft-status" class="muted"></p>
+          <details><summary>History and sources</summary><ul id="draft-events"></ul><ul id="draft-sources"></ul></details>
+        </div>
+      </div>
+    </section>
+
+    <section id="agents" hidden>
+      <h1>Agents</h1>
+      <p class="muted">Each agent reads your business profile, finds work worth doing, and puts drafts in your inbox. Nothing goes out until you approve it.</p>
+      <div id="agent-cards" class="cards"></div>
+    </section>
+
+    <section id="check" hidden>
+      <div class="profile-head">
+        <h1>Site check</h1>
+        <button id="audit-run">Check my site now</button>
+      </div>
+      <div id="audit-empty" class="muted">No check yet. It uses the pages Plume read during research.</div>
+      <div id="audit-body" hidden>
+        <div class="score-row">
+          <div class="score"><span id="audit-score"></span><small>/ 100</small></div>
+          <div id="audit-counts" class="muted"></div>
+        </div>
+        <h2>Today's two fixes</h2>
+        <div id="audit-today"></div>
+        <h2>Everything else</h2>
+        <table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table>
+      </div>
+    </section>
+
+    <section id="usage" hidden>
+      <h1>AI cost</h1>
+      <p id="usage-total"></p>
+      <table><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
