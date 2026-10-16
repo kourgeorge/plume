@@ -19,7 +19,15 @@ import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite,
 import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
 import { TaskSetting, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
-import { countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
+import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
+import {
+  addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
+  savePerson, setBrandProfiles, setUserNotes, updateCompetitor, userNotes,
+} from '../context/extra';
+import { checkCompetitor, lastChecked } from '../watch';
+import { extractCompetitors } from '../research/competitors';
+import { buildLlmsTxt } from '../research/llmstxt';
+import { closeBrowser } from '../research/fetchPage';
 import { Level, recentLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
@@ -291,8 +299,82 @@ export function buildServer(port: number): FastifyInstance {
     return fix ? { fix } : reply.code(400).send({ error: `nothing to fix on ${strategy} — every measurement passes` });
   });
 
+  // ---- what the agents know: competitors, people, profiles, notes, llms.txt ----
+  const bad = (reply: any, err: any) => reply.code(400).send({ error: err.message });
+  app.get('/api/context', async () => ({
+    competitors: listCompetitors().map((c) => ({ ...c, lastChecked: lastChecked(c.id) })),
+    people: listPeople(),
+    profiles: brandProfiles(),
+    notes: userNotes(),
+  }));
+  app.post<{ Body: { name?: string; url?: string; notes?: string; watch?: boolean } }>('/api/competitors', async (req, reply) => {
+    try {
+      const c = addCompetitor({ name: req.body?.name ?? '', url: req.body?.url, notes: req.body?.notes, watch: req.body?.watch, source: 'user' });
+      return c ?? reply.code(409).send({ error: 'that competitor is already on the list' });
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.put<{ Params: { id: string }; Body: { name?: string; url?: string; notes?: string; watch?: boolean } }>('/api/competitors/:id', async (req, reply) => {
+    try {
+      const b = req.body ?? {};
+      return updateCompetitor(Number(req.params.id), { name: b.name, url: b.url, notes: b.notes, watch: b.watch === undefined ? undefined : !!b.watch });
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.delete<{ Params: { id: string } }>('/api/competitors/:id', async (req) => (removeCompetitor(Number(req.params.id)), { ok: true }));
+  app.post<{ Params: { id: string } }>('/api/competitors/:id/check', async (req, reply) => {
+    const c = getCompetitor(Number(req.params.id));
+    if (!c) return reply.code(404).send({ error: 'no such competitor' });
+    try {
+      const changes = await checkCompetitor(c);
+      return { changes, firstLook: !changes.length && lastChecked(c.id) !== null };
+    } catch (err) {
+      return bad(reply, err);
+    } finally {
+      await closeBrowser();
+    }
+  });
+  app.post('/api/competitors/fill', async (_req, reply) => {
+    try {
+      return { added: await extractCompetitors() };
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.post<{ Body: { id?: number; name?: string; role?: string; bio?: string; xHandle?: string; linkedinUrl?: string } }>('/api/people', async (req, reply) => {
+    try {
+      return savePerson({ ...(req.body ?? {}), name: req.body?.name ?? '' });
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.delete<{ Params: { id: string } }>('/api/people/:id', async (req) => (removePerson(Number(req.params.id)), { ok: true }));
+  app.put<{ Body: { x?: string; linkedin?: string } }>('/api/profiles', async (req, reply) => {
+    try {
+      return setBrandProfiles(req.body ?? {});
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.put<{ Body: { notes?: string } }>('/api/notes', async (req, reply) => {
+    if (typeof req.body?.notes !== 'string') return reply.code(400).send({ error: 'notes must be text' });
+    setUserNotes(req.body.notes);
+    return { ok: true };
+  });
+  app.get('/api/llms-txt', async (_req, reply) => {
+    const body = buildLlmsTxt();
+    return body ? { body } : reply.code(404).send({ error: 'Plume has not read your site yet' });
+  });
+  app.get('/llms.txt', async (_req, reply) => {
+    const body = buildLlmsTxt();
+    return body ? reply.type('text/plain; charset=utf-8').header('content-disposition', 'attachment; filename="llms.txt"').send(body) : reply.code(404).send('not ready');
+  });
+
   // ---- Today ----
   app.get('/api/today', async () => ({ items: todayFeed(), ...todayProgress() }));
+  app.post<{ Params: { id: string } }>('/api/changes/:id/seen', async (req) => (changeSeen(Number(req.params.id)), { ok: true }));
   app.post<{ Body: { key?: string } }>('/api/today/skip', async (req, reply) => {
     if (!req.body?.key) return reply.code(400).send({ error: 'key required' });
     skipItem(req.body.key);

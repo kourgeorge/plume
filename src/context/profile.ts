@@ -5,6 +5,7 @@ import { PROFILE_DIR } from '../config';
 import { performanceNotes } from '../analytics/results';
 import { languageRule } from './language';
 import { feedbackNote } from '../feedback';
+import { extraContext } from './extra';
 
 /** The five documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable. */
 export const PROFILE_DOCS = [
@@ -39,6 +40,14 @@ export function profileComplete(dir = PROFILE_DIR): boolean {
   return PROFILE_DOCS.every((d) => readDoc(d.id, dir) !== null);
 }
 
+function safeExtra(): string | null {
+  try {
+    return extraContext();
+  } catch {
+    return null;
+  }
+}
+
 /** Results notes, or none if analytics isn't set up (or its tables are empty). */
 function safeNotes(): string | null {
   try {
@@ -60,6 +69,7 @@ export function agentSystem(
   agent?: string,
 ): Anthropic.Beta.BetaTextBlockParam[] {
   const rejected = agent ? feedbackNote(agent) : null;
+  const extra = safeExtra();
   const docs = PROFILE_DOCS.map((d) => `<doc id="${d.id}" title="${d.title}">\n${readDoc(d.id, dir) ?? '(not written yet)'}\n</doc>`).join('\n\n');
   return [
     {
@@ -70,7 +80,8 @@ export function agentSystem(
         docs,
       cache_control: { type: 'ephemeral' },
     },
-    // After the cached docs: these change daily, so they must not sit inside the cached prefix.
+    // After the cached docs: these change more often, so they must not sit inside the cached prefix.
+    ...(extra ? [{ type: 'text' as const, text: `<more-context>\n${extra}\n</more-context>` }] : []),
     ...(notes ? [{ type: 'text' as const, text: `<results>\n${notes}\n</results>` }] : []),
     { type: 'text', text: [role, languageRule(), rejected].filter(Boolean).join('\n\n') },
   ];

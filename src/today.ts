@@ -3,12 +3,14 @@ import { listDrafts, getDraft, moveDraft, Draft } from './queue';
 import { AuditResult, Issue, dailyFixes, markFixDone, pinIssue } from './agents/seoAudit';
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
+import { ChangeCard, dismissChange, openChanges } from './watch';
 
 /** One card in the Today feed. `key` is stable so skips survive a refresh. */
 export type TodayItem =
   | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number } }
   | { key: string; kind: 'fix'; score: number; fix: Issue }
-  | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number };
+  | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number }
+  | { key: string; kind: 'watch'; score: number; change: ChangeCard };
 
 const SEVERITY_SCORE = { critical: 100, high: 70, medium: 40, low: 20 } as const;
 
@@ -61,6 +63,12 @@ export function todayFeed(now = new Date()): TodayItem[] {
       items.push({ key: `speed:${strategy}`, kind: 'speed', score: strategy === 'mobile' ? 90 : 85, strategy, headline: r.headline, performance: r.scores.performance });
   }
 
+  // Competitor news: worth a look, but after anything that needs action.
+  for (const c of openChanges()) {
+    const real = c.changes.some((x) => x.kind !== 'unreachable');
+    items.push({ key: `watch:${c.id}`, kind: 'watch', score: real ? 50 : 10, change: c });
+  }
+
   for (const d of listDrafts({ status: 'draft' })) {
     const { body, originalBody, ...rest } = d;
     const fromData = d.meta.source === 'search-console';
@@ -103,4 +111,9 @@ export function sendSpeedToSeo(strategy: Strategy): Issue | null {
   pinIssue(issue);
   setSetting('speedHandled', { ...getSetting<Record<string, string>>('speedHandled', {}), [strategy]: r!.at });
   return issue;
+}
+
+export function changeSeen(id: number): void {
+  dismissChange(id);
+  countDone();
 }

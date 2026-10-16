@@ -42,8 +42,11 @@
       <p id="summary" class="summary"></p>
       <h3>Documents</h3>
       <ul id="doc-list" class="nav-list"></ul>
-      <h3>Competitors</h3>
-      <p class="muted small">Listed in your <a href="#doc/competitors">Competitors</a> document for now. An editable list with competitor watch is coming next.</p>
+      <div class="side-head"><h3>Competitors</h3><a href="#competitor/new" class="small">+ Add</a></div>
+      <ul id="comp-list" class="nav-list"></ul>
+      <div class="side-head"><h3>People</h3><a href="#person/new" class="small">+ Add</a></div>
+      <ul id="people-list" class="nav-list"></ul>
+      <ul class="nav-list"><li><a href="#accounts">Brand accounts<span class="tag" id="accounts-tag"></span></a></li></ul>
       <p id="lang-line" class="muted small"></p>
     </aside>
 
@@ -79,6 +82,67 @@
         </div>
         <textarea id="doc-body" class="editor-area" dir="auto" spellcheck="true"></textarea>
         <p id="save-status" class="muted"></p>
+      </section>
+
+      <section id="view-competitor" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1 id="comp-title">Competitor</h1>
+          <span class="actions"><button id="comp-delete" class="secondary">Remove</button><button id="comp-save">Save</button></span>
+        </div>
+        <div class="form">
+          <label>Name <input id="comp-name"></label>
+          <label>Website <input id="comp-url" placeholder="rival.com"></label>
+          <label class="wide">What agents should know about them <textarea id="comp-notes" rows="3" dir="auto"></textarea></label>
+          <label class="check"><input type="checkbox" id="comp-watch"> Watch their site every week (new pages, headline, description, prices) — free</label>
+        </div>
+        <div id="comp-watch-box" hidden>
+          <div class="view-head small-head"><h2>What changed</h2><span class="actions"><button id="comp-check" class="secondary">Check now</button></span></div>
+          <p id="comp-checked" class="muted small"></p>
+          <ul id="comp-changes" class="item-list"></ul>
+        </div>
+        <p id="comp-status" class="muted"></p>
+      </section>
+
+      <section id="view-person" class="view" hidden>
+        <div class="view-head">
+          <a href="#today" class="back">← Today</a>
+          <h1 id="person-title">Person</h1>
+          <span class="actions"><button id="person-delete" class="secondary">Remove</button><button id="person-save">Save</button></span>
+        </div>
+        <p class="muted">Someone agents may write for or about — for example the founder whose LinkedIn posts they draft.</p>
+        <div class="form">
+          <label>Name <input id="person-name" dir="auto"></label>
+          <label>Role <input id="person-role" placeholder="Founder" dir="auto"></label>
+          <label>X <input id="person-x" placeholder="@handle"></label>
+          <label>LinkedIn <input id="person-li" placeholder="linkedin.com/in/…"></label>
+          <label class="wide">About them, and how they sound <textarea id="person-bio" rows="4" dir="auto" placeholder="Background, opinions, words they use or never use"></textarea></label>
+        </div>
+        <p id="person-status" class="muted"></p>
+      </section>
+
+      <section id="view-accounts" class="view" hidden>
+        <div class="view-head"><a href="#today" class="back">← Today</a><h1>Brand accounts</h1><span class="actions"><button id="accounts-save">Save</button></span></div>
+        <p class="muted">The business's own social accounts. Posting to them is set up later, when the X and LinkedIn agents arrive; for now agents just know they exist.</p>
+        <div class="form">
+          <label>X <input id="acc-x" placeholder="@yourbrand"></label>
+          <label>LinkedIn page <input id="acc-li" placeholder="linkedin.com/company/…"></label>
+        </div>
+        <p id="accounts-status" class="muted"></p>
+      </section>
+
+      <section id="view-notes" class="view" hidden>
+        <div class="view-head"><a href="#today" class="back">← Today</a><h1>Your notes</h1><span class="actions"><button id="notes-save">Save</button></span></div>
+        <p class="muted">Anything agents should know that isn't on your website: upcoming launches, things you never say, customers you don't want. These override the research documents.</p>
+        <textarea id="notes-body" class="editor-area" dir="auto" placeholder="e.g. We never offer discounts. New course launches in November."></textarea>
+        <p id="notes-status" class="muted"></p>
+      </section>
+
+      <section id="view-llms" class="view" hidden>
+        <div class="view-head"><a href="#today" class="back">← Today</a><h1>llms.txt</h1>
+          <span class="actions"><button id="llms-copy" class="secondary">Copy</button><a href="/llms.txt"><button>Download</button></a></span></div>
+        <p class="muted">A short map of your site for AI assistants (llmstxt.org). Put it at the root of your site, e.g. <code>yoursite.com/llms.txt</code>. Built from the pages Plume read; it updates when the site is re-read.</p>
+        <pre id="llms-body" class="notes"></pre>
       </section>
 
       <section id="view-folder" class="view" hidden>

@@ -3,6 +3,7 @@ import { LLM, priceFor, supportsEffort } from '../config';
 import { parseHeaders, viaProxy } from './settings';
 import { LOCAL_TOOLS, localSearchAvailable, runLocalTool } from './search';
 import { checkBudget } from './budget';
+import { log } from '../log';
 import { getDb } from '../db';
 
 let client: Anthropic | null = null;
@@ -113,6 +114,21 @@ function finish(opts: AskOptions, msg: Anthropic.Beta.BetaMessage, sources: stri
   return { text, sources, stopReason: msg.stop_reason };
 }
 
+/** Replies cut off mid-stream by a gateway or a flaky network. Worth another try; anything else isn't. */
+export function isCutOff(err: unknown): boolean {
+  if (err instanceof Anthropic.APIConnectionError && !(err instanceof Anthropic.APIConnectionTimeoutError)) return true;
+  if (err instanceof Anthropic.APIError) return err.status === undefined && /overloaded|terminated/i.test(err.message);
+  const msg = String((err as any)?.message ?? '') + ' ' + String((err as any)?.cause?.code ?? (err as any)?.cause?.message ?? '');
+  return /terminated|other side closed|socket hang up|ECONNRESET|UND_ERR_SOCKET|premature close/i.test(msg);
+}
+
+export const RETRY_DELAYS_MS = [2000, 6000];
+let sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Tests replace the pause so they don't wait. */
+export function setSleepForTests(fn: (ms: number) => Promise<void>): void {
+  sleep = fn;
+}
+
 async function callOnce(
   opts: AskOptions,
   messages: Anthropic.Beta.BetaMessageParam[],
@@ -120,7 +136,25 @@ async function callOnce(
   fallbackOk: boolean,
   noMoreTools = false,
 ): Promise<Anthropic.Beta.BetaMessage> {
-  checkBudget(opts.purpose);
+  for (let attempt = 0; ; attempt++) {
+    checkBudget(opts.purpose);
+    try {
+      return await callStream(opts, messages, tools, fallbackOk, noMoreTools);
+    } catch (err) {
+      if (!isCutOff(err) || attempt >= RETRY_DELAYS_MS.length) throw err;
+      log('warn', 'llm', `${opts.purpose}: reply was cut off (${String((err as any)?.message ?? err).slice(0, 80)}); trying again in ${RETRY_DELAYS_MS[attempt] / 1000}s`);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
+async function callStream(
+  opts: AskOptions,
+  messages: Anthropic.Beta.BetaMessageParam[],
+  tools: Anthropic.Beta.BetaToolUnion[],
+  fallbackOk: boolean,
+  noMoreTools = false,
+): Promise<Anthropic.Beta.BetaMessage> {
   const stream = anthropic().beta.messages.stream({
     model: opts.model,
     max_tokens: opts.maxTokens ?? 32000,

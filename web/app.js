@@ -19,6 +19,21 @@ const pref = {
 };
 
 let state = null;
+let context = null;
+/** A message to show once on the next view load ("Saved."), so it survives the reload a hash change causes. */
+let flash = '';
+
+/** Go to a view, or reload it if we're already there (setting the same hash fires no hashchange). */
+async function goTo(hash, message = '') {
+  flash = message;
+  if (location.hash === hash) await route();
+  else location.hash = hash;
+}
+function takeFlash() {
+  const m = flash;
+  flash = '';
+  return m;
+}
 let publishers = [];
 let folderStatus = 'draft';
 let currentDraft = null;
@@ -28,7 +43,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage'];
 
 function showView(id) {
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== id;
@@ -50,6 +65,11 @@ async function route() {
   const [page, arg] = (location.hash.slice(1) || 'today').split(/[/?]/);
   switch (page) {
     case 'doc': return loadDoc(arg);
+    case 'competitor': return loadCompetitor(arg);
+    case 'person': return loadPerson(arg);
+    case 'accounts': return loadAccounts();
+    case 'notes': return loadNotes();
+    case 'llms': return loadLlms();
     case 'folder': return loadFolder(arg);
     case 'draft': return loadDraft(Number(arg));
     case 'check': return loadAudit();
@@ -69,9 +89,20 @@ async function renderChrome() {
   $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
   for (const b of $('range').querySelectorAll('button')) b.classList.toggle('on', Number(b.dataset.days) === days);
 
-  $('doc-list').innerHTML = state.docs
-    .map((d) => `<li><a href="#doc/${d.id}">${esc(d.title)}<span class="tag">${d.written ? '' : 'not written'}</span></a></li>`)
-    .join('');
+  $('doc-list').innerHTML =
+    state.docs.map((d) => `<li><a href="#doc/${d.id}">${esc(d.title)}<span class="tag">${d.written ? '' : 'not written'}</span></a></li>`).join('') +
+    '<li><a href="#notes">Your notes</a></li><li><a href="#llms">llms.txt</a></li>';
+  api('/api/context').then((c) => {
+    context = c;
+    $('comp-list').innerHTML = c.competitors.length
+      ? c.competitors.map((x) => `<li><a href="#competitor/${x.id}" dir="auto">${esc(x.name)}<span class="tag">${x.watch ? 'watching<span class="dot"></span>' : ''}</span></a></li>`).join('')
+      : '<li class="muted small">None yet. Research fills this in, or add your own.</li>';
+    $('people-list').innerHTML = c.people.length
+      ? c.people.map((p) => `<li><a href="#person/${p.id}" dir="auto">${esc(p.name)}<span class="tag">${esc(p.role)}</span></a></li>`).join('')
+      : '<li class="muted small">Add the founder or whoever posts for the business.</li>';
+    $('accounts-tag').textContent = [c.profiles.x && 'X', c.profiles.linkedin && 'LinkedIn'].filter(Boolean).join(' · ') || 'not set';
+    for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
+  }, () => {});
   for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
 
   // These don't block the page: each fills in when it arrives.
@@ -221,7 +252,28 @@ function renderTodayCard(item, left) {
       </div>${more}</div>`;
     $('t-send').onclick = act(async () => post('/api/speed/send', { strategy: item.strategy }));
   }
+  else if (item.kind === 'watch') {
+    const c = item.change;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span>Competitor watch</span><span>·</span><span>${esc(when(c.at))}</span></div>
+      <h2 dir="auto">${esc(c.name)} ${c.changes.length === 1 ? esc(c.changes[0].text) : 'changed their site'}</h2>
+      ${changeList(c.changes.length === 1 && !c.changes[0].items ? [] : c.changes)}
+      <div class="acts">
+        <button id="t-seen">Got it</button>
+        ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><button class="secondary">Open their site</button></a>` : ''}
+        <a href="#competitor/${c.competitorId}"><button class="secondary">Notes on ${esc(c.name)}</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div>${more}</div>`;
+    $('t-seen').onclick = act(async () => post(`/api/changes/${c.id}/seen`));
+  }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
+}
+
+function changeList(changes) {
+  if (!changes.length) return '';
+  return `<ul class="change-list">${changes
+    .map((ch) => `<li>${esc(ch.text.replace(/^./, (x) => x.toUpperCase()))}${ch.items ? `: ${ch.items.map((i) => `<code>${esc(i)}</code>`).join(', ')}` : ''}</li>`)
+    .join('')}</ul>`;
 }
 
 /** Wrap a card action: run it, then show the next card. Returning 'cancel' keeps the card. */
@@ -272,6 +324,117 @@ async function loadDoc(id) {
   $('doc-body').value = doc.body;
   $('doc-body').dataset.id = d.id;
   $('save-status').textContent = '';
+}
+
+// ---------------------------------------------------------------- competitors, people, accounts, notes, llms.txt
+
+async function ensureContext() {
+  context = context ?? (await api('/api/context'));
+  return context;
+}
+
+async function loadCompetitor(id) {
+  showView('competitor');
+  const c = id === 'new' ? null : (await ensureContext()).competitors.find((x) => x.id === Number(id));
+  if (id !== 'new' && !c) return (location.hash = '#today');
+  $('comp-title').textContent = c ? c.name : 'Add a competitor';
+  $('comp-name').value = c?.name ?? '';
+  $('comp-url').value = c?.url ?? '';
+  $('comp-notes').value = c?.notes ?? '';
+  $('comp-watch').checked = !!c?.watch;
+  $('comp-delete').hidden = !c;
+  $('comp-status').textContent = takeFlash() || (c ? (c.source === 'research' ? 'Found during research.' : 'Added by you.') : '');
+  $('comp-watch-box').hidden = !c?.url;
+  if (c?.url) {
+    $('comp-checked').textContent = c.lastChecked ? `Last checked ${when(c.lastChecked)}.` : 'Not checked yet. The first check records how their site looks; changes show from the second one.';
+    const t = await api('/api/today');
+    const mine = t.items.filter((i) => i.kind === 'watch' && i.change.competitorId === c.id);
+    $('comp-changes').innerHTML = mine.length
+      ? mine.map((i) => `<li><small>${esc(when(i.change.at))}</small>${changeList(i.change.changes)}</li>`).join('')
+      : '<li class="muted">No changes waiting.</li>';
+  }
+  $('comp-save').onclick = async () => {
+    const body = { name: $('comp-name').value, url: $('comp-url').value, notes: $('comp-notes').value, watch: $('comp-watch').checked };
+    try {
+      const saved = c ? await api(`/api/competitors/${c.id}`, { method: 'PUT', body: JSON.stringify(body) }) : await post('/api/competitors', body);
+      context = null;
+      await goTo(`#competitor/${saved.id}`, 'Saved. Every agent will know this from now on.');
+    } catch (err) {
+      $('comp-status').textContent = err.message;
+    }
+  };
+  $('comp-delete').onclick = async () => {
+    if (!confirm(`Remove ${c.name} from your competitors? Their watch history goes too.`)) return;
+    await api(`/api/competitors/${c.id}`, { method: 'DELETE' });
+    context = null;
+    location.hash = '#today';
+  };
+  $('comp-check').onclick = async () => {
+    $('comp-check').disabled = true;
+    $('comp-check').textContent = 'Checking…';
+    try {
+      const r = await post(`/api/competitors/${c.id}/check`);
+      context = null;
+      await goTo(`#competitor/${c.id}`, r.changes.length ? `Found ${r.changes.length} change(s).` : r.firstLook ? 'Recorded how their site looks now.' : 'Nothing changed since last time.');
+    } catch (err) {
+      $('comp-status').textContent = err.message;
+    } finally {
+      $('comp-check').disabled = false;
+      $('comp-check').textContent = 'Check now';
+    }
+  };
+}
+
+async function loadPerson(id) {
+  showView('person');
+  const p = id === 'new' ? null : (await ensureContext()).people.find((x) => x.id === Number(id));
+  if (id !== 'new' && !p) return (location.hash = '#today');
+  $('person-title').textContent = p ? p.name : 'Add a person';
+  $('person-name').value = p?.name ?? '';
+  $('person-role').value = p?.role ?? '';
+  $('person-x').value = p?.xHandle ? `@${p.xHandle}` : '';
+  $('person-li').value = p?.linkedinUrl ?? '';
+  $('person-bio').value = p?.bio ?? '';
+  $('person-delete').hidden = !p;
+  $('person-status').textContent = takeFlash();
+  $('person-save').onclick = async () => {
+    try {
+      const saved = await post('/api/people', { id: p?.id, name: $('person-name').value, role: $('person-role').value, xHandle: $('person-x').value, linkedinUrl: $('person-li').value, bio: $('person-bio').value });
+      context = null;
+      await goTo(`#person/${saved.id}`, 'Saved. Agents can now write as or about this person.');
+    } catch (err) {
+      $('person-status').textContent = err.message;
+    }
+  };
+  $('person-delete').onclick = async () => {
+    if (!confirm(`Remove ${p.name}?`)) return;
+    await api(`/api/people/${p.id}`, { method: 'DELETE' });
+    context = null;
+    location.hash = '#today';
+  };
+}
+
+async function loadAccounts() {
+  showView('accounts');
+  const c = await ensureContext();
+  $('acc-x').value = c.profiles.x ? `@${c.profiles.x}` : '';
+  $('acc-li').value = c.profiles.linkedin;
+  $('accounts-status').textContent = '';
+}
+
+async function loadNotes() {
+  showView('notes');
+  $('notes-body').value = (await ensureContext()).notes;
+  $('notes-status').textContent = '';
+}
+
+async function loadLlms() {
+  showView('llms');
+  try {
+    $('llms-body').textContent = (await api('/api/llms-txt')).body;
+  } catch (err) {
+    $('llms-body').textContent = err.message;
+  }
 }
 
 // ---------------------------------------------------------------- folders and drafts
@@ -610,6 +773,24 @@ $('save').onclick = async () => {
   await api(`/api/profile/${$('doc-body').dataset.id}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });
   $('save-status').textContent = 'Saved. Every agent will use this from now on.';
 };
+$('accounts-save').onclick = async () => {
+  try {
+    const r = await api('/api/profiles', { method: 'PUT', body: JSON.stringify({ x: $('acc-x').value, linkedin: $('acc-li').value }) });
+    context = null;
+    $('acc-x').value = r.x ? `@${r.x}` : '';
+    $('acc-li').value = r.linkedin;
+    $('accounts-status').textContent = 'Saved.';
+    renderChrome();
+  } catch (err) {
+    $('accounts-status').textContent = err.message;
+  }
+};
+$('notes-save').onclick = async () => {
+  await api('/api/notes', { method: 'PUT', body: JSON.stringify({ notes: $('notes-body').value }) });
+  context = null;
+  $('notes-status').textContent = 'Saved. Every agent reads these notes before writing.';
+};
+$('llms-copy').onclick = () => navigator.clipboard.writeText($('llms-body').textContent).then(() => ($('llms-copy').textContent = 'Copied'));
 $('draft-meta').oninput = updateMetaLen;
 $('draft-save').onclick = async () => (await saveDraft(), ($('draft-status').textContent = 'Saved.'));
 $('draft-approve').onclick = async () => {

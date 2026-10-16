@@ -3,6 +3,8 @@ import { ask } from '../llm/client';
 import { PROFILE_DOCS, ProfileDocId, readDoc, writeDoc } from '../context/profile';
 import { crawlSite, CrawledPage } from './crawl';
 import { closeBrowser } from './fetchPage';
+import { extractCompetitors } from './competitors';
+import { log } from '../log';
 import { finishJob, startJob, updateJob } from '../jobs';
 import { detectLanguage, languageName, setContentLanguage } from '../context/language';
 
@@ -61,6 +63,11 @@ export function startResearch(url: string, only?: ProfileDocId): number {
       if (only && d.id !== only) continue;
       updateJob(jobId, `Writing ${d.title} (read ${pages.length} pages)`);
       await writeProfileDoc(d.id, url, digest);
+      if (d.id === 'competitors') {
+        updateJob(jobId, 'Listing competitors');
+        const added = await extractCompetitors().catch((err) => (log('warn', 'research', `competitor list not filled: ${err.message}`), []));
+        if (added.length) log('info', 'research', `added ${added.length} competitor(s): ${added.map((c) => c.name).join(', ')}`);
+      }
     }
     finishJob(jobId);
   })()

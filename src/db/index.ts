@@ -105,6 +105,36 @@ CREATE TABLE IF NOT EXISTS feedback (
   title TEXT NOT NULL,
   reason TEXT                     -- the user's words, may be empty
 );
+CREATE TABLE IF NOT EXISTS competitors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT,                       -- origin, e.g. https://rival.com; null if they have no site
+  notes TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,           -- research | user
+  watch INTEGER NOT NULL DEFAULT 0,
+  added_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS competitor_snapshots (
+  competitor_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  data TEXT NOT NULL              -- JSON: pages, headline, description, prices
+);
+CREATE TABLE IF NOT EXISTS competitor_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  competitor_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  changes TEXT NOT NULL,          -- JSON list of {kind, text}
+  dismissed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS people (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT '',
+  x_handle TEXT NOT NULL DEFAULT '',
+  linkedin_url TEXT NOT NULL DEFAULT '',
+  added_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON

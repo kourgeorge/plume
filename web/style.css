@@ -153,3 +153,18 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
   .gauges { grid-template-columns: repeat(2, 1fr); } .vitals, .seo-fields { grid-template-columns: 1fr; }
   .topbar { gap: 10px; padding: 10px 16px; }
 }
+
+/* ---- phase 2: side lists and forms ---- */
+.side-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 22px; }
+.side-head h3 { margin: 0 0 6px; }
+.side-head a { text-decoration: none; }
+.nav-list .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; margin-left: 6px; }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 760px; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.form label.wide, .form label.check { grid-column: 1 / -1; }
+.form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+.form input, .form textarea { color: var(--ink); font-size: 14px; }
+.small-head { margin: 22px 0 4px; } .small-head h2 { margin: 0; }
+.change-list { margin: 6px 0 0; padding-left: 18px; }
+.change-list code { font-size: 12px; }
+@media (max-width: 760px) { .form { grid-template-columns: 1fr; } }

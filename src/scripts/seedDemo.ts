@@ -10,6 +10,7 @@ import { PROFILE_DOCS, writeDoc } from '../context/profile';
 import { createDraft } from '../queue';
 import { auditPages } from '../agents/seoAudit';
 import { parseReport } from '../analytics/pagespeed';
+import { addCompetitor, savePerson } from '../context/extra';
 
 if (getSetting('siteUrl', null) || fs.existsSync(path.join(DATA_DIR, 'profile', 'product.md'))) {
   console.error(`${DATA_DIR} already has data. Point DATA_DIR at a new, empty folder.`);
@@ -70,4 +71,13 @@ const report = (perf: number, lcp: number, strategy: 'mobile' | 'desktop') =>
     strategy,
   );
 setSetting('pagespeed', { mobile: report(0.54, 19800, 'mobile'), desktop: report(0.88, 2100, 'desktop') });
+const rival = addCompetitor({ name: 'DeskTidy', url: 'desktidy.example', notes: 'Cheaper, but one-size-fits-all organisers.', source: 'research', watch: true })!;
+addCompetitor({ name: 'CableCo', url: 'cableco.example', notes: 'Cable trays only; strong on Amazon.', source: 'research' });
+getDb()
+  .prepare('INSERT INTO competitor_changes (competitor_id, at, changes) VALUES (?, ?, ?)')
+  .run(rival.id, new Date().toISOString(), JSON.stringify([
+    { kind: 'new-pages', text: 'added 2 pages', items: ['/compare/acme-widgets', '/blog/remote-desk-setup'] },
+    { kind: 'prices', text: 'changed prices: $29/mo gone; now $24/mo' },
+  ]));
+savePerson({ name: 'Dana Levi', role: 'Founder', bio: 'Former office designer. Writes short, practical posts; never uses buzzwords.', linkedinUrl: 'linkedin.com/in/dana-levi-example' });
 console.log(`Demo data written to ${DATA_DIR}. Start it with: DATA_DIR=${DATA_DIR} PORT=4419 npm run dev`);

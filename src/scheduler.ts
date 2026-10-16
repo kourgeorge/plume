@@ -9,6 +9,7 @@ import { dailyFixes, runAudit } from './agents/seoAudit';
 import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
+import { checkWatched } from './watch';
 import { finishJob, startJob } from './jobs';
 
 export interface TaskDef {
@@ -82,6 +83,21 @@ export function taskDefs(): TaskDef[] {
         if (!url) return 'skipped: no site yet';
         const s = await checkSpeed(url);
         return `mobile ${s.mobile?.scores.performance}, desktop ${s.desktop?.scores.performance}`;
+      },
+    },
+    {
+      id: 'competitor-watch',
+      label: 'Check watched competitors for changes',
+      cron: '37 6 * * 1',
+      costsMoney: false,
+      run: async () => {
+        try {
+          const r = await checkWatched();
+          if (!r.checked) return 'skipped: no competitors are being watched';
+          return `checked ${r.checked}, ${r.withChanges} changed${r.failed.length ? `, couldn't read ${r.failed.join(', ')}` : ''}`;
+        } finally {
+          await closeBrowser();
+        }
       },
     },
     {
