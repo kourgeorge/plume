@@ -985,6 +985,7 @@ async function loadSettings() {
       <li>If the app is in "Testing", add your Google account as a test user.</li>
       <li>Paste the client ID and secret above, save, then sign in.</li></ol></details></div>`;
   for (const card of document.querySelectorAll('.int-card[data-int]')) wireIntegration(card);
+  if (window.plumePhone) window.plumePhone.settings(ints);
   if ($('g-check')) $('g-check').onclick = async () => {
     $('g-msg').textContent = 'Checking…';
     try {

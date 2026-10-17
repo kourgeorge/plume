@@ -9,6 +9,7 @@ import { log } from './log';
 import { closeStaleJobs } from './jobs';
 import { closeStaleChats } from './chat';
 import { closeStaleRuns } from './geo/visibility';
+import { startTelegram } from './phone/telegram';
 
 getGlobalDb();
 const stale = listSites().reduce((n, site) => n + withSite(site.slug, () => (closeStaleChats(), closeStaleRuns(), closeStaleJobs())), 0);
@@ -20,6 +21,7 @@ buildServer(PORT)
     if (problem) log('warn', 'server', `AI is off: ${problem}. Everything that needs no AI still works.`);
     if (stale) log('warn', 'server', `${stale} unfinished job(s) from before the restart were marked as stopped`);
     startScheduler();
+    startTelegram();
   })
   .catch((err) => {
     console.error(err);

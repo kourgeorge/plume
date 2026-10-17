@@ -22,7 +22,7 @@ export interface IntegrationDef {
   id: string;
   label: string;
   blurb: string;
-  group?: 'analytics';
+  group?: 'analytics' | 'phone';
   fields: Field[];
 }
 
@@ -153,6 +153,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     ],
   },
   {
+    id: 'telegram',
+    label: 'Telegram',
+    group: 'phone',
+    blurb:
+      'Get each new draft on your phone with Approve and Not useful buttons, and a weekly report on Mondays. In Telegram, message @BotFather, send /newbot, and paste the token it gives you. Use a separate bot for each website.',
+    fields: [{ key: 'token', env: 'TELEGRAM_BOT_TOKEN', label: 'Bot token', secret: true, placeholder: '123456789:AA…' }],
+  },
+  {
     id: 'youtube',
     label: 'YouTube search (for finding creators)',
     blurb: 'Optional. A free YouTube Data API key lets the influencer agent see real subscriber counts. Create one in Google Cloud Console → APIs & Services → Credentials, after turning on "YouTube Data API v3".',
@@ -239,9 +247,13 @@ export function siteEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   try {
     saved = readAll();
   } catch {
-    return base;
+    const { TELEGRAM_BOT_TOKEN: _shellBot, ...rest } = base;
+    return rest;
   }
   const env: NodeJS.ProcessEnv = { ...base };
+  // A bot token only ever comes from this site's own settings: TELEGRAM_BOT_TOKEN in the shell belongs to
+  // some other tool's bot, and reading it would take that bot's messages away from it.
+  delete env.TELEGRAM_BOT_TOKEN;
   for (const def of INTEGRATIONS) {
     const mine = saved[def.id];
     if (!mine) continue;
@@ -298,6 +310,10 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
       case 'email': {
         const { testEmail } = await import('./outreach/email');
         return await testEmail(env);
+      }
+      case 'telegram': {
+        const { testTelegram } = await import('./phone/telegram');
+        return await testTelegram(env);
       }
       case 'youtube': {
         const { testYouTube } = await import('./outreach/creators');
