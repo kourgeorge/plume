@@ -33,7 +33,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     id: 'google',
     label: 'Google Analytics and Search Console',
     group: 'analytics',
-    blurb: "This website's own Google Cloud OAuth client (type: Desktop app). Plume only ever reads your data.",
+    blurb: "A Google Cloud OAuth client (type: Desktop app) just for this website. Without one, Plume uses its own from .env.",
     fields: [
       { key: 'clientId', env: 'GOOGLE_CLIENT_ID', label: 'Client ID', placeholder: '123456-abc.apps.googleusercontent.com' },
       { key: 'clientSecret', env: 'GOOGLE_CLIENT_SECRET', label: 'Client secret', secret: true },

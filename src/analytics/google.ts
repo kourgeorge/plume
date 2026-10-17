@@ -10,7 +10,10 @@ import { siteEnv } from '../integrations';
  */
 export const SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly', 'https://www.googleapis.com/auth/analytics.readonly'];
 
-/** Overridable so tests can point at a fake server. Each website has its own Google credentials and sign-in, kept in its own folder. */
+/**
+ * Overridable so tests can point at a fake server. One Google app (GOOGLE_CLIENT_ID/SECRET in .env) serves every website;
+ * a website can still save its own under Settings → Advanced. Each website keeps its own sign-in in its folder.
+ */
 export const GOOGLE = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
   token: 'https://oauth2.googleapis.com/token',
@@ -50,7 +53,7 @@ export function disconnectGoogle(): void {
 let pending: { state: string; verifier: string; redirectUri: string; site: string; at: number } | null = null;
 
 export function authUrl(redirectUri: string, site: string, env: NodeJS.ProcessEnv = siteEnv()): string {
-  if (!googleConfigured(env)) throw new Error('add a Google client ID and secret under Settings first');
+  if (!googleConfigured(env)) throw new Error('Google sign-in is not set up: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env');
   const verifier = crypto.randomBytes(32).toString('base64url');
   const state = crypto.randomBytes(16).toString('base64url');
   pending = { state, verifier, redirectUri, site, at: Date.now() };

@@ -419,7 +419,11 @@ export function buildServer(port: number): FastifyInstance {
     };
   });
 
-  app.get<{ Querystring: { days?: string } }>('/api/results/summary', async (req) => resultsSummary(req.query.days === '30' ? 30 : 7));
+  app.get<{ Querystring: { days?: string } }>('/api/results/summary', async (req) => {
+    // Lets the page say why visits are missing: not picked, or the last fetch failed.
+    const last = getSetting<PullStatus | null>('lastPull', null);
+    return { ...resultsSummary(req.query.days === '30' ? 30 : 7), analytics: { property: getSetting<string | null>('ga4Property', null), error: last?.analytics?.error ?? null } };
+  });
 
   // ---- timetable, logs, budget, speed ----
   app.get('/api/tasks', async () => taskOverview());
