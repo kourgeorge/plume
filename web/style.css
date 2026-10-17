@@ -316,3 +316,14 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .vid-players { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .vid-players figure { margin: 0; }
 .vid-players video { display: block; max-height: 320px; max-width: 100%; border-radius: 8px; background: #000; }
+
+/* Tools (tools.js) */
+.tool-out textarea { width: 100%; box-sizing: border-box; font: 12.5px/1.5 var(--font-mono); resize: vertical; }
+.tool-list { margin: 8px 0; padding-left: 18px; }
+.tool-list li { margin: 3px 0; }
+.tool-table { width: 100%; margin-top: 12px; }
+.tool-table th { text-align: left; width: 220px; color: var(--muted); font-weight: 500; vertical-align: top; }
+.tool-table td { word-break: break-word; }
+.serp-preview { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin: 12px 0; background: var(--panel); max-width: 640px; }
+.serp-title { color: var(--link, var(--accent, #1a0dab)); font-size: 18px; line-height: 1.3; margin: 2px 0; }
+.faq-row { display: grid; gap: 6px; margin-bottom: 10px; }

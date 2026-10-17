@@ -44,6 +44,7 @@ import { lastSpeed } from '../analytics/pagespeed';
 import { registerGeoRoutes } from './geoRoutes';
 import { registerOutreachRoutes } from './outreachRoutes';
 import { registerPhoneRoutes } from './phoneRoutes';
+import { registerToolsRoutes } from './toolsRoutes';
 import { MAX_TRACKED, completeWeeks, listTracked, normalizeKeyword, rankingsTable, suggestKeywords, trackKeyword, untrackKeyword } from '../seo/rankings';
 import { checkSerp, clearSerpCreds, describeSerp, latestSerp, saveSerpCreds, setSerpLocation } from '../seo/serp';
 
@@ -640,6 +641,7 @@ export function buildServer(port: number): FastifyInstance {
   registerGeoRoutes(app);
   registerOutreachRoutes(app);
   registerPhoneRoutes(app);
+  registerToolsRoutes(app);
 
   return app;
 }

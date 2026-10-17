@@ -51,7 +51,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings', 'ai', 'outreach'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings', 'ai', 'outreach', 'tools'];
 
 function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
@@ -90,6 +90,7 @@ async function route() {
     case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
     case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
     case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(arg) : loadToday();
+    case 'tools': return window.plumeTools ? window.plumeTools.load(arg) : loadToday();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
     case 'settings': return loadSettings();
