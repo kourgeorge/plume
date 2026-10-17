@@ -1010,7 +1010,7 @@ function integrationCard(i) {
     <summary class="int-head"><strong>${esc(i.label)}</strong><span class="small ${i.connected ? 'good' : 'muted'}">${i.connected ? 'Connected' : 'Not connected'}</span></summary>
     <p class="muted small">${esc(i.blurb)}</p>
     <div class="form">${fields}</div>
-    <p class="actions-row"><button data-act="save">Save</button> <button data-act="test" class="secondary" ${i.connected ? '' : 'disabled'}>Test</button>
+    <p class="actions-row"><button data-act="save">Save</button> <button data-act="test" class="secondary" ${i.testable ?? i.connected ? '' : 'disabled'}>Test</button>
       ${i.connected ? '<button data-act="remove" class="secondary">Disconnect</button>' : ''} <span class="int-msg small"></span></p>
   </details>`;
 }

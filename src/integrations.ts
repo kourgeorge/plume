@@ -14,6 +14,8 @@ export interface Field {
   label: string;
   secret?: boolean;
   optional?: boolean;
+  /** May be saved empty (so Test can help fill it in), but the connection isn't ready without it. */
+  laterRequired?: boolean;
   placeholder?: string;
   help?: string;
 }
@@ -60,6 +62,18 @@ export const INTEGRATIONS: IntegrationDef[] = [
       { key: 'siteUrl', env: 'WEBFLOW_SITE_URL', label: 'Public site address', optional: true, placeholder: 'https://yoursite.com' },
       { key: 'path', env: 'WEBFLOW_PATH', label: 'Blog path', optional: true, placeholder: 'blog' },
       { key: 'live', env: 'WEBFLOW_LIVE', label: 'Go live straight away', optional: true, placeholder: '1 = yes, empty = save as draft' },
+    ],
+  },
+  {
+    id: 'wix',
+    label: 'Wix',
+    blurb:
+      'Add posts to your Wix blog. In Wix, go to Account Settings → API Keys, make a key with the "Wix Blog" and "Members" permissions for this site. The site ID is in your dashboard address, after /dashboard/. Save, press Test, and Plume lists the members so you can pick the author.',
+    fields: [
+      { key: 'key', env: 'WIX_API_KEY', label: 'API key', secret: true },
+      { key: 'site', env: 'WIX_SITE_ID', label: 'Site ID', placeholder: 'e.g. 1a2b3c4d-…' },
+      { key: 'member', env: 'WIX_MEMBER_ID', label: 'Author (member ID)', optional: true, laterRequired: true, help: 'Press Test after saving the key to see who you can pick.' },
+      { key: 'live', env: 'WIX_LIVE', label: 'Publish straight away', optional: true, placeholder: 'leave empty to save as drafts', help: 'Type 1 to publish approved posts live instead of saving them as Wix drafts.' },
     ],
   },
   {
@@ -226,7 +240,9 @@ export function describeIntegrations() {
       label: def.label,
       blurb: def.blurb,
       group: def.group ?? 'publishing',
-      connected: def.fields.every((f) => f.optional || saved[f.key]),
+      connected: def.fields.every((f) => (f.optional && !f.laterRequired) || saved[f.key]),
+      // Test can help finish a connection (Wix lists who can be the author), so allow it once the required parts are saved.
+      testable: def.fields.every((f) => f.optional || saved[f.key]),
       fields: def.fields.map((f) => ({
         key: f.key,
         label: f.label,
@@ -280,6 +296,10 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
         const api = (env.WEBFLOW_API_URL ?? 'https://api.webflow.com').replace(/\/$/, '');
         const { res, data } = await get(`${api}/v2/collections/${env.WEBFLOW_COLLECTION_ID}`, { authorization: `Bearer ${env.WEBFLOW_TOKEN}` });
         return res.ok ? { ok: true, message: `Found the collection "${data.displayName ?? data.slug ?? env.WEBFLOW_COLLECTION_ID}".` } : { ok: false, message: `Webflow said ${res.status}: ${data.message ?? res.statusText}` };
+      }
+      case 'wix': {
+        const { testWix } = await import('./publish/wix');
+        return await testWix(env);
       }
       case 'sanity': {
         const api = (env.SANITY_API_URL ?? `https://${env.SANITY_PROJECT_ID}.api.sanity.io`).replace(/\/$/, '');

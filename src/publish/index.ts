@@ -7,6 +7,7 @@ import type { Draft } from '../queue';
 import { wordpress } from './wordpress';
 import { webflow } from './webflow';
 import { sanity } from './sanity';
+import { wix } from './wix';
 import { hubspot } from './hubspot';
 import { github } from './github';
 import { SOCIAL_PUBLISHERS } from '../social/publishers';
@@ -53,7 +54,7 @@ export const exportFiles: Publisher = {
   },
 };
 
-export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, ...SOCIAL_PUBLISHERS, emailPublisher, exportFiles];
+export const PUBLISHERS: Publisher[] = [wordpress, webflow, wix, sanity, hubspot, github, ...SOCIAL_PUBLISHERS, emailPublisher, exportFiles];
 
 export function getPublisher(id: string): Publisher | undefined {
   return PUBLISHERS.find((p) => p.id === id);
