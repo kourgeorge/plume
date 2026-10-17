@@ -69,6 +69,9 @@ function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
   for (const v of VIEWS) if ($(`view-${v}`)) $(`view-${v}`).hidden = v !== id;
   for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
+  // Top bar: mark the page you're on. Today and everything opened from it count as the Dashboard.
+  const page = { today: '#today', analytics: '#analytics', results: '#results', outreach: '#outreach', tools: '#tools', logs: '#logs', usage: '#usage', settings: '#settings' }[id] ?? '#today';
+  for (const a of document.querySelectorAll('.bar-links a')) a.classList.toggle('on', a.getAttribute('href') === page);
   $('col-center').scrollTop = 0;
 }
 

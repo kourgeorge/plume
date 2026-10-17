@@ -478,6 +478,7 @@ input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
 .topbar .pill-btn:empty { display: none; }
 .bar-links { display: flex; align-items: center; }
 .bar-links a { display: inline-flex; align-items: center; gap: 5px; }
+.topbar .bar-links a.on { color: #fff; background: rgba(255,255,255,.12); }
 .details-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; margin-inline-start: 6px; background: #fff; color: #1a1919; border: 1px solid rgba(0,0,0,.2); border-radius: 8px; font-size: 13.5px; letter-spacing: -.01em; box-shadow: 0 1px 2px rgba(0,0,0,.1); white-space: nowrap; }
 .details-btn:hover:not(:disabled) { background: #ece8e1; }
 .details-btn.on { background: #ece8e1; }
@@ -595,7 +596,7 @@ input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
 }
 
 @media (max-width: 900px) {
-  .bar-links a:not(#cost-link):not([href="#settings"]) { display: none; }
+  .bar-links a:not(#cost-link):not([href="#settings"]):not([href="#today"]) { display: none; }
 }
 @media (max-width: 760px) {
   .topbar { padding: 0 10px; gap: 2px; }
