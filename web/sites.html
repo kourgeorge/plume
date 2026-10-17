@@ -19,24 +19,32 @@
   </header>
 
   <main class="sites-page">
-    <section class="card add-site">
-      <h1>Add a website</h1>
-      <p class="muted">Each website gets its own documents, drafts, results and timetable, stored in its own folder.</p>
-      <form id="add-form">
-        <input id="add-url" placeholder="yourcompany.com" required autocomplete="url">
-        <label class="check small"><input type="checkbox" id="add-research" checked> Research it now (uses AI, about $1–3)</label>
-        <button type="submit">Add</button>
+    <section class="hero">
+      <span class="hero-mark" aria-hidden="true"></span>
+      <h1>Your AI marketing team</h1>
+      <p class="hero-sub">Research, drafts, approval and publishing — one workspace for each of your websites.</p>
+      <form id="add-form" class="add-bar">
+        <img id="add-icon" class="add-icon" alt="" hidden>
+        <span id="add-globe" class="add-globe" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <label class="sr-only" for="add-url">Website address</label>
+        <input id="add-url" placeholder="Add a website, e.g. yourcompany.com" required autocomplete="url" spellcheck="false">
+        <button type="submit">Add website <span aria-hidden="true">→</span></button>
       </form>
-      <p id="add-msg" class="warn"></p>
+      <label class="check small hero-check"><input type="checkbox" id="add-research" checked> Research it right away (uses AI, about $1–3)</label>
+      <p id="add-msg" class="warn" role="status"></p>
     </section>
 
-    <div id="site-grid" class="site-grid"></div>
+    <section class="sites-section" aria-labelledby="sites-title">
+      <div class="sites-head"><h2 id="sites-title">Your websites</h2><span id="sites-count" class="muted small"></span></div>
+      <div id="site-grid" class="site-grid"></div>
+    </section>
 
-    <section class="card llm-card" id="llm">
-      <div class="llm-head">
-        <h2>AI connection</h2>
+    <details class="card llm-card" id="llm">
+      <summary class="llm-head">
+        <span class="llm-title"><span id="llm-dot" class="llm-dot" aria-hidden="true"></span><h2>AI connection</h2></span>
         <span id="llm-status" class="small"></span>
-      </div>
+        <span class="llm-toggle small muted">Change</span>
+      </summary>
       <p class="muted small">Shared by all websites. For LiteLLM or another gateway, enter its address and your key; leave the address empty to use Anthropic directly. The key is stored on this computer only (<code>data/tokens/llm.json</code>) and is never shown again.</p>
       <form id="llm-form" class="form">
         <label class="wide">Base URL <input id="llm-url" placeholder="https://litellm.yourcompany.com" autocomplete="off" spellcheck="false"></label>
@@ -52,7 +60,7 @@
         </div>
       </form>
       <ul id="llm-checks" class="item-list"></ul>
-    </section>
+    </details>
   </main>
 
   <script>
@@ -69,35 +77,64 @@
     const ago = (iso) => {
       if (!iso) return 'never opened';
       const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-      if (mins < 2) return 'opened just now';
-      if (mins < 60) return `opened ${mins} min ago`;
-      if (mins < 48 * 60) return `opened ${Math.round(mins / 60)} h ago`;
-      return `opened ${new Date(iso).toLocaleDateString()}`;
+      if (mins < 2) return 'just now';
+      if (mins < 60) return `${mins}m ago`;
+      if (mins < 48 * 60) return `${Math.round(mins / 60)}h ago`;
+      return new Date(iso).toLocaleDateString();
     };
     const open = (slug) => (location.href = `/s/${encodeURIComponent(slug)}/`);
+
+    const favicon = (url) => {
+      try {
+        return `https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(new URL(url).hostname)}`;
+      } catch {
+        return '';
+      }
+    };
+    const host = (url) => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, '');
+      } catch {
+        return url;
+      }
+    };
+    function research(s) {
+      if (s.docsWritten === s.docsTotal) return '<span class="stat done">Research done</span>';
+      if (!s.docsWritten) return '<span class="stat">Not researched yet</span>';
+      return `<span class="stat">Research ${s.docsWritten} of ${s.docsTotal}<span class="bar" aria-hidden="true"><i style="width:${Math.round((100 * s.docsWritten) / s.docsTotal)}%"></i></span></span>`;
+    }
 
     async function load() {
       const [sites, budget] = await Promise.all([api('/api/sites'), api('/api/budget').catch(() => null)]);
       if (budget) $('budget').textContent = budget.limit ? `AI this month: $${budget.spent.toFixed(2)} of $${budget.limit} (all sites)` : `AI this month: $${budget.spent.toFixed(2)}`;
+      // Most recently opened first; never-opened ones by when they were added.
+      sites.sort((a, b) => (b.lastOpenedAt || b.createdAt || '').localeCompare(a.lastOpenedAt || a.createdAt || ''));
+      $('sites-count').textContent = sites.length ? `${sites.length} ${sites.length === 1 ? 'website' : 'websites'}` : '';
       $('site-grid').innerHTML = sites.length
         ? sites
             .map(
-              (s) => `<div class="site-card" data-slug="${esc(s.slug)}">
+              (s) => `<article class="site-card" data-slug="${esc(s.slug)}">
                 <a class="site-main" href="/s/${encodeURIComponent(s.slug)}/">
-                  <span class="site-title">${esc(s.name)}</span>
-                  <span class="muted small">${esc(s.url)}</span>
-                  <span class="site-stats">
-                    <span>${s.docsWritten === s.docsTotal ? 'Research done' : s.docsWritten ? `Research ${s.docsWritten}/${s.docsTotal}` : 'Not researched yet'}</span>
-                    ${s.waiting ? `<span class="ready">${s.waiting} waiting for you</span>` : ''}
-                    ${s.published ? `<span>${s.published} published</span>` : ''}
+                  <span class="site-top">
+                    <span class="site-fav"><img alt="" loading="lazy" src="${esc(favicon(s.url))}" onerror="this.remove()"><b>${esc((s.name || s.slug)[0]?.toUpperCase() ?? '?')}</b></span>
+                    <span class="site-names"><span class="site-title">${esc(s.name)}</span>${host(s.url) === s.name ? '' : `<span class="site-url">${esc(host(s.url))}</span>`}</span>
                   </span>
-                  <span class="muted small">${ago(s.lastOpenedAt)}</span>
+                  <span class="site-stats">
+                    ${research(s)}
+                    ${s.waiting ? `<span class="stat ready">${s.waiting} waiting for you</span>` : ''}
+                    ${s.published ? `<span class="stat">${s.published} published</span>` : ''}
+                  </span>
                 </a>
-                <button class="secondary small-btn" data-remove="${esc(s.slug)}">Remove</button>
-              </div>`,
+                <div class="site-foot">
+                  <span class="muted small" title="Last opened in Plume">${ago(s.lastOpenedAt)}</span>
+                  <a class="site-visit small" href="${esc(s.url)}" target="_blank" rel="noopener" title="Visit ${esc(host(s.url))} in a new tab">Visit ↗</a>
+                  <button class="text-btn small" data-remove="${esc(s.slug)}" title="Remove this website from Plume">Remove</button>
+                  <a class="open-btn" href="/s/${encodeURIComponent(s.slug)}/">Open <span aria-hidden="true">→</span></a>
+                </div>
+              </article>`,
             )
             .join('')
-        : '<p class="muted">No websites yet. Add your first one above.</p>';
+        : '<div class="sites-empty"><strong>No websites yet</strong><span class="muted">Add your first one above. Plume will read it, learn the business and start suggesting work.</span></div>';
       for (const b of document.querySelectorAll('[data-remove]'))
         b.onclick = async () => {
           const slug = b.dataset.remove;
@@ -112,6 +149,23 @@
           }
         };
     }
+
+    // Show the typed website's icon in the add box, like a preview.
+    let iconTimer;
+    $('add-url').oninput = () => {
+      clearTimeout(iconTimer);
+      iconTimer = setTimeout(() => {
+        const v = $('add-url').value.trim();
+        const src = /^[^\s.]+\.[^\s]{2,}/.test(v.replace(/^https?:\/\//i, '')) ? favicon(/^https?:\/\//i.test(v) ? v : `https://${v}`) : '';
+        $('add-icon').hidden = !src;
+        $('add-globe').hidden = !!src;
+        if (src) $('add-icon').src = src;
+      }, 350);
+    };
+    $('add-icon').onerror = () => {
+      $('add-icon').hidden = true;
+      $('add-globe').hidden = false;
+    };
 
     $('add-form').onsubmit = async (e) => {
       e.preventDefault();
@@ -134,7 +188,9 @@
       $('llm-m-draft').value = c.models.draft;
       $('llm-m-score').value = c.models.score;
       $('llm-headers').placeholder = c.headerNames.length ? `saved: ${c.headerNames.join(', ')}` : 'x-team-id: marketing';
-      $('llm-status').className = `small ${c.error ? 'warn' : 'good'}`;
+      $('llm-status').className = `small llm-status ${c.error ? 'warn' : 'muted'}`;
+      $('llm-dot').className = `llm-dot ${c.error ? 'off' : 'on'}`;
+      if (c.error) $('llm').open = true;
       $('llm-status').textContent = c.error
         ? 'Not connected — AI tasks are off'
         : `Connected to ${c.endpoint} (${c.source === 'saved' ? 'saved here' : 'from .env'}) · web search: ${{ server: 'built in', local: 'Plume runs it', off: 'off' }[c.webSearch]}`;
@@ -184,7 +240,10 @@
 
     load().catch((err) => ($('site-grid').textContent = err.message));
     loadLlm().catch((err) => ($('llm-status').textContent = err.message));
-    if (location.hash === '#llm') setTimeout(() => $('llm').scrollIntoView(), 300);
+    if (location.hash === '#llm') {
+      $('llm').open = true;
+      setTimeout(() => $('llm').scrollIntoView(), 300);
+    }
   </script>
 </body>
 </html>
