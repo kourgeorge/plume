@@ -7,6 +7,8 @@ export const X_LIMIT = 280;
 export const X_THREAD_MAX = 6;
 export const LINKEDIN_LIMIT = 3000;
 export const REDDIT_LIMIT = 10000;
+/** Facebook allows far more, but nobody reads it; the agent aims for much shorter. */
+export const FACEBOOK_LIMIT = 63206;
 /** Separator between posts of an X thread inside one draft body (a line with three dashes). */
 export const THREAD_SEPARATOR = /\n\s*---+\s*\n/;
 
@@ -40,7 +42,7 @@ export function joinThread(posts: string[]): string {
   return posts.map((p) => p.trim()).join('\n\n---\n\n');
 }
 
-export type SocialChannel = 'x' | 'linkedin' | 'reddit';
+export type SocialChannel = 'x' | 'linkedin' | 'facebook' | 'reddit';
 
 export interface LengthProblem {
   /** 1-based post number within an X thread; 1 for single posts. */
@@ -57,7 +59,7 @@ export function lengthProblems(channel: SocialChannel, body: string): LengthProb
     if (posts.length > X_THREAD_MAX) out.push({ post: posts.length, length: posts.length, limit: X_THREAD_MAX });
     return out;
   }
-  const limit = channel === 'linkedin' ? LINKEDIN_LIMIT : REDDIT_LIMIT;
+  const limit = channel === 'linkedin' ? LINKEDIN_LIMIT : channel === 'facebook' ? FACEBOOK_LIMIT : REDDIT_LIMIT;
   const length = [...body.trim()].length;
   return length > limit ? [{ post: 1, length, limit }] : [];
 }

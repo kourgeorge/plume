@@ -38,7 +38,12 @@ test('people and profiles: handles and LinkedIn addresses are normalised', () =>
   const p = x.savePerson({ name: 'Jane Doe', role: 'Founder', bio: 'Ex-teacher, writes plainly.', xHandle: '@jane', linkedinUrl: 'linkedin.com/in/jane' });
   assert.equal(x.savePerson({ id: p.id, name: 'Jane D.', xHandle: '' }).name, 'Jane D.');
   x.setBrandProfiles({ x: 'x.com/acme', linkedin: 'https://linkedin.com/company/acme' });
-  assert.deepEqual(x.brandProfiles(), { x: 'acme', linkedin: 'https://www.linkedin.com/company/acme' });
+  assert.deepEqual(x.brandProfiles(), { x: 'acme', linkedin: 'https://www.linkedin.com/company/acme', facebook: '' }, 'sites saved before Facebook still read');
+  x.setBrandProfiles({ facebook: 'm.facebook.com/acmedesks/' });
+  assert.equal(x.brandProfiles().facebook, 'https://www.facebook.com/acmedesks');
+  assert.equal(x.facebookUrl('https://www.facebook.com/profile.php?id=100012345'), 'https://www.facebook.com/profile.php?id=100012345');
+  assert.throws(() => x.setBrandProfiles({ facebook: 'linkedin.com/company/acme' }), /not a Facebook address/);
+  assert.match(require('../src/context/extra').extraContext(), /Facebook https:\/\/www\.facebook\.com\/acmedesks/);
   x.savePerson({ name: 'Jane Doe', role: 'Founder', bio: 'Ex-teacher, writes plainly.' });
 });
 

@@ -141,6 +141,17 @@ export const INTEGRATIONS: IntegrationDef[] = [
     ],
   },
   {
+    id: 'facebook',
+    group: 'social',
+    label: 'Facebook Page',
+    blurb:
+      'Post to a Facebook Page you manage (not a personal profile — Facebook does not let apps post there). At developers.facebook.com create an app, open Graph API Explorer, add the "pages_manage_posts" and "pages_read_engagement" permissions, and choose your page under "User or Page" to get a Page token. Tokens from Graph API Explorer last about an hour; to make one that lasts, use the Access Token Debugger to extend it first.',
+    fields: [
+      { key: 'pageId', env: 'FACEBOOK_PAGE_ID', label: 'Page ID', placeholder: '123456789012345', help: "A long number: on the page, open About → Page transparency." },
+      { key: 'token', env: 'FACEBOOK_PAGE_TOKEN', label: 'Page access token', secret: true },
+    ],
+  },
+  {
     id: 'reddit',
     group: 'social',
     label: 'Reddit',
@@ -328,6 +339,7 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
         return { ok: true, message: 'Saved. Use Connect Google to sign in.' };
       case 'x':
       case 'linkedin':
+      case 'facebook':
       case 'reddit': {
         const { testSocial } = await import('./social/publishers');
         return await testSocial(id, env);

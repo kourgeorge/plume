@@ -7,11 +7,12 @@ import { describeProblems, lengthProblems, linkedinEscape, plainText, splitThrea
 export const SOCIAL_API = {
   x: 'https://api.x.com',
   linkedin: 'https://api.linkedin.com',
+  facebook: 'https://graph.facebook.com',
   redditAuth: 'https://www.reddit.com',
   reddit: 'https://oauth.reddit.com',
 };
 
-const tooLong = (channel: 'x' | 'linkedin' | 'reddit', body: string) => {
+const tooLong = (channel: 'x' | 'linkedin' | 'facebook' | 'reddit', body: string) => {
   const p = lengthProblems(channel, body);
   if (p.length) throw new Error(`too long to publish: ${describeProblems(channel, p)}. Edit it shorter, then approve again.`);
 };
@@ -156,6 +157,52 @@ export const linkedinPublisher: Publisher = {
   },
 };
 
+// ---------------------------------------------------------------- Facebook
+
+/** Meta retires each Graph API version about two years after release; FACEBOOK_GRAPH_VERSION moves to a newer one. */
+export const facebookVersion = (env = process.env) => env.FACEBOOK_GRAPH_VERSION || 'v23.0';
+
+async function facebookCall(env: NodeJS.ProcessEnv, method: 'GET' | 'POST', path: string, form?: Record<string, string>): Promise<any> {
+  const url = `${SOCIAL_API.facebook}/${facebookVersion(env)}${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: { authorization: `Bearer ${env.FACEBOOK_PAGE_TOKEN}`, ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
+    body: form ? new URLSearchParams(form) : undefined,
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    const e = data.error ?? {};
+    const why = e.message ?? res.statusText;
+    if (e.code === 190) throw new Error(`Facebook refused the token — it may have expired or been for a different page (${why}). Make a new Page token and save it in Settings.`);
+    if (e.code === 10 || e.code === 200 || (e.code >= 200 && e.code < 300)) throw new Error(`Facebook says this token may not post to the page (${why}). It needs the "pages_manage_posts" and "pages_read_engagement" permissions, and must be a Page token, not your personal one.`);
+    if (e.code === 803 || e.code === 100) throw new Error(`Facebook could not find that page (${why}). Check the Page ID in Settings.`);
+    if (e.code === 4 || e.code === 17 || e.code === 32 || e.code === 368 || res.status === 429) throw new Error(`Facebook asks you to slow down (${why}) — it will be retried later`);
+    throw new Error(`Facebook said ${res.status}: ${why}`);
+  }
+  return data;
+}
+
+const pageId = (env: NodeJS.ProcessEnv) => {
+  const id = (env.FACEBOOK_PAGE_ID ?? '').trim();
+  if (!/^\d{5,25}$/.test(id)) throw new Error(`"${id}" is not a Facebook Page ID — it is a long number, shown under the page's About → Page transparency`);
+  return id;
+};
+
+export const facebookPublisher: Publisher = {
+  id: 'facebook',
+  label: 'Facebook Page',
+  needs: ['FACEBOOK_PAGE_ID', 'FACEBOOK_PAGE_TOKEN'],
+  configured: (env = process.env) => !!(env.FACEBOOK_PAGE_ID && env.FACEBOOK_PAGE_TOKEN),
+  async publish(draft: Draft, _html: string, env = process.env): Promise<PublishResult> {
+    const text = plainText(draft.body);
+    tooLong('facebook', text);
+    const r = await facebookCall(env, 'POST', `/${pageId(env)}/feed`, { message: text });
+    // The id is "<page>_<post>"; facebook.com/<id> opens the post.
+    return { url: r.id ? `https://www.facebook.com/${r.id}` : null, externalId: r.id ?? null, dryRun: false };
+  },
+};
+
 // ---------------------------------------------------------------- Reddit
 
 export const redditUserAgent = (env: NodeJS.ProcessEnv) => `plume-marketing/0.1 (by /u/${env.REDDIT_USERNAME ?? 'unknown'})`;
@@ -237,7 +284,7 @@ export const redditPublisher: Publisher = {
   },
 };
 
-export const SOCIAL_PUBLISHERS = [xPublisher, linkedinPublisher, redditPublisher];
+export const SOCIAL_PUBLISHERS = [xPublisher, linkedinPublisher, facebookPublisher, redditPublisher];
 
 /** The Settings "Test" button: one harmless read that proves the keys work. */
 export async function testSocial(id: string, env: NodeJS.ProcessEnv): Promise<{ ok: boolean; message: string }> {
@@ -249,6 +296,10 @@ export async function testSocial(id: string, env: NodeJS.ProcessEnv): Promise<{ 
     if (id === 'linkedin') {
       const author = await linkedinAuthor(env);
       return { ok: true, message: `Will post as ${author.includes('organization') ? 'the company page' : 'you'} (${author}). Posting permission is only checked on the first post.` };
+    }
+    if (id === 'facebook') {
+      const p = await facebookCall(env, 'GET', `/${pageId(env)}?fields=name`);
+      return { ok: true, message: `Will post to the page "${p.name}". Posting permission is only checked on the first post.` };
     }
     if (id === 'reddit') {
       const me = await redditCall(env, 'GET', '/api/v1/me');

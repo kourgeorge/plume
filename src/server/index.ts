@@ -533,7 +533,7 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
   app.delete<{ Params: { id: string } }>('/api/people/:id', async (req) => (removePerson(Number(req.params.id)), { ok: true }));
-  app.put<{ Body: { x?: string; linkedin?: string } }>('/api/profiles', async (req, reply) => {
+  app.put<{ Body: { x?: string; linkedin?: string; facebook?: string } }>('/api/profiles', async (req, reply) => {
     try {
       return setBrandProfiles(req.body ?? {});
     } catch (err) {

@@ -79,7 +79,7 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
       required: ['kind', 'title', 'body', 'reason'],
       properties: {
         kind: { type: 'string', enum: ['blog_post', 'article', 'landing_page', 'social_post'] },
-        channel: { type: 'string', enum: ['x', 'linkedin', 'other'], description: 'For social_post only.' },
+        channel: { type: 'string', enum: ['x', 'linkedin', 'facebook', 'other'], description: 'For social_post only.' },
         title: { type: 'string' },
         body: { type: 'string', description: 'Markdown. For blog posts, articles and pages start with "# " + title.' },
         reason: { type: 'string', description: 'One sentence shown to the owner: why this piece, why now.' },
@@ -185,7 +185,7 @@ export async function runChatTool(threadId: number, name: string, input: any, to
         const title = str(input?.title, 300).trim();
         const body = str(input?.body).trim();
         if (!title || !body) return { content: 'title and body are required', isError: true };
-        const channel = kind === 'social_post' && ['x', 'linkedin'].includes(input?.channel) ? input.channel : undefined;
+        const channel = kind === 'social_post' && ['x', 'linkedin', 'facebook'].includes(input?.channel) ? input.channel : undefined;
         const d = createDraft({ agent: 'chat', kind, title, body, meta: { reason: str(input?.reason, 500) || 'Written in chat', channel, chatThread: threadId } });
         createAction(threadId, 'draft', { draftId: d.id, title, toolUseId }, 'done');
         return { content: `Draft #${d.id} is in the owner's Today queue for approval.`, isError: false };

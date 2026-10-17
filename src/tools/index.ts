@@ -213,7 +213,7 @@ export function buildSchema(i: SchemaInput): string {
 export function toolDefaults() {
   const site = siteUrl() ?? '';
   const b = brandProfiles();
-  const sameAs = [b.x ? `https://x.com/${b.x}` : '', b.linkedin ?? ''].filter(Boolean);
+  const sameAs = [b.x ? `https://x.com/${b.x}` : '', b.linkedin ?? '', b.facebook ?? ''].filter(Boolean);
   const pages = sitemapPages();
   return {
     site,

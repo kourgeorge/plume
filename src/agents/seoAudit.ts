@@ -349,6 +349,7 @@ function businessFacts(origin: string, pages: PageRow[]): BusinessFacts {
   const sameAs = new Set(home?.profiles ?? []);
   if (brand.x) sameAs.add(`https://x.com/${brand.x}`);
   if (brand.linkedin) sameAs.add(brand.linkedin);
+  if (brand.facebook) sameAs.add(brand.facebook);
   const founder = listPeople()[0];
   const homePage = pages.find((p) => new URL(p.url).pathname === '/') ?? pages[0];
   return {

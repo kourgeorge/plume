@@ -168,7 +168,7 @@ async function renderChrome() {
     $('people-list').innerHTML = c.people.length
       ? c.people.map((p) => `<li><a href="#person/${p.id}" dir="auto"><span class="nav-label"><span class="nav-ico round">${esc((p.name[0] ?? '?').toUpperCase())}</span>${esc(p.name)}</span><span class="tag">${esc(p.role)}</span></a></li>`).join('')
       : '<li class="nav-empty">Add the founder or whoever posts for the business.</li>';
-    $('accounts-tag').textContent = [c.profiles.x && 'X', c.profiles.linkedin && 'LinkedIn'].filter(Boolean).join(' · ') || 'not set';
+    $('accounts-tag').textContent = [c.profiles.x && 'X', c.profiles.linkedin && 'LinkedIn', c.profiles.facebook && 'Facebook'].filter(Boolean).join(' · ') || 'not set';
     for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
   }, () => {});
   for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
@@ -472,7 +472,7 @@ function kindLabel(k) {
   return (
     {
       blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article', social_post: 'Social post',
-      x_post: 'X post', x_thread: 'X thread', linkedin_post: 'LinkedIn post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post',
+      x_post: 'X post', x_thread: 'X thread', linkedin_post: 'LinkedIn post', facebook_post: 'Facebook post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post',
       outreach_email: 'Email', outreach_message: 'Message to send yourself', video_script: 'Video script',
     }[k] ?? k
   );
@@ -654,6 +654,7 @@ async function loadAccounts() {
   const c = await ensureContext();
   $('acc-x').value = c.profiles.x ? `@${c.profiles.x}` : '';
   $('acc-li').value = c.profiles.linkedin;
+  $('acc-fb').value = c.profiles.facebook ?? '';
   $('accounts-status').textContent = '';
 }
 
@@ -1321,10 +1322,11 @@ $('doc-cancel').onclick = () => loadDoc($('doc-body').dataset.id);
 $('doc-copy').onclick = () => navigator.clipboard.writeText($('doc-body').value).then(() => ($('doc-copy').textContent = 'Copied'), () => ($('doc-copy').textContent = 'Copy failed'));
 $('accounts-save').onclick = async () => {
   try {
-    const r = await api('/api/profiles', { method: 'PUT', body: JSON.stringify({ x: $('acc-x').value, linkedin: $('acc-li').value }) });
+    const r = await api('/api/profiles', { method: 'PUT', body: JSON.stringify({ x: $('acc-x').value, linkedin: $('acc-li').value, facebook: $('acc-fb').value }) });
     context = null;
     $('acc-x').value = r.x ? `@${r.x}` : '';
     $('acc-li').value = r.linkedin;
+    $('acc-fb').value = r.facebook;
     $('accounts-status').textContent = 'Saved.';
     renderChrome();
   } catch (err) {

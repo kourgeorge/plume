@@ -6,15 +6,18 @@ import { createDraft, listDrafts } from '../queue';
 import { siteEnv } from '../integrations';
 import { siteUrl } from '../sites';
 import type { Agent, Opportunity } from '../agents/types';
-import { SOCIAL_API, linkedinPublisher, redditCall, redditPublisher, redditUserAgent, xPublisher } from './publishers';
-import { LINKEDIN_LIMIT, X_LIMIT, X_THREAD_MAX, describeProblems, joinThread, lengthProblems, xLength } from './text';
+import { SOCIAL_API, facebookPublisher, linkedinPublisher, redditCall, redditPublisher, redditUserAgent, xPublisher } from './publishers';
+import { FACEBOOK_LIMIT, LINKEDIN_LIMIT, X_LIMIT, X_THREAD_MAX, describeProblems, joinThread, lengthProblems, xLength } from './text';
 
 const brandName = () => {
   const u = siteUrl();
   return u ? new URL(u).hostname.replace(/^www\./, '') : 'our product';
 };
 
-// ================================================================ X and LinkedIn
+// ================================================================ X, LinkedIn and Facebook
+
+type Channel = 'x' | 'linkedin' | 'facebook';
+const CHANNEL_LABEL: Record<Channel, string> = { x: 'X', linkedin: 'LinkedIn', facebook: 'Facebook' };
 
 const SOCIAL_ROLE = `You are the social media lead. You write posts people stop scrolling for: one clear idea each,
 a concrete detail or number, and a reason to reply. No hashtag walls (two at most, only when they help), no emoji
@@ -33,7 +36,7 @@ const OPP_SCHEMA = (authors: string[]) => ({
         additionalProperties: false,
         required: ['channel', 'format', 'angle', 'reason', 'author'],
         properties: {
-          channel: { type: 'string', enum: ['x', 'linkedin'] },
+          channel: { type: 'string', enum: ['x', 'linkedin', 'facebook'] },
           format: { type: 'string', enum: ['post', 'thread'], description: 'thread only for X' },
           angle: { type: 'string', description: 'The one idea of the post, in a sentence.' },
           reason: { type: 'string', description: 'Why this, why now — shown to the owner.' },
@@ -54,14 +57,17 @@ const POST_SCHEMA = {
   },
 };
 
-/** Channels to write for: the ones connected for this site, or both when none are (drafts then publish as a dry run). */
-export function socialChannels(env = siteEnv()): ('x' | 'linkedin')[] {
-  const on = ([['x', xPublisher], ['linkedin', linkedinPublisher]] as const).filter(([, p]) => p.configured(env)).map(([c]) => c);
+/**
+ * Channels to write for: the ones connected for this site. When none are, X and LinkedIn (drafts then publish
+ * as a dry run); Facebook only once a page is connected, since many businesses have none.
+ */
+export function socialChannels(env = siteEnv()): Channel[] {
+  const on = ([['x', xPublisher], ['linkedin', linkedinPublisher], ['facebook', facebookPublisher]] as const).filter(([, p]) => p.configured(env)).map(([c]) => c);
   return on.length ? [...on] : ['x', 'linkedin'];
 }
 
 function recentWork(): string {
-  const published = listDrafts({ status: 'published' }).filter((d) => !['x', 'linkedin', 'reddit'].includes(d.target ?? '')).slice(0, 8);
+  const published = listDrafts({ status: 'published' }).filter((d) => !['x', 'linkedin', 'facebook', 'reddit'].includes(d.target ?? '')).slice(0, 8);
   const social = listDrafts().filter((d) => d.agent === 'social' && d.status !== 'rejected').slice(0, 15);
   return [
     published.length ? `Recently published on the site (worth sharing):\n${published.map((d) => `- "${d.title}"${d.publishedUrl?.startsWith('http') ? ` ${d.publishedUrl}` : ''}`).join('\n')}` : '',
@@ -71,30 +77,32 @@ function recentWork(): string {
     .join('\n\n');
 }
 
-const channelRules = (channel: 'x' | 'linkedin', format: string) =>
+const channelRules = (channel: Channel, format: string) =>
   channel === 'x'
     ? format === 'thread'
       ? `An X thread of 3–${X_THREAD_MAX} posts. Each post must be under ${X_LIMIT} characters (a link counts as 23). The first post must work alone.`
       : `One X post under ${X_LIMIT} characters (a link counts as 23).`
-    : `One LinkedIn post, 600–1,500 characters (hard limit ${LINKEDIN_LIMIT}). A strong first line — LinkedIn hides the rest behind "see more". Short paragraphs.`;
+    : channel === 'linkedin'
+      ? `One LinkedIn post, 600–1,500 characters (hard limit ${LINKEDIN_LIMIT}). A strong first line — LinkedIn hides the rest behind "see more". Short paragraphs.`
+      : `One Facebook Page post, 80–600 characters (hard limit ${FACEBOOK_LIMIT}). Friendly and direct, like talking to customers; one clear point and, when it fits, one link. Facebook hides long posts behind "See more", so the first two lines carry it.`;
 
 export const socialAgent: Agent = {
   id: 'social',
   label: 'Social',
-  description: 'Writes X posts and threads and LinkedIn posts in your voice — as the brand or as one of your people.',
+  description: 'Writes X posts and threads, LinkedIn posts and Facebook Page posts in your voice — as the brand or as one of your people.',
   async findOpportunities({ limit = 3, onProgress }) {
     onProgress?.('Choosing what to post about');
     const channels = socialChannels();
     const people = listPeople();
     const authors = ['brand', ...people.map((p) => p.name)];
-    const res = await askJson<{ ideas: { channel: 'x' | 'linkedin'; format: 'post' | 'thread'; angle: string; reason: string; author: string }[] }>({
+    const res = await askJson<{ ideas: { channel: Channel; format: 'post' | 'thread'; angle: string; reason: string; author: string }[] }>({
       purpose: 'social:ideas',
       model: MODELS.draft,
       system: agentSystem(SOCIAL_ROLE, undefined, undefined, 'social'),
       schema: OPP_SCHEMA(authors),
       prompt:
-        `Suggest ${limit} social posts for ${channels.join(' and ')}, spread across those channels. Draw on the content plan, ` +
-        `what works in the results, and recent work. ${people.length ? 'Posts can be written as the brand or as one of the people listed in the profile; LinkedIn usually works better from a person.' : ''}\n\n` +
+        `Suggest ${limit} social posts for ${channels.map((c) => CHANNEL_LABEL[c]).join(', ')}, spread across those channels. Draw on the content plan, ` +
+        `what works in the results, and recent work. ${people.length ? 'Posts can be written as the brand or as one of the people listed in the profile; LinkedIn usually works better from a person; Facebook Page posts always come from the brand.' : ''}\n\n` +
         recentWork(),
     });
     return res.ideas
@@ -103,14 +111,15 @@ export const socialAgent: Agent = {
       .map<Opportunity>((i) => ({
         title: i.angle,
         reason: i.reason,
-        kind: i.channel === 'x' ? (i.format === 'thread' ? 'x_thread' : 'x_post') : 'linkedin_post',
+        kind: i.channel === 'x' ? (i.format === 'thread' ? 'x_thread' : 'x_post') : `${i.channel}_post`,
         channel: i.channel,
         format: i.channel === 'x' ? i.format : 'post',
-        author: i.author,
+        // A Page posts as itself, so a person can't be the author there.
+        author: i.channel === 'facebook' ? 'brand' : i.author,
       }));
   },
   async draft(opp) {
-    const channel = opp.channel as 'x' | 'linkedin';
+    const channel = opp.channel as Channel;
     const author = String(opp.author ?? 'brand');
     const as = author === 'brand' ? `as the brand (${brandName()})` : `as ${author}, in first person, true to what the profile says about them`;
     let prompt = `Write it ${as}. ${channelRules(channel, String(opp.format))}\nThe idea: ${opp.title}\nWhy: ${opp.reason}`;

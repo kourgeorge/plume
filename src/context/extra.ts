@@ -106,6 +106,17 @@ export function linkedinUrl(raw: string | undefined): string {
   return `https://www.linkedin.com${full.pathname.replace(/\/$/, '')}`;
 }
 
+/** "facebook.com/acme", "fb.com/acme/", "https://m.facebook.com/acme" → "https://www.facebook.com/acme". */
+export function facebookUrl(raw: string | undefined): string {
+  const t = (raw ?? '').trim();
+  if (!t) return '';
+  const u = siteOrigin(t);
+  if (!u || !/(^|\.)(facebook\.com|fb\.com)$/.test(new URL(u).hostname)) throw new Error(`"${t}" is not a Facebook address`);
+  const full = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
+  const id = full.pathname === '/profile.php' && full.searchParams.get('id');
+  return id ? `https://www.facebook.com/profile.php?id=${id}` : `https://www.facebook.com${full.pathname.replace(/\/$/, '')}`;
+}
+
 function personRow(r: any): Person {
   return { id: r.id, name: r.name, role: r.role, bio: r.bio, xHandle: r.x_handle, linkedinUrl: r.linkedin_url };
 }
@@ -137,14 +148,17 @@ export function removePerson(id: number): void {
 export interface BrandProfiles {
   x: string;
   linkedin: string;
+  facebook: string;
 }
 
 export function brandProfiles(): BrandProfiles {
-  return getSetting<BrandProfiles>('brandProfiles', { x: '', linkedin: '' });
+  return { x: '', linkedin: '', facebook: '', ...getSetting<Partial<BrandProfiles>>('brandProfiles', {}) };
 }
 
 export function setBrandProfiles(p: Partial<BrandProfiles>): BrandProfiles {
-  const next = { ...brandProfiles(), ...(p.x !== undefined ? { x: xHandle(p.x) } : {}), ...(p.linkedin !== undefined ? { linkedin: linkedinUrl(p.linkedin) } : {}) };
+  const next = { ...brandProfiles(), ...(p.x !== undefined ? { x: xHandle(p.x) } : {}), ...(p.linkedin !== undefined ? { linkedin: linkedinUrl(p.linkedin) } : {}),
+    ...(p.facebook !== undefined ? { facebook: facebookUrl(p.facebook) } : {}),
+  };
   setSetting('brandProfiles', next);
   return next;
 }
@@ -174,7 +188,8 @@ export function extraContext(): string | null {
       ].join('\n'),
     );
   const b = brandProfiles();
-  if (b.x || b.linkedin) parts.push(`The brand's own accounts:${b.x ? ` X @${b.x}.` : ''}${b.linkedin ? ` LinkedIn ${b.linkedin}.` : ''}`);
+  if (b.x || b.linkedin || b.facebook)
+    parts.push(`The brand's own accounts:${b.x ? ` X @${b.x}.` : ''}${b.linkedin ? ` LinkedIn ${b.linkedin}.` : ''}${b.facebook ? ` Facebook ${b.facebook}.` : ''}`);
   const notes = userNotes().trim();
   if (notes) parts.push(`Notes from the owner (these override anything above that conflicts with them):\n${notes}`);
   return parts.length ? parts.join('\n\n') : null;

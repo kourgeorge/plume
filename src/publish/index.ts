@@ -61,9 +61,9 @@ export function getPublisher(id: string): Publisher | undefined {
 }
 
 /** Which kinds of draft each destination takes. File export takes anything. */
-const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post'];
+const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
 const REDDIT_KINDS = ['reddit_reply', 'reddit_post'];
-const SOCIAL_TARGETS = ['x', 'linkedin', 'reddit', 'email'];
+const SOCIAL_TARGETS = ['x', 'linkedin', 'facebook', 'reddit', 'email'];
 /** Not for publishing anywhere: an outreach email goes to one person; a video script is filmed, not posted. */
 const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['export'] };
 export function targetsFor(kind: string): string[] {
@@ -71,7 +71,8 @@ export function targetsFor(kind: string): string[] {
   if (REDDIT_KINDS.includes(kind)) return ['reddit', 'export'];
   if (kind === 'x_post' || kind === 'x_thread') return ['x', 'export'];
   if (kind === 'linkedin_post') return ['linkedin', 'export'];
-  if (kind === 'social_post') return ['x', 'linkedin', 'export'];
+  if (kind === 'facebook_post') return ['facebook', 'export'];
+  if (kind === 'social_post') return ['x', 'linkedin', 'facebook', 'export'];
   return PUBLISHERS.map((p) => p.id).filter((id) => !SOCIAL_TARGETS.includes(id));
 }
 

@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// One fake server plays X (/x), LinkedIn (/li), Reddit sign-in and public pages (/ra), Reddit API (/ro) and the AI gateway (/llm).
+// One fake server plays X (/x), LinkedIn (/li), Facebook (/fb), Reddit sign-in and public pages (/ra), Reddit API (/ro) and the AI gateway (/llm).
 const seen = [];
 const llmScript = [];
 const routes = {};
@@ -46,10 +46,10 @@ test.before(() => new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
   process.env.LLM_BASE_URL = `${base}/llm`;
   process.env.LLM_API_KEY = 'k';
   process.env.PLUME_SEARCH = 'off';
-  for (const k of Object.keys(process.env)) if (/^(X_|LINKEDIN_|REDDIT_)/.test(k)) delete process.env[k];
+  for (const k of Object.keys(process.env)) if (/^(X_|LINKEDIN_|FACEBOOK_|REDDIT_)/.test(k)) delete process.env[k];
   text = require('../src/social/text');
   pub = require('../src/social/publishers');
-  Object.assign(pub.SOCIAL_API, { x: `${base}/x`, linkedin: `${base}/li`, redditAuth: `${base}/ra`, reddit: `${base}/ro` });
+  Object.assign(pub.SOCIAL_API, { x: `${base}/x`, linkedin: `${base}/li`, facebook: `${base}/fb`, redditAuth: `${base}/ra`, reddit: `${base}/ro` });
   publish = require('../src/publish');
   runner = require('../src/publish/runner');
   q = require('../src/queue');
@@ -61,6 +61,7 @@ test.after(() => server.close());
 
 const X_ENV = { X_API_KEY: 'ck', X_API_SECRET: 'cs', X_ACCESS_TOKEN: 'at', X_ACCESS_SECRET: 'as' };
 const LI_ENV = { LINKEDIN_TOKEN: 'li-token' };
+const FB_ENV = { FACEBOOK_PAGE_ID: '1234567890', FACEBOOK_PAGE_TOKEN: 'fb-token' };
 const RD_ENV = { REDDIT_CLIENT_ID: 'rid', REDDIT_CLIENT_SECRET: 'rsec', REDDIT_USERNAME: 'acme_team', REDDIT_PASSWORD: 'pw' };
 const draft = (o) => ({ id: 1, kind: 'x_post', title: 't', body: '', meta: {}, ...o });
 
@@ -129,6 +130,36 @@ test('LinkedIn: posts as the token owner with a current API version and escaped 
   await assert.rejects(pub.linkedinPublisher.publish(draft({ kind: 'linkedin_post', body: 'x' }), '', { ...LI_ENV, LINKEDIN_AUTHOR: 'acme corp' }), /is not a LinkedIn author/);
 });
 
+test('Facebook: posts plain text to the page feed; expired tokens and bad page IDs come back in plain words', async () => {
+  routes['POST /fb/v23.0/1234567890/feed'] = () => [200, { id: '1234567890_555' }];
+  const r = await pub.facebookPublisher.publish(draft({ kind: 'facebook_post', body: 'Open **today** [menu](https://acme.example/menu)' }), '', FB_ENV);
+  assert.equal(r.url, 'https://www.facebook.com/1234567890_555');
+  assert.equal(r.externalId, '1234567890_555');
+  const sent = seen.filter((s) => s.path === '/fb/v23.0/1234567890/feed').at(-1);
+  assert.equal(new URLSearchParams(sent.body).get('message'), 'Open today menu https://acme.example/menu');
+  assert.equal(sent.headers.authorization, 'Bearer fb-token');
+  routes['POST /fb/v23.0/1234567890/feed'] = () => [400, { error: { code: 190, message: 'Session has expired' } }];
+  await assert.rejects(pub.facebookPublisher.publish(draft({ kind: 'facebook_post', body: 'x' }), '', FB_ENV), /may have expired[\s\S]*Page token/);
+  routes['POST /fb/v23.0/1234567890/feed'] = () => [403, { error: { code: 200, message: 'Permissions error' } }];
+  await assert.rejects(pub.facebookPublisher.publish(draft({ kind: 'facebook_post', body: 'x' }), '', FB_ENV), /pages_manage_posts/);
+  const before = seen.length;
+  await assert.rejects(pub.facebookPublisher.publish(draft({ kind: 'facebook_post', body: 'x' }), '', { ...FB_ENV, FACEBOOK_PAGE_ID: 'acme' }), /not a Facebook Page ID/);
+  assert.equal(seen.length, before, 'nothing should be sent with a bad page ID');
+  routes['GET /fb/v23.0/1234567890'] = () => [200, { name: 'Acme Desks', id: '1234567890' }];
+  assert.deepEqual(await pub.testSocial('facebook', FB_ENV), { ok: true, message: 'Will post to the page "Acme Desks". Posting permission is only checked on the first post.' });
+  assert.match(seen.at(-1).query, /fields=name/);
+});
+
+test('Facebook takes Facebook and general social posts only; the agent writes for it only once a page is connected', () => {
+  assert.deepEqual(publish.targetsFor('facebook_post'), ['facebook', 'export']);
+  assert.ok(publish.targetsFor('social_post').includes('facebook'));
+  assert.ok(!publish.targetsFor('blog_post').includes('facebook'));
+  assert.throws(() => publish.checkTarget('x_post', 'facebook'), /Facebook Page can't take a social post/);
+  assert.deepEqual(agents.socialChannels({}), ['x', 'linkedin']);
+  assert.deepEqual(agents.socialChannels(FB_ENV), ['facebook']);
+  assert.deepEqual(agents.socialChannels({ ...FB_ENV, ...LI_ENV }), ['linkedin', 'facebook']);
+});
+
 test('Reddit: replies with the thread id; Reddit errors come back in plain words', async () => {
   pub.resetRedditTokenForTests();
   routes['POST /ra/api/v1/access_token'] = () => [200, { access_token: 'rt', expires_in: 3600 }];
@@ -182,6 +213,27 @@ test('social agent: a post that is too long is rewritten, never cut', async () =
   assert.match(d.meta.lengthNote, /fits/);
   const second = JSON.parse(seen.filter((s) => s.path === '/llm/v1/messages')[before + 1].body);
   assert.match(second.messages[0].content, /too long: post 1 is 320 characters; the limit is 280[\s\S]*Do not just cut/);
+});
+
+test('social agent: Facebook ideas become Facebook posts written as the brand', async () => {
+  for (const k of Object.keys(FB_ENV)) process.env[k] = FB_ENV[k];
+  require('../src/context/extra').savePerson({ name: 'Dana Levi', role: 'Founder' });
+  try {
+    llmScript.push({ ideas: [{ channel: 'facebook', format: 'post', angle: 'Weekend opening hours', reason: 'holiday', author: 'Dana Levi' }] });
+    const [opp] = await agents.socialAgent.findOpportunities({ limit: 1 });
+    assert.equal(opp.kind, 'facebook_post');
+    assert.equal(opp.author, 'brand', 'a Page posts as itself');
+    const ideas = JSON.parse(seen.filter((s) => s.path === '/llm/v1/messages').at(-1).body);
+    assert.match(ideas.messages[0].content, /social posts for Facebook,/);
+    llmScript.push({ title: 'Hours', posts: ['We are open this Saturday, 9 to 2.'] });
+    const d = await agents.socialAgent.draft(opp);
+    assert.equal(d.kind, 'facebook_post');
+    assert.equal(d.meta.channel, 'facebook');
+    const prompt = JSON.parse(seen.filter((s) => s.path === '/llm/v1/messages').at(-1).body).messages[0].content;
+    assert.match(prompt, /One Facebook Page post/);
+  } finally {
+    for (const k of Object.keys(FB_ENV)) delete process.env[k];
+  }
 });
 
 test('reddit agent: a business mention without a disclosure gets one; "nothing to add" writes nothing', async () => {

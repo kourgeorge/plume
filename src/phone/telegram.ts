@@ -105,7 +105,7 @@ export async function testTelegram(env: NodeJS.ProcessEnv): Promise<{ ok: boolea
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 const KIND: Record<string, string> = {
   blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article', social_post: 'Social post', x_post: 'X post', x_thread: 'X thread',
-  linkedin_post: 'LinkedIn post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post', outreach_email: 'Email', outreach_message: 'Message', video_script: 'Video script',
+  linkedin_post: 'LinkedIn post', facebook_post: 'Facebook post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post', outreach_email: 'Email', outreach_message: 'Message', video_script: 'Video script',
 };
 
 /** Where Approve sends a draft: the first connected place that fits, as the Today card picks; else files. */
@@ -121,7 +121,7 @@ export function dashboardUrl(draftId?: number): string {
 /** The text of a draft message. Short posts in full; articles as a preview — Telegram caps a message at 4096 characters. */
 export function draftMessage(d: Draft, env = siteEnv()): string {
   const site = getSite(currentSite())?.name ?? currentSite();
-  const short = /^(x_|linkedin|social|reddit|outreach)/.test(d.kind);
+  const short = /^(x_|linkedin|facebook|social|reddit|outreach)/.test(d.kind);
   const body = short && d.body.length <= 2500 ? d.body.trim() : preview(d.body, 80);
   const m = d.meta as any;
   const target = defaultTarget(d, env);
