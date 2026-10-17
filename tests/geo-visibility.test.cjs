@@ -65,7 +65,8 @@ const Q1 = 'What is the best way to pass the driving theory test?';
 const Q2 = 'Which online theory course is worth paying for?';
 
 test('brand names come from the domain plus any the owner adds; Latin names match whole words only', () => {
-  assert.deepEqual(v.brandNames(), ['test4u.example', 'test4u']);
+  // The site's saved name counts too, so prose that writes "Test4U" is caught without any setup.
+  assert.deepEqual(v.brandNames(), ['Test4U', 'test4u.example', 'test4u']);
   v.setBrandNames(['Test4U', 'טסט פור יו']);
   assert.ok(v.brandNames().includes('טסט פור יו'));
   assert.equal(v.textMentions('Try Test4U for practice', v.brandNames()), true);

@@ -51,7 +51,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings', 'ai'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings', 'ai', 'outreach'];
 
 function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
@@ -89,6 +89,7 @@ async function route() {
     case 'results': return loadResults();
     case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
     case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
+    case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(arg) : loadToday();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
     case 'settings': return loadSettings();
@@ -224,6 +225,7 @@ function renderTodayCard(item, left) {
       <div class="kicker"><span>${esc(agentLabel(d.agent))}</span><span>·</span><span>${esc(kindLabel(d.kind))}</span><span>·</span><span>${d.words} words</span></div>
       <h2 dir="auto">${esc(d.title)}</h2>
       ${d.meta.reason ? `<p class="why">${esc(d.meta.reason)}</p>` : ''}
+      ${d.meta.to ? `<p class="small">To ${esc(d.meta.to)} · <b dir="auto">${esc(d.meta.subject ?? '')}</b></p>` : d.meta.howToSend ? `<p class="small muted">${esc(d.meta.howToSend)}</p>` : ''}
       <p class="body" dir="auto">${esc(d.preview)}</p>
       <div class="acts">
         <select id="t-target">${fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' (dry run)'}</option>`).join('')}</select>
@@ -336,15 +338,16 @@ function act(fn) {
   };
 }
 
-const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙', social: '✦', reddit: '◉' };
+const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙', social: '✦', reddit: '◉', influencer: '☺', links: '⛓', video: '▶' };
 function agentLabel(id) {
-  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes', social: 'Social', reddit: 'Reddit', chat: 'Chat' }[id] ?? id;
+  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes', social: 'Social', reddit: 'Reddit', influencer: 'Influencers', links: 'Links', video: 'Video', chat: 'Chat' }[id] ?? id;
 }
 function kindLabel(k) {
   return (
     {
       blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article', social_post: 'Social post',
       x_post: 'X post', x_thread: 'X thread', linkedin_post: 'LinkedIn post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post',
+      outreach_email: 'Email', outreach_message: 'Message to send yourself', video_script: 'Video script',
     }[k] ?? k
   );
 }
@@ -581,6 +584,7 @@ async function loadDraft(id) {
   $('draft-status').innerHTML = statusLine(d);
   $('draft-events').innerHTML = d.events.map((e) => `<li>${esc(when(e.at))}: ${esc(e.to_status)}${e.note ? ` — ${esc(e.note)}` : ''}</li>`).join('');
   $('draft-sources').innerHTML = (d.meta.sources ?? []).map((s) => `<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a></li>`).join('');
+  if (window.plumeOutreach) window.plumeOutreach.wireDraft(d);
 }
 
 function statusLine(d) {

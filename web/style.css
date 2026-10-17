@@ -301,3 +301,18 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .ai-answer-text { white-space: pre-wrap; line-height: 1.6; max-height: 480px; overflow-y: auto; }
 #ai-names { width: 100%; margin-top: 4px; }
 @media (max-width: 760px) { #ai-engines { grid-template-columns: 1fr; } .voice-row { grid-template-columns: 1fr 1fr 32px; } }
+
+/* Outreach and video previews (outreach.js) */
+.or-counts { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+.or-counts .pill { background: var(--pill); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; color: var(--ink-2); }
+.or-row .or-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.or-row .or-top select { flex-shrink: 0; }
+.or-row .why { margin: 6px 0 4px; }
+.or-row .acts { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.or-row .acts .right { margin-inline-start: auto; }
+.or-row.muted a { color: var(--muted); }
+.or-details { margin-top: 10px; }
+.video-box { margin: 8px 0 12px; }
+.vid-players { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.vid-players figure { margin: 0; }
+.vid-players video { display: block; max-height: 320px; max-width: 100%; border-radius: 8px; background: #000; }

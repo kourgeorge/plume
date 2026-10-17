@@ -137,6 +137,27 @@ export const INTEGRATIONS: IntegrationDef[] = [
       { key: 'daily', env: 'REDDIT_DAILY_LIMIT', label: 'Posts per day, at most', optional: true, placeholder: '2', help: 'Approved Reddit posts beyond this wait for the next day.' },
     ],
   },
+  {
+    id: 'email',
+    label: 'Email (outreach)',
+    blurb:
+      "Send outreach emails you approve from your own mail account. Use your provider's SMTP settings; for Gmail or Outlook make an \"app password\" instead of using your normal one. Plume sends at most a few a day, never twice to the same person within 30 days, and never again to anyone who said no.",
+    fields: [
+      { key: 'host', env: 'SMTP_HOST', label: 'Mail server', placeholder: 'smtp.gmail.com' },
+      { key: 'port', env: 'SMTP_PORT', label: 'Port', optional: true, placeholder: '587' },
+      { key: 'user', env: 'SMTP_USER', label: 'Username (usually your email address)' },
+      { key: 'password', env: 'SMTP_PASSWORD', label: 'Password or app password', secret: true },
+      { key: 'from', env: 'SMTP_FROM', label: 'From', placeholder: 'Dana Levi <dana@yourcompany.com>' },
+      { key: 'replyTo', env: 'SMTP_REPLY_TO', label: 'Replies go to', optional: true, placeholder: 'leave empty to use the From address' },
+      { key: 'daily', env: 'SMTP_DAILY_LIMIT', label: 'Emails per day, at most', optional: true, placeholder: '10', help: 'Approved emails beyond this wait for the next day.' },
+    ],
+  },
+  {
+    id: 'youtube',
+    label: 'YouTube search (for finding creators)',
+    blurb: 'Optional. A free YouTube Data API key lets the influencer agent see real subscriber counts. Create one in Google Cloud Console → APIs & Services → Credentials, after turning on "YouTube Data API v3".',
+    fields: [{ key: 'key', env: 'YOUTUBE_API_KEY', label: 'API key', secret: true }],
+  },
 ];
 
 export const getIntegration = (id: string) => INTEGRATIONS.find((i) => i.id === id);
@@ -273,6 +294,14 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
       case 'reddit': {
         const { testSocial } = await import('./social/publishers');
         return await testSocial(id, env);
+      }
+      case 'email': {
+        const { testEmail } = await import('./outreach/email');
+        return await testEmail(env);
+      }
+      case 'youtube': {
+        const { testYouTube } = await import('./outreach/creators');
+        return await testYouTube(env);
       }
       default:
         return { ok: false, message: `unknown integration ${id}` };

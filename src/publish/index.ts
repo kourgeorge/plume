@@ -10,6 +10,7 @@ import { sanity } from './sanity';
 import { hubspot } from './hubspot';
 import { github } from './github';
 import { SOCIAL_PUBLISHERS } from '../social/publishers';
+import { emailPublisher } from '../outreach/email';
 
 export interface PublishResult {
   url: string | null;
@@ -52,7 +53,7 @@ export const exportFiles: Publisher = {
   },
 };
 
-export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, ...SOCIAL_PUBLISHERS, exportFiles];
+export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, ...SOCIAL_PUBLISHERS, emailPublisher, exportFiles];
 
 export function getPublisher(id: string): Publisher | undefined {
   return PUBLISHERS.find((p) => p.id === id);
@@ -61,8 +62,11 @@ export function getPublisher(id: string): Publisher | undefined {
 /** Which kinds of draft each destination takes. File export takes anything. */
 const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post'];
 const REDDIT_KINDS = ['reddit_reply', 'reddit_post'];
-const SOCIAL_TARGETS = ['x', 'linkedin', 'reddit'];
+const SOCIAL_TARGETS = ['x', 'linkedin', 'reddit', 'email'];
+/** Not for publishing anywhere: an outreach email goes to one person; a video script is filmed, not posted. */
+const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['export'] };
 export function targetsFor(kind: string): string[] {
+  if (PRIVATE_KINDS[kind]) return PRIVATE_KINDS[kind];
   if (REDDIT_KINDS.includes(kind)) return ['reddit', 'export'];
   if (kind === 'x_post' || kind === 'x_thread') return ['x', 'export'];
   if (kind === 'linkedin_post') return ['linkedin', 'export'];
@@ -74,7 +78,14 @@ export function targetsFor(kind: string): string[] {
 export function checkTarget(kind: string, targetId: string): void {
   if (targetsFor(kind).includes(targetId)) return;
   const label = getPublisher(targetId)?.label ?? targetId;
-  const what = SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind) ? 'a social post' : 'an article';
+  const what =
+    kind === 'outreach_email' || kind === 'outreach_message'
+      ? 'an outreach message'
+      : kind === 'video_script'
+        ? 'a video script'
+        : SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind)
+          ? 'a social post'
+          : 'an article';
   throw new Error(`${label} can't take ${what}. Pick one of: ${targetsFor(kind).map((t) => getPublisher(t)?.label ?? t).join(', ')}.`);
 }
 

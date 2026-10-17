@@ -3,9 +3,12 @@ import { profileComplete } from '../context/profile';
 import { seoAgent } from './seo';
 import { writerAgent } from './writer';
 import { redditAgent, socialAgent } from '../social/agents';
+import { influencerAgent } from '../outreach/creators';
+import { linksAgent } from '../outreach/links';
+import { videoAgent } from '../video/agent';
 import type { Agent } from './types';
 
-export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent];
+export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent, influencerAgent, linksAgent, videoAgent];
 
 export function getAgent(id: string): Agent | undefined {
   return AGENTS.find((a) => a.id === id);

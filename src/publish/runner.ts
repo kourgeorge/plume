@@ -1,6 +1,7 @@
 import { dueDrafts, getDraft, listDrafts, moveDraft, Draft } from '../queue';
 import { getPublisher, publishDraft } from './index';
 import { siteEnv } from '../integrations';
+import { emailDailyLimit, emailsSentToday } from '../outreach/email';
 
 let busy = false;
 
@@ -36,19 +37,23 @@ export function redditPostedToday(now = new Date()): number {
 
 /**
  * Publish everything that is approved and due. Called every minute.
- * Approved Reddit posts over the daily limit stay approved and go out on a later day — they don't fail.
+ * Approved Reddit posts and outreach emails over their daily limits stay approved and go out on a later
+ * day — they don't fail. Dry runs (no credentials) don't count against the limits.
  */
 export async function publishDue(env: NodeJS.ProcessEnv = siteEnv(), now = new Date()): Promise<number> {
   if (busy) return 0;
   busy = true;
   try {
-    let redditLeft = redditDailyLimit(env) - redditPostedToday(now);
+    const left: Record<string, number> = {
+      reddit: redditDailyLimit(env) - redditPostedToday(now),
+      email: emailDailyLimit(env) - emailsSentToday(now),
+    };
     let sent = 0;
     for (const d of dueDrafts(now)) {
-      const live = d.target === 'reddit' && getPublisher('reddit')!.configured(env);
-      if (live && redditLeft <= 0) continue;
+      const capped = d.target && d.target in left && getPublisher(d.target)!.configured(env) ? d.target : null;
+      if (capped && left[capped] <= 0) continue;
       const after = await publishOne(d.id, env);
-      if (live && after.status === 'published') redditLeft--;
+      if (capped && after.status === 'published') left[capped]--;
       sent++;
     }
     return sent;

@@ -42,6 +42,7 @@ import { Level, recentLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
 import { registerGeoRoutes } from './geoRoutes';
+import { registerOutreachRoutes } from './outreachRoutes';
 import { MAX_TRACKED, completeWeeks, listTracked, normalizeKeyword, rankingsTable, suggestKeywords, trackKeyword, untrackKeyword } from '../seo/rankings';
 import { checkSerp, clearSerpCreds, describeSerp, latestSerp, saveSerpCreds, setSerpLocation } from '../seo/serp';
 
@@ -636,6 +637,7 @@ export function buildServer(port: number): FastifyInstance {
   });
 
   registerGeoRoutes(app);
+  registerOutreachRoutes(app);
 
   return app;
 }

@@ -5,8 +5,8 @@ import { askJson, askPlain } from '../llm/client';
 import { viaProxy } from '../llm/settings';
 import { agentSystem } from '../context/profile';
 import { listCompetitors } from '../context/extra';
-import { siteUrl } from '../sites';
-import { currentSite } from '../site';
+import { getSite, siteUrl } from '../sites';
+import { currentSite, currentSiteOrNull } from '../site';
 import { log } from '../log';
 
 /**
@@ -203,7 +203,12 @@ export function brandNames(): string[] {
   const host = url ? new URL(url).hostname.replace(/^www\./, '') : currentSite();
   const bare = host.split('.')[0];
   const extra = getSetting<string[]>('brandNames', []);
-  return [...new Set([...extra, host, bare].map((n) => n.trim()).filter((n) => n.length >= 3))];
+  // "acme-widgets.com" is written "Acme Widgets" in prose; the site's own name (unless it's just the address) too.
+  const spaced = bare.replace(/[-_]+/g, ' ');
+  const slug = currentSiteOrNull();
+  const own = slug ? getSite(slug)?.name : undefined;
+  const named = own && own !== slug && own !== host ? [own] : [];
+  return [...new Set([...extra, ...named, host, bare, spaced].map((n) => n.trim()).filter((n) => n.length >= 3))];
 }
 
 export function setBrandNames(names: string[]): string[] {
