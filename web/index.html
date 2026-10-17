@@ -292,11 +292,29 @@
       </section>
     </main>
 
-    <!-- Right: quick actions (the chat assistant replaces this next) -->
-    <aside class="col right" id="col-right">
-      <h2 class="col-title">Quick actions</h2>
-      <div id="quick" class="quick"></div>
-      <p class="muted small">A chat assistant that does these for you in plain English is coming next.</p>
+    <!-- Right: the chat assistant -->
+    <aside class="col right chat-col" id="col-right">
+      <div class="chat-head">
+        <h2 class="col-title">Ask Plume</h2>
+        <span class="chat-head-actions">
+          <select id="chat-threads" title="Earlier chats"></select>
+          <button id="chat-new" class="secondary small-btn" title="Start a new chat">New</button>
+        </span>
+      </div>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <div id="chat-suggest" class="chat-suggest"></div>
+      <form id="chat-form" class="chat-form">
+        <div class="mention-box" id="mention-box" hidden></div>
+        <textarea id="chat-input" rows="3" dir="auto" placeholder="Ask anything — e.g. “write a LinkedIn post about our launch”. Type @ to point at an agent or document."></textarea>
+        <div class="chat-foot">
+          <span id="chat-cost" class="muted small"></span>
+          <button type="submit" id="chat-send">Send</button>
+        </div>
+      </form>
+      <details class="quick-wrap">
+        <summary>Quick actions</summary>
+        <div id="quick" class="quick"></div>
+      </details>
     </aside>
   </div>
 
@@ -312,5 +330,6 @@
     </div>
   </div>
   <script src="/app.js"></script>
+  <script src="/chat.js"></script>
 </body>
 </html>

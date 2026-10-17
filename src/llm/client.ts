@@ -115,6 +115,39 @@ export async function ask(opts: AskOptions): Promise<AskResult> {
   }
 }
 
+/** Web search for a conversation: Anthropic's own when going direct, Plume's (Tavily) through a gateway, else none. */
+export function chatSearchTools(): { tools: Anthropic.Beta.BetaToolUnion[]; local: boolean } {
+  const mode = searchMode();
+  if (mode === 'server') return { tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }], local: false };
+  if (mode === 'local') return { tools: LOCAL_TOOLS, local: true };
+  return { tools: [], local: false };
+}
+
+export { runLocalTool };
+
+/**
+ * One model call in a conversation the caller keeps. `messages` must only ever grow between calls
+ * (newer models reject edited history), so callers append replies exactly as returned.
+ */
+export async function converse(opts: {
+  purpose: string;
+  model: string;
+  system: Anthropic.Beta.BetaTextBlockParam[];
+  messages: Anthropic.Beta.BetaMessageParam[];
+  tools: Anthropic.Beta.BetaToolUnion[];
+  maxTokens?: number;
+  effort?: AskOptions['effort'];
+  noMoreTools?: boolean;
+}): Promise<Anthropic.Beta.BetaMessage> {
+  return callOnce(
+    { purpose: opts.purpose, model: opts.model, system: opts.system, prompt: '', maxTokens: opts.maxTokens ?? 16000, effort: opts.effort ?? 'medium' },
+    opts.messages,
+    opts.tools,
+    fallbacksOn() && !/haiku/i.test(opts.model),
+    opts.noMoreTools,
+  );
+}
+
 function finish(opts: AskOptions, msg: Anthropic.Beta.BetaMessage, sources: string[]): AskResult {
   if (msg.stop_reason === 'refusal') {
     throw new Error(`model declined (${msg.stop_details?.category ?? 'no category'}) for ${opts.purpose}`);

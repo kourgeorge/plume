@@ -56,7 +56,9 @@
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
     const api = async (path, opts = {}) => {
-      const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
+      // Only say "this is JSON" when there is a body; an empty body with that header is rejected as a bad request.
+      const headers = opts.body ? { 'content-type': 'application/json' } : {};
+      const res = await fetch(path, { ...opts, headers });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
       return data;
@@ -96,9 +98,9 @@
       for (const b of document.querySelectorAll('[data-remove]'))
         b.onclick = async () => {
           const slug = b.dataset.remove;
-          const typed = prompt(`This deletes ${slug}'s folder: its documents, drafts, results and competitor history. AI cost records stay.\n\nType the site name to confirm:`);
+          const typed = prompt(`This deletes ${slug}'s folder: its documents, drafts, results and competitor history. AI cost records stay.\n\nTo confirm, type this exactly (you can copy it):\n\n${slug}`);
           if (typed === null) return;
-          if (typed.trim().toLowerCase() !== slug) return alert('The name did not match, so nothing was removed.');
+          if (typed.trim() !== slug) return alert('That did not match exactly, so nothing was removed.');
           try {
             await api(`/api/sites/${encodeURIComponent(slug)}`, { method: 'DELETE' });
             load();

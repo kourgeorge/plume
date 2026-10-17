@@ -774,7 +774,7 @@ const TOUR = [
   { el: 'today-card', title: 'Today', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Approve, edit, skip it for today, or mark it not useful so the agent learns.' },
   { el: 'folders', title: 'Agents', text: 'One folder per agent. “Ready” means work is waiting for you, a pulsing dot means it is working right now. Open a folder to see everything it has made.' },
   { el: 'speed-chips', title: 'Health at a glance', text: 'Your site’s speed, accessibility, best-practice and SEO scores from Google, checked every morning. Click them for details and fixes.' },
-  { el: 'col-right', title: 'Quick actions', text: 'Start any job straight away. Agents that cost money start switched off — turn them on, and pick when they run, under Timetable.' },
+  { el: 'col-right', title: 'Ask Plume', text: 'Ask anything in plain words, or have it write something. It knows your documents, results and competitors. Changes it suggests wait for you to apply them, and anything it writes goes to Today first. Type @ to point at an agent or document.' },
   { el: 'cost-link', title: 'Cost and safety', text: 'See exactly what the AI has cost this month and set a monthly limit. Nothing is ever published until you approve it.' },
 ];
 let tourStep = 0;

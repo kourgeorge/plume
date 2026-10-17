@@ -4,24 +4,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const Database = require('better-sqlite3');
 
-// Build an OLD single-site data folder first, then load Plume on it: the move must happen on first use.
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-sites-'));
-{
-  const old = new Database(path.join(DIR, 'plume.db'));
-  old.exec(`CREATE TABLE pages (url TEXT PRIMARY KEY, status INTEGER, title TEXT, meta_description TEXT, canonical TEXT, h1 TEXT, headings TEXT, images_missing_alt INTEGER, has_schema INTEGER, word_count INTEGER, text TEXT, crawled_at TEXT);
-    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE llm_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, purpose TEXT NOT NULL, model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, web_searches INTEGER, cost_usd REAL, stop_reason TEXT);
-    CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, level TEXT NOT NULL, source TEXT NOT NULL, message TEXT NOT NULL);`);
-  old.prepare(`INSERT INTO settings VALUES ('siteUrl', ?), ('monthlyBudgetUsd', '25')`).run(JSON.stringify('https://www.oldsite.example'));
-  old.prepare(`INSERT INTO pages (url, status, title) VALUES ('https://www.oldsite.example/', 200, 'Old home')`).run();
-  old.prepare(`INSERT INTO llm_calls (at, purpose, model, cost_usd) VALUES ('2026-10-16T10:00:00Z', 'research:product', 'claude-opus-5-5', 0.42)`).run();
-  old.prepare(`INSERT INTO logs (at, level, source, message) VALUES ('2026-10-16T10:00:00Z', 'info', 'server', 'old line')`).run();
-  old.close();
-  fs.mkdirSync(path.join(DIR, 'profile'));
-  fs.writeFileSync(path.join(DIR, 'profile', 'product.md'), '# Old product\n');
-}
 process.env.DATA_DIR = DIR;
 delete process.env.PLUME_SITE;
 
@@ -30,23 +14,6 @@ const { withSite, currentSite, siteDir } = require('../src/site');
 const sites = require('../src/sites');
 const { readDoc, writeDoc } = require('../src/context/profile');
 const { getSetting, setSetting } = db;
-
-test('the old single-site layout moves into its own site folder, keeping usage, logs and the budget', () => {
-  const list = sites.listSites();
-  assert.deepEqual(list.map((s) => s.slug), ['oldsite.example']);
-  assert.ok(fs.existsSync(path.join(DIR, 'sites', 'oldsite.example', 'site.db')));
-  assert.ok(!fs.existsSync(path.join(DIR, 'profile')), 'old profile folder should have moved');
-  withSite('oldsite.example', () => {
-    assert.equal(readDoc('product'), '# Old product\n');
-    assert.equal(sites.siteUrl(), 'https://www.oldsite.example');
-    assert.equal(getSetting('siteUrl', null), null, 'the copy in site settings should be gone');
-    assert.equal(db.getDb().prepare('SELECT title FROM pages').get().title, 'Old home');
-  });
-  const g = db.getGlobalDb();
-  assert.deepEqual(g.prepare('SELECT site, cost_usd FROM llm_calls').get(), { site: 'oldsite.example', cost_usd: 0.42 });
-  assert.equal(g.prepare(`SELECT site FROM logs WHERE message = 'old line'`).get().site, 'oldsite.example');
-  assert.equal(db.getGlobalSetting('monthlyBudgetUsd', 0), 25);
-});
 
 test('adding sites: one folder each, same site twice is the same site, bad addresses refused', () => {
   const a = sites.addSite('https://www.alpha.example/about');

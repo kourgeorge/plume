@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { getDb } from '../db';
-import { BrowserFetch, Failed, USER_AGENT, fetchPage } from './fetchPage';
+import { BrowserFetch, Failed, USER_AGENT, fetchHttp, fetchPage } from './fetchPage';
 import { TechSignal, detectTech, mergeSignals, saveTechSignals } from './techSignals';
 
 export interface CrawledPage {
@@ -101,10 +101,25 @@ async function sitemapUrls(origin: string, fetchFn: typeof fetch): Promise<strin
   }
 }
 
+/**
+ * Some sites only answer on the www address (the bare one has no server behind it).
+ * If the address given never connects but the www version does, use www instead.
+ */
+export async function withWorkingHost(startUrl: string, fetchFn: typeof fetch): Promise<string> {
+  const u = new URL(startUrl);
+  if (u.hostname.startsWith('www.') || u.hostname.split('.').length > 3 || /^[\d.]+$/.test(u.hostname) || u.hostname.includes(':')) return startUrl;
+  const first = await fetchHttp(startUrl, fetchFn);
+  if (first.ok || first.kind !== 'unreachable') return startUrl;
+  u.hostname = `www.${u.hostname}`;
+  const second = await fetchHttp(u.toString(), fetchFn);
+  return second.ok || second.kind !== 'unreachable' ? u.toString() : startUrl;
+}
+
 /** Crawl one site breadth-first, sitemap URLs first. Saves every page to the `pages` table. */
 export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Promise<CrawledPage[]> {
   const fetchFn = opts.fetchFn ?? fetch;
   const maxPages = opts.maxPages ?? 40;
+  startUrl = await withWorkingHost(startUrl, fetchFn);
   const origin = new URL(startUrl).origin;
 
   let disallow: string[] = [];
@@ -157,8 +172,20 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
     for (const l of links) enqueue(l, r.url);
   }
   if (!pages.length) throw new CrawlError(startUrl, failures);
+  forgetGonePages(seen);
   saveTechSignals(mergeSignals(signals));
   return pages;
+}
+
+/**
+ * Drop saved pages the site no longer links to or lists in its sitemap. `seen` holds every address found this
+ * time, including ones the page limit stopped us from opening, so those keep their older copy.
+ */
+function forgetGonePages(seen: Set<string>): void {
+  const db = getDb();
+  const gone = (db.prepare('SELECT url FROM pages').all() as { url: string }[]).map((r) => r.url).filter((u) => !seen.has(u));
+  const del = db.prepare('DELETE FROM pages WHERE url = ?');
+  db.transaction(() => gone.forEach((u) => del.run(u)))();
 }
 
 /** Raised when not a single page could be read; the message says why in plain English. */

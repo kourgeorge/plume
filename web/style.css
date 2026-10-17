@@ -214,3 +214,48 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .tech-list { list-style: none; padding: 0; display: grid; gap: 6px; max-width: 860px; }
 .tech-list li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
 .tech-kind { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-inline-end: 6px; }
+
+/* ---- chat ---- */
+.chat-col { display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
+.chat-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chat-head .col-title { margin: 0; }
+.chat-head-actions { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.chat-head-actions select { max-width: 120px; font-size: 13px; padding: 4px 6px; }
+.chat-head .col-title { white-space: nowrap; }
+.chat-head-actions { flex-shrink: 1; }
+.chat-head .small-btn { margin: 0; }
+.chat-log { flex: 1; min-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.chat-empty { font-size: 14px; padding: 8px 2px; }
+.msg { border-radius: 10px; padding: 9px 11px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.msg.you { background: var(--accent-soft); align-self: flex-end; max-width: 92%; white-space: pre-wrap; }
+.msg.assistant { background: var(--bg); border: 1px solid var(--line); }
+.msg.error { background: transparent; border: 1px solid var(--bad); color: var(--bad); font-size: 13px; }
+.msg-body.doc { background: none; border: 0; padding: 0; max-width: none; line-height: 1.55; }
+.msg-body.doc h1 { font-size: 16px; } .msg-body.doc h2 { font-size: 15px; margin: 12px 0 4px; } .msg-body.doc p { margin: 6px 0; }
+.steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.steps span { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.thinking { color: var(--muted); }
+.dot-anim { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 1s infinite; }
+.pulse-text { animation: pulse 1.6s infinite; }
+.act { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 10px; margin-top: 8px; font-size: 13px; }
+.act-head { margin-bottom: 2px; }
+.act-foot { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.act .small-btn { margin: 0; }
+.diff { font: 12px/1.45 ui-monospace, Menlo, monospace; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-top: 4px; }
+.diff div { padding: 0 6px; white-space: pre-wrap; }
+.d-add { background: color-mix(in srgb, var(--good) 14%, transparent); }
+.d-del { background: color-mix(in srgb, var(--bad) 14%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent); }
+.d-gap { color: var(--muted); font-style: italic; text-align: center; background: var(--bg); }
+.chat-suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn { background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font-weight: 500; font-size: 13px; padding: 5px 10px; text-align: left; }
+.chip-btn:hover { border-color: var(--accent); }
+.chat-form { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.chat-form textarea { width: 100%; resize: vertical; min-height: 64px; font-size: 14px; }
+.chat-foot { display: flex; justify-content: space-between; align-items: center; }
+.mention-box { position: absolute; bottom: 100%; left: 0; right: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.15); padding: 4px; z-index: 6; display: flex; flex-direction: column; }
+.mention-box button { background: transparent; color: var(--ink); text-align: left; font-weight: 500; font-size: 13px; padding: 6px 8px; }
+.mention-box button.on, .mention-box button:hover { background: var(--accent-soft); }
+.quick-wrap summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.quick-wrap .quick { margin-top: 8px; }
+.col.right.chat-col { max-height: calc(100vh - 54px); }
+@media (max-width: 1100px) { .col.right.chat-col { max-height: none; } .chat-log { max-height: 60vh; } }

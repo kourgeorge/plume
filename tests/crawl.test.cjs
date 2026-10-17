@@ -47,7 +47,34 @@ test('crawlSite follows links, honours robots, saves SEO facts', async () => {
   assert.equal(getDb().prepare('SELECT COUNT(*) n FROM pages').get().n, 2);
 });
 
+test('pages that are gone from the site are dropped, pages only skipped by the limit are kept', async () => {
+  const db = getDb();
+  db.prepare(`INSERT INTO pages (url, status, title) VALUES ('https://acme.test/old-page', 200, 'Gone')`).run();
+  await crawlSite('https://acme.test/', { fetchFn: fakeFetch, browserFn: null });
+  assert.ok(!db.prepare(`SELECT 1 FROM pages WHERE url = 'https://acme.test/old-page'`).get(), 'a page the site no longer has should be removed');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM pages').get().n, 2);
+  // With a limit of 1, /pricing is found but not opened: its saved copy must stay.
+  await crawlSite('https://acme.test/', { fetchFn: fakeFetch, browserFn: null, maxPages: 1 });
+  assert.ok(db.prepare(`SELECT 1 FROM pages WHERE url = 'https://acme.test/pricing'`).get(), 'a page skipped by the limit should keep its copy');
+});
+
 test('maxPages caps the crawl', async () => {
   const pages = await crawlSite('https://acme.test/', { fetchFn: fakeFetch, browserFn: null, maxPages: 1 });
   assert.equal(pages.length, 1);
+});
+
+test('withWorkingHost switches to www only when the bare address never connects', async () => {
+  const { withWorkingHost } = require('../src/research/crawl');
+  const html = '<html><body>' + 'word '.repeat(80) + '</body></html>';
+  const timeout = () => Object.assign(new Error('x'), { name: 'TimeoutError' });
+  const wwwOnly = async (url) => {
+    if (String(url).startsWith('https://bare.test')) throw timeout();
+    return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  assert.equal(await withWorkingHost('https://bare.test/', wwwOnly), 'https://www.bare.test/');
+  // Bare address works: keep it.
+  assert.equal(await withWorkingHost('https://acme.test/', fakeFetch), 'https://acme.test/');
+  // Both dead: keep what the user typed.
+  const dead = async () => { throw timeout(); };
+  assert.equal(await withWorkingHost('https://bare.test/', dead), 'https://bare.test/');
 });

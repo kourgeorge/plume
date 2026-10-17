@@ -3,3 +3,4 @@ dist/
 data/
 .env
 data-backup-*/
+.DS_Store

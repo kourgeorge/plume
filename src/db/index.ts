@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from '../config';
-import { currentSite, siteDir, slugFor } from '../site';
+import { currentSite, siteDir } from '../site';
 
 const SITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pages (
@@ -54,9 +54,7 @@ CREATE TABLE IF NOT EXISTS draft_events (
   to_status TEXT NOT NULL,
   note TEXT
 );
--- One row per day, so any window (7, 28, 30 days) can be summed. Replaces the old 28-day snapshot tables.
-DROP TABLE IF EXISTS gsc_rows;
-DROP TABLE IF EXISTS ga_pages;
+-- One row per day, so any window (7, 28, 30 days) can be summed.
 CREATE TABLE IF NOT EXISTS gsc_daily (
   date TEXT NOT NULL,             -- YYYY-MM-DD
   query TEXT NOT NULL,
@@ -115,11 +113,39 @@ CREATE TABLE IF NOT EXISTS people (
   linkedin_url TEXT NOT NULL DEFAULT '',
   added_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  system TEXT NOT NULL,           -- JSON system blocks, frozen when the chat starts so history stays append-only
+  running INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  notes TEXT NOT NULL DEFAULT '[]', -- JSON: facts to tell the model with the next message ("the owner applied …")
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL,
+  role TEXT NOT NULL,             -- user | assistant, as sent to the model
+  kind TEXT NOT NULL,             -- text (the owner typed it) | assistant | tool (tool results)
+  content TEXT NOT NULL,          -- JSON content blocks, exactly as sent or received
+  at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,             -- doc-change | draft | job | competitor
+  data TEXT NOT NULL,             -- JSON
+  status TEXT NOT NULL,           -- pending | applied | discarded | done | undone
+  at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON
 );
 -- Lookups the app makes on every page load or task run.
+CREATE INDEX IF NOT EXISTS chat_messages_by_thread ON chat_messages (thread_id, id);
+CREATE INDEX IF NOT EXISTS chat_actions_by_thread ON chat_actions (thread_id);
 CREATE INDEX IF NOT EXISTS drafts_by_status ON drafts (status, agent);
 CREATE INDEX IF NOT EXISTS draft_events_by_draft ON draft_events (draft_id);
 CREATE INDEX IF NOT EXISTS jobs_by_kind ON jobs (kind, status);
@@ -128,8 +154,6 @@ CREATE INDEX IF NOT EXISTS feedback_by_agent ON feedback (agent, id);
 CREATE INDEX IF NOT EXISTS snapshots_by_competitor ON competitor_snapshots (competitor_id, at);
 CREATE INDEX IF NOT EXISTS changes_by_competitor ON competitor_changes (competitor_id, dismissed);
 CREATE INDEX IF NOT EXISTS gsc_by_query ON gsc_daily (query, date);
--- The site's address lives only in the shared site list; drop any old copy.
-DELETE FROM settings WHERE key = 'siteUrl';
 `;
 
 /** Shared by every site: the site list, AI usage (one budget for all sites), the event log, app-wide settings. */
@@ -186,7 +210,6 @@ function open(file: string, schema: string): Database.Database {
 /** The shared database (site list, AI usage, logs, app-wide settings). */
 export function getGlobalDb(): Database.Database {
   if (globalDb) return globalDb;
-  migrateSingleSiteLayout();
   globalDb = open(path.join(DATA_DIR, 'plume.db'), GLOBAL_SCHEMA);
   return globalDb;
 }
@@ -195,7 +218,6 @@ export function getGlobalDb(): Database.Database {
 export function getDb(slug = currentSite()): Database.Database {
   let d = siteDbs.get(slug);
   if (!d) {
-    getGlobalDb(); // makes sure an old single-site layout has been moved first
     d = open(path.join(siteDir(slug), 'site.db'), SITE_SCHEMA);
     siteDbs.set(slug, d);
   }
@@ -237,51 +259,4 @@ export function setGlobalSetting(key: string, value: unknown): void {
   getGlobalDb()
     .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, JSON.stringify(value));
-}
-
-/**
- * Before multiple sites, everything lived in data/plume.db + data/profile + data/exports.
- * Move that into data/sites/<slug>/ and start a fresh shared database, keeping the AI usage and logs.
- */
-function migrateSingleSiteLayout(): void {
-  const oldFile = path.join(DATA_DIR, 'plume.db');
-  if (!fs.existsSync(oldFile)) return;
-  const probe = new Database(oldFile, { readonly: true });
-  const hasSiteTables = !!probe.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pages'`).get();
-  const siteRow = hasSiteTables ? (probe.prepare(`SELECT value FROM settings WHERE key = 'siteUrl'`).get() as { value: string } | undefined) : undefined;
-  probe.close();
-  if (!hasSiteTables) return;
-
-  const url = siteRow ? (JSON.parse(siteRow.value) as string) : null;
-  const slug = url ? slugFor(url) : 'unnamed-site';
-  const dest = siteDir(slug);
-  fs.mkdirSync(dest, { recursive: true });
-  for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(oldFile + ext)) fs.renameSync(oldFile + ext, path.join(dest, 'site.db' + ext));
-  for (const sub of ['profile', 'exports']) {
-    const from = path.join(DATA_DIR, sub);
-    if (fs.existsSync(from) && !fs.existsSync(path.join(dest, sub))) fs.renameSync(from, path.join(dest, sub));
-  }
-
-  const g = open(oldFile, GLOBAL_SCHEMA);
-  const site = new Database(path.join(dest, 'site.db'));
-  const now = new Date().toISOString();
-  g.prepare('INSERT OR IGNORE INTO sites (slug, url, name, created_at) VALUES (?, ?, ?, ?)').run(slug, url ?? 'https://unknown.invalid', slug, now);
-  const copy = (table: string, cols: string[]) => {
-    if (!site.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table)) return;
-    const rows = site.prepare(`SELECT ${cols.join(', ')} FROM ${table}`).all() as Record<string, unknown>[];
-    const ins = g.prepare(`INSERT INTO ${table} (site, ${cols.join(', ')}) VALUES (?, ${cols.map(() => '?').join(', ')})`);
-    g.transaction(() => rows.forEach((r) => ins.run(slug, ...cols.map((c) => r[c]))))();
-    site.exec(`DROP TABLE ${table}`);
-  };
-  copy('llm_calls', ['at', 'purpose', 'model', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'web_searches', 'cost_usd', 'stop_reason']);
-  copy('logs', ['at', 'level', 'source', 'message']);
-  // App-wide settings move to the shared database.
-  for (const key of ['monthlyBudgetUsd', 'budgetWarned']) {
-    const r = site.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    if (r) g.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, r.value);
-  }
-  site.prepare(`DELETE FROM settings WHERE key = 'siteUrl'`).run();
-  site.close();
-  g.close();
-  console.log(`Moved the existing site data into ${dest}`);
 }

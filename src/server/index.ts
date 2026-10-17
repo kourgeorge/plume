@@ -24,6 +24,9 @@ import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite,
 import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
 import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
+import {
+  MENTIONS, applyAction, createThread, deleteThread, discardAction, getThread, isThreadRunning, listThreads, sendMessage, showThread, suggestions, undoAction,
+} from '../chat';
 import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
@@ -461,6 +464,45 @@ export function buildServer(port: number): FastifyInstance {
     const body = buildLlmsTxt();
     return body ? reply.type('text/plain; charset=utf-8').header('content-disposition', 'attachment; filename="llms.txt"').send(body) : reply.code(404).send('not ready');
   });
+
+  // ---- chat ----
+  app.get('/api/chat', async () => ({ threads: listThreads(), suggestions: suggestions(), mentions: MENTIONS(), aiReady: !llmProblem(), aiProblem: llmProblem() }));
+  app.get<{ Params: { id: string } }>('/api/chat/:id', async (req, reply) => {
+    try {
+      return showThread(Number(req.params.id));
+    } catch (err: any) {
+      return reply.code(404).send({ error: err.message });
+    }
+  });
+  /** Start a chat (no id) or continue one. Answers at once; the reply is written in the background. */
+  app.post<{ Body: { threadId?: number; text?: string } }>('/api/chat', async (req, reply) => {
+    const text = (req.body?.text ?? '').trim();
+    if (!text) return reply.code(400).send({ error: 'write a message first' });
+    if (text.length > 20_000) return reply.code(400).send({ error: 'that message is too long (keep it under 20,000 characters)' });
+    const problem = llmProblem();
+    if (problem) return reply.code(400).send({ error: problem });
+    let id = req.body?.threadId;
+    if (id && !getThread(id)) return reply.code(404).send({ error: 'that chat no longer exists' });
+    if (id && isThreadRunning(id)) return reply.code(409).send({ error: 'the assistant is still answering — wait for it to finish' });
+    if (!id) id = createThread(text).id;
+    void sendMessage(id, text);
+    return { threadId: id };
+  });
+  app.delete<{ Params: { id: string } }>('/api/chat/:id', async (req, reply) => {
+    const id = Number(req.params.id);
+    if (isThreadRunning(id)) return reply.code(409).send({ error: 'wait for the answer to finish before deleting this chat' });
+    deleteThread(id);
+    return { ok: true };
+  });
+  for (const [verb, fn] of [['apply', applyAction], ['discard', discardAction], ['undo', undoAction]] as const) {
+    app.post<{ Params: { id: string } }>(`/api/chat/actions/:id/${verb}`, async (req, reply) => {
+      try {
+        return fn(Number(req.params.id));
+      } catch (err: any) {
+        return reply.code(400).send({ error: err.message });
+      }
+    });
+  }
 
   // ---- Today ----
   app.get('/api/today', async () => ({ items: todayFeed(), ...todayProgress() }));
