@@ -14,11 +14,14 @@ export function log(level: Level, source: string, message: string): void {
   (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(`[${site ? `${site} ` : ''}${source}] ${message}`);
 }
 
-/** This site's log lines plus Plume's own (site-less) ones, newest first. */
+/**
+ * This site's log lines, newest first. Plume's own lines (starting up, the scheduler) are about no site, so
+ * they only show here when they are warnings or errors every site should see, like "AI is off".
+ */
 export function recentLogs(opts: { limit?: number; source?: string; level?: Level } = {}) {
   const site = currentSiteOrNull();
-  const where: string[] = ['(site IS NULL OR site = ?)'];
-  const args: unknown[] = [site];
+  const where: string[] = [site ? `(site = ? OR (site IS NULL AND level != 'info'))` : 'site IS NULL'];
+  const args: unknown[] = site ? [site] : [];
   if (opts.source) (where.push('source = ?'), args.push(opts.source));
   if (opts.level) (where.push('level = ?'), args.push(opts.level));
   return getGlobalDb()

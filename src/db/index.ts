@@ -297,6 +297,8 @@ function open(file: string, schema: string): Database.Database {
 export function getGlobalDb(): Database.Database {
   if (globalDb) return globalDb;
   globalDb = open(path.join(DATA_DIR, 'plume.db'), GLOBAL_SCHEMA);
+  // Before Plume had several sites, its own start-up lines were filed under the one site. They are about Plume.
+  globalDb.prepare(`UPDATE logs SET site = NULL WHERE site IS NOT NULL AND source IN ('server', 'scheduler') AND (message LIKE 'Plume is running at %' OR message LIKE 'started: %')`).run();
   return globalDb;
 }
 
