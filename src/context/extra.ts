@@ -1,6 +1,6 @@
 import { getDb, getSetting, setSetting } from '../db';
 
-/** Everything the user adds by hand that isn't one of the five research documents. */
+/** Everything the user adds by hand that isn't one of the research documents. */
 
 // ---------------------------------------------------------------- competitors
 

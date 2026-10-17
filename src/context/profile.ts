@@ -8,13 +8,19 @@ import { feedbackNote } from '../feedback';
 import { extraContext } from './extra';
 import { instructionsNote } from '../agents/instructions';
 
-/** The five documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable. */
+/**
+ * The documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable,
+ * and research writes them in this order, so later ones build on earlier ones.
+ * `core` ones must exist before agents run; the others came later, so sites researched before them still work.
+ */
 export const PROFILE_DOCS = [
-  { id: 'product', title: 'Product', brief: 'Overview, who it is for, the problems it solves, key features, pricing, proof points, the main action the site asks visitors to take, and a "Tech signals" section (what the site is built with and connected to).' },
-  { id: 'strategy', title: 'Marketing strategy', brief: 'Positioning, ideal customer profiles, the main channels to win on and why, 90-day goals.' },
-  { id: 'competitors', title: 'Competitors', brief: 'Main competitors, how each positions itself, their strengths and gaps, where we can win.' },
-  { id: 'voice', title: 'Brand voice', brief: 'Tone, vocabulary to use and avoid, sentence style, examples of on-brand and off-brand lines.' },
-  { id: 'content-plan', title: 'Content plan', brief: 'Content pillars, priority topics and keywords, formats per channel, a first month of ideas.' },
+  { id: 'product', core: true, title: 'Product', brief: 'Overview, who it is for, the problems it solves, key features, pricing, proof points, the main action the site asks visitors to take, and a "Tech signals" section (what the site is built with and connected to).' },
+  { id: 'strategy', core: true, title: 'Marketing strategy', brief: 'Positioning, ideal customer profiles, the main channels to win on and why, 90-day goals.' },
+  { id: 'competitors', core: true, title: 'Competitors', brief: 'Main competitors, how each positions itself, their strengths and gaps, where we can win.' },
+  { id: 'voice', core: true, title: 'Brand voice', brief: 'Tone, vocabulary to use and avoid, sentence style, examples of on-brand and off-brand lines.' },
+  { id: 'design', core: false, title: 'Design guide', brief: 'The look of the brand, for anyone making images, social graphics or pages: the colour palette (with hex codes and what each colour is for), fonts for headings and body text, logo use, the style of photos and illustrations, layout habits (spacing, buttons, corners), and do and don\'t examples. Use only the colours and fonts detected on the site; when you suggest something the site does not already use, mark it "(suggestion)".' },
+  { id: 'content-strategy', core: false, title: 'Content strategy', brief: 'Why the business publishes and what it should achieve: goals and how to measure them, the audiences and what each needs at each stage (finding us, comparing, buying, staying), the topics we have the right to own, how content leads to the main action, which channels carry which kind of content, how often to publish, and what we will not write about. This is the "why and what"; the content plan that follows is the "when".' },
+  { id: 'content-plan', core: true, title: 'Content plan', brief: 'Content pillars, priority topics and keywords, formats per channel, a first month of ideas. Follow the content strategy.' },
 ] as const;
 
 export type ProfileDocId = (typeof PROFILE_DOCS)[number]['id'];
@@ -46,8 +52,9 @@ export function docWrittenAt(id: ProfileDocId, dir = profileDir()): string | nul
   }
 }
 
+/** Ready for agents: every core document exists. The newer documents are read when present but never block. */
 export function profileComplete(dir = profileDir()): boolean {
-  return PROFILE_DOCS.every((d) => readDoc(d.id, dir) !== null);
+  return PROFILE_DOCS.every((d) => !d.core || readDoc(d.id, dir) !== null);
 }
 
 function safeExtra(): string | null {
@@ -68,7 +75,7 @@ function safeNotes(): string | null {
 }
 
 /**
- * System-prompt blocks for any agent: its own role first, then all five docs in one cached block.
+ * System-prompt blocks for any agent: its own role first, then all the docs in one cached block.
  * Docs are never shortened — an agent working from a clipped voice guide drifts off-brand.
  */
 export function agentSystem(

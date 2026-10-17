@@ -155,7 +155,7 @@ function renderQuick() {
     ['Check my site', async () => ((location.hash = '#check'), await runAudit())],
     ['Check page speed', async () => ((location.hash = '#speed'), await runSpeed())],
     ['Get latest Google data', async () => ((location.hash = '#results'), await pullGoogle())],
-    ['Research my site again', () => confirm('Research the whole site again? This replaces all five documents, including your edits.') && runResearch({})],
+    ['Research my site again', () => confirm('Research the whole site again? This replaces all the documents, including your edits.') && runResearch({})],
   ];
   $('quick').innerHTML = actions.map(([label], i) => `<button class="secondary" data-q="${i}">${esc(label)}</button>`).join('');
   for (const b of $('quick').querySelectorAll('button')) b.onclick = () => actions[Number(b.dataset.q)][1]().catch?.((e) => alert(e.message));

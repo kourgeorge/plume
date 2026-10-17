@@ -22,12 +22,14 @@ test('agentSystem includes every doc in full, in fixed order, cached', () => {
   assert.match(role.text, /^You write tweets.\n\nWrite all customer-facing content/);
 });
 
-test('profileComplete needs all five docs', () => {
+test('profileComplete needs the five core docs; design guide and content strategy never block agents', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-prof-'));
-  for (const d of PROFILE_DOCS.slice(0, 4)) writeDoc(d.id, '# x', dir);
+  for (const id of ['product', 'strategy', 'competitors', 'voice']) writeDoc(id, '# x', dir);
   assert.equal(profileComplete(dir), false);
   writeDoc('content-plan', '# x', dir);
-  assert.equal(profileComplete(dir), true);
+  assert.equal(profileComplete(dir), true, 'a site researched before the new documents existed must keep working');
+  assert.deepEqual(PROFILE_DOCS.filter((d) => !d.core).map((d) => d.id), ['design', 'content-strategy']);
+  assert.ok(PROFILE_DOCS.findIndex((d) => d.id === 'content-strategy') < PROFILE_DOCS.findIndex((d) => d.id === 'content-plan'), 'the plan builds on the strategy');
 });
 
 test('isProfileDocId rejects path tricks', () => {

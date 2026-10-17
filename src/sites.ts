@@ -13,6 +13,7 @@ export interface Site {
 
 export interface SiteSummary extends Site {
   docsWritten: number;
+  docsTotal: number;
   waiting: number;
   published: number;
 }
@@ -35,7 +36,7 @@ export function siteSummaries(): SiteSummary[] {
   return listSites().map((s) =>
     withSite(s.slug, () => {
       const count = (status: string) => (getDb().prepare('SELECT COUNT(*) n FROM drafts WHERE status = ?').get(status) as { n: number }).n;
-      return { ...s, docsWritten: PROFILE_DOCS.filter((d) => readDoc(d.id) !== null).length, waiting: count('draft'), published: count('published') };
+      return { ...s, docsWritten: PROFILE_DOCS.filter((d) => readDoc(d.id) !== null).length, docsTotal: PROFILE_DOCS.length, waiting: count('draft'), published: count('published') };
     }),
   );
 }

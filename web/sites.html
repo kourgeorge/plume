@@ -84,7 +84,7 @@
                   <span class="site-title">${esc(s.name)}</span>
                   <span class="muted small">${esc(s.url)}</span>
                   <span class="site-stats">
-                    <span>${s.docsWritten === 5 ? 'Research done' : s.docsWritten ? `Research ${s.docsWritten}/5` : 'Not researched yet'}</span>
+                    <span>${s.docsWritten === s.docsTotal ? 'Research done' : s.docsWritten ? `Research ${s.docsWritten}/${s.docsTotal}` : 'Not researched yet'}</span>
                     ${s.waiting ? `<span class="ready">${s.waiting} waiting for you</span>` : ''}
                     ${s.published ? `<span>${s.published} published</span>` : ''}
                   </span>

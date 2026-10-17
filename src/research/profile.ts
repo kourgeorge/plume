@@ -5,6 +5,7 @@ import { crawlSite, CrawledPage } from './crawl';
 import { closeBrowser } from './fetchPage';
 import { extractCompetitors } from './competitors';
 import { techSummary } from './techSignals';
+import { designSummary, readDesign } from './design';
 import { log } from '../log';
 import { finishJob, startJob, updateJob } from '../jobs';
 import { detectLanguage, languageName, setContentLanguage } from '../context/language';
@@ -33,8 +34,9 @@ async function writeProfileDoc(id: ProfileDocId, url: string, digest: string): P
   const earlier = PROFILE_DOCS.slice(0, PROFILE_DOCS.indexOf(spec))
     .map((d) => `<doc id="${d.id}">\n${readDoc(d.id) ?? ''}\n</doc>`)
     .join('\n\n');
-  const needsWeb = id === 'competitors' || id === 'strategy' || id === 'content-plan';
+  const needsWeb = id === 'competitors' || id === 'strategy' || id === 'content-strategy' || id === 'content-plan';
   const tech = id === 'product' ? techSummary() : null;
+  const design = id === 'design' ? designSummary(await readDesign(url)) : null;
 
   const { text, sources } = await ask({
     purpose: `research:${id}`,
@@ -46,6 +48,7 @@ async function writeProfileDoc(id: ProfileDocId, url: string, digest: string): P
       `Write the "${spec.title}" document. It should cover: ${spec.brief}\n\n` +
       (earlier ? `Documents already written (stay consistent with them):\n${earlier}\n\n` : '') +
       (tech ? `Detected from the site's code (facts — use them for the "Tech signals" section, add nothing):\n${tech}\n\n` : '') +
+      (design ? `Read from the site's stylesheets (facts — base the palette and fonts on these; colours used only a few times are likely accents or leftovers):\n${design}\n\n` : '') +
       (needsWeb ? 'Use web search to check competitors and the market; cite what you find.' : 'Work from the site content only.'),
   });
 
@@ -53,7 +56,7 @@ async function writeProfileDoc(id: ProfileDocId, url: string, digest: string): P
   writeDoc(id, extra.length ? `${text.trim()}\n\n${extra.map((s) => `- ${s}`).join('\n')}` : text);
 }
 
-/** Full onboarding: crawl, then write the five docs in order. Runs in the background; returns the job id. */
+/** Full onboarding: crawl, then write the documents in order. Runs in the background; returns the job id. */
 export function startResearch(url: string, only?: ProfileDocId): number {
   const jobId = startJob('research', `Reading ${url}`);
   (async () => {
