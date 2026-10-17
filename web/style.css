@@ -336,6 +336,10 @@ input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
 .llm-card > :last-child { margin-bottom: 24px; }
 .llm-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 16px 24px; list-style: none; }
 .llm-head::-webkit-details-marker { display: none; }
+.syslog-filters { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 4px 0 12px; }
+.syslog-filters label { display: inline-flex; align-items: center; gap: 6px; }
+.syslog-table td:nth-child(2) { white-space: nowrap; }
+.syslog-table td:last-child { overflow-wrap: anywhere; }
 .llm-title { display: inline-flex; align-items: center; gap: 8px; }
 .llm-head h2 { margin: 0; font-size: 15px; }
 .llm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }

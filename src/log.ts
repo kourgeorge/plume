@@ -14,19 +14,37 @@ export function log(level: Level, source: string, message: string): void {
   (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(`[${site ? `${site} ` : ''}${source}] ${message}`);
 }
 
-/**
- * This site's log lines, newest first. Plume's own lines (starting up, the scheduler) are about no site, so
- * they only show here when they are warnings or errors every site should see, like "AI is off".
- */
-export function recentLogs(opts: { limit?: number; source?: string; level?: Level } = {}) {
-  const site = currentSiteOrNull();
-  const where: string[] = [site ? `(site = ? OR (site IS NULL AND level != 'info'))` : 'site IS NULL'];
-  const args: unknown[] = site ? [site] : [];
+export interface LogQuery {
+  limit?: number;
+  source?: string;
+  level?: Level;
+  /** Only warnings and errors. */
+  problems?: boolean;
+}
+
+function query(where: string[], args: unknown[], opts: LogQuery) {
   if (opts.source) (where.push('source = ?'), args.push(opts.source));
   if (opts.level) (where.push('level = ?'), args.push(opts.level));
+  if (opts.problems) where.push(`level != 'info'`);
   return getGlobalDb()
     .prepare(`SELECT at, site, level, source, message FROM logs WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`)
-    .all(...args, opts.limit ?? 200);
+    .all(...args, opts.limit ?? 200) as { at: string; site: string | null; level: Level; source: string; message: string }[];
+}
+
+/** What happened on this website, newest first: its own actions only. Plume's own lines are in `systemLogs`. */
+export function recentLogs(opts: LogQuery = {}) {
+  const site = currentSiteOrNull();
+  return site ? query(['site = ?'], [site], opts) : query(['site IS NULL'], [], opts);
+}
+
+/**
+ * The whole system's log: Plume itself (start-up, AI connection, scheduler) and every website, newest first.
+ * `site` narrows it to one website; `site: ''` to Plume's own lines.
+ */
+export function systemLogs(opts: LogQuery & { site?: string } = {}) {
+  if (opts.site === '') return query(['site IS NULL'], [], opts);
+  if (opts.site) return query(['site = ?'], [opts.site], opts);
+  return query(['1 = 1'], [], opts);
 }
 
 /** Keep the log from growing forever: drop entries older than 60 days. */

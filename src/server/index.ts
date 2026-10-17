@@ -38,7 +38,7 @@ import { checkCompetitor, getSuggestion, openChanges, lastChecked, listScans, op
 import { extractCompetitors } from '../research/competitors';
 import { buildLlmsTxt } from '../research/llmstxt';
 import { closeBrowser } from '../research/fetchPage';
-import { Level, recentLogs } from '../log';
+import { Level, recentLogs, systemLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
 import { registerGeoRoutes } from './geoRoutes';
@@ -67,7 +67,7 @@ export function buildServer(port: number): FastifyInstance {
 
   // Which website a request is for: the dashboard sends it as a header; plain links (downloads, Google sign-in) as ?site=.
   // Everything the request does, including background work it starts, then happens inside that site.
-  const SITE_FREE = [/^\/api\/sites(\/|$|\?)/, /^\/api\/budget(\?|$)/, /^\/api\/google\/callback/, /^\/api\/llm(\/|$|\?)/];
+  const SITE_FREE = [/^\/api\/system-logs(\?|$)/, /^\/api\/sites(\/|$|\?)/, /^\/api\/budget(\?|$)/, /^\/api\/google\/callback/, /^\/api\/llm(\/|$|\?)/];
   app.addHook('onRequest', (req, reply, done) => {
     if (!req.url.startsWith('/api/')) return done();
     const raw = (req.headers['x-plume-site'] as string | undefined) ?? (req.query as Record<string, string> | undefined)?.site;
@@ -448,6 +448,10 @@ export function buildServer(port: number): FastifyInstance {
     return runTask(req.params.id);
   });
 
+  /** Plume's own log and every website's, for the website list. Not tied to one site. */
+  app.get<{ Querystring: { site?: string; problems?: string; limit?: string } }>('/api/system-logs', async (req) =>
+    systemLogs({ site: req.query.site, problems: req.query.problems === '1', limit: Math.min(Number(req.query.limit ?? 300), 1000) }),
+  );
   app.get<{ Querystring: { source?: string; level?: Level; limit?: string } }>('/api/logs', async (req) =>
     recentLogs({ source: req.query.source, level: req.query.level, limit: Math.min(Number(req.query.limit ?? 200), 1000) }),
   );

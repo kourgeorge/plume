@@ -61,6 +61,21 @@
       </form>
       <ul id="llm-checks" class="item-list"></ul>
     </details>
+
+    <details class="card llm-card" id="syslog">
+      <summary class="llm-head">
+        <span class="llm-title"><h2>System log</h2></span>
+        <span id="syslog-status" class="small muted"></span>
+        <span class="llm-toggle small muted">Show</span>
+      </summary>
+      <p class="muted small">Everything Plume does, across all websites: starting up, the AI connection, timed tasks, and each website's own actions. Each website's own activity is also on its Timetable page.</p>
+      <div class="syslog-filters">
+        <label class="small">Website <select id="syslog-site"><option value="">All</option><option value="-">Plume itself</option></select></label>
+        <label class="small check"><input type="checkbox" id="syslog-problems"> Only warnings and errors</label>
+        <button type="button" id="syslog-refresh" class="secondary small-btn">Refresh</button>
+      </div>
+      <table class="syslog-table"><thead><tr><th>Time</th><th>Website</th><th>From</th><th>Message</th></tr></thead><tbody id="syslog-rows"></tbody></table>
+    </details>
   </main>
 
   <script>
@@ -238,8 +253,34 @@
       loadLlm();
     };
 
-    load().catch((err) => ($('site-grid').textContent = err.message));
+    // ---- system log: Plume's own lines and every website's
+    let siteNames = {};
+    async function loadSyslog() {
+      const pick = $('syslog-site').value;
+      const q = new URLSearchParams({ limit: '300', ...(pick === '-' ? { site: '' } : pick ? { site: pick } : {}), ...($('syslog-problems').checked ? { problems: '1' } : {}) });
+      const rows = await api(`/api/system-logs?${q}`);
+      const problems = rows.filter((r) => r.level !== 'info').length;
+      $('syslog-status').textContent = `${rows.length} line${rows.length === 1 ? '' : 's'}${problems && !$('syslog-problems').checked ? ` · ${problems} warning${problems === 1 ? '' : 's'} or error${problems === 1 ? '' : 's'}` : ''}`;
+      const at = (iso) => new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+      $('syslog-rows').innerHTML = rows.length
+        ? rows.map((r) => `<tr class="level-${esc(r.level)}"><td><small>${esc(at(r.at))}</small></td><td>${r.site ? `<a href="/s/${encodeURIComponent(r.site)}/#logs">${esc(siteNames[r.site] ?? r.site)}</a>` : '<span class="muted">Plume</span>'}</td><td>${esc(r.source)}</td><td dir="auto">${esc(r.message)}</td></tr>`).join('')
+        : '<tr><td colspan="4" class="muted">Nothing logged.</td></tr>';
+    }
+    $('syslog').ontoggle = () => $('syslog').open && loadSyslog().catch((err) => ($('syslog-status').textContent = err.message));
+    $('syslog-site').onchange = $('syslog-problems').onchange = $('syslog-refresh').onclick = () => loadSyslog().catch((err) => alert(err.message));
+
+    load()
+      .then(() => api('/api/sites'))
+      .then((sites) => {
+        siteNames = Object.fromEntries(sites.map((x) => [x.slug, x.name]));
+        $('syslog-site').insertAdjacentHTML('beforeend', sites.map((x) => `<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join(''));
+      })
+      .catch((err) => ($('site-grid').textContent = err.message));
     loadLlm().catch((err) => ($('llm-status').textContent = err.message));
+    if (location.hash === '#syslog') {
+      $('syslog').open = true;
+      setTimeout(() => $('syslog').scrollIntoView(), 300);
+    }
     if (location.hash === '#llm') {
       $('llm').open = true;
       setTimeout(() => $('llm').scrollIntoView(), 300);

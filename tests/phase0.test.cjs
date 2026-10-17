@@ -97,19 +97,26 @@ test('pagespeed: everything passing gives no headline', () => {
   assert.equal(ps.headline(vit, 'desktop'), null);
 });
 
-test("a site's log shows its own lines, and only Plume's warnings, not its start-up chatter", () => {
-  const { log, recentLogs } = require('../src/log');
+test("a website's activity shows only its own lines; the system log shows everything", () => {
+  const { log, recentLogs, systemLogs } = require('../src/log');
   const { withSite } = require('../src/site');
   const { getGlobalDb } = require('../src/db');
   const insert = getGlobalDb().prepare('INSERT INTO logs (at, site, level, source, message) VALUES (?, ?, ?, ?, ?)');
   const at = new Date().toISOString();
   insert.run(at, null, 'info', 'server', 'Plume is running at http://127.0.0.1:1');
   insert.run(at, null, 'warn', 'server', 'AI is off: test');
-  insert.run(at, 'other.example', 'info', 'research', 'other site line');
+  insert.run(at, 'other.example', 'warn', 'research', 'other site line');
   withSite('test.example', () => log('info', 'research', 'this site line'));
-  const lines = withSite('test.example', () => recentLogs({ limit: 1000 }).map((l) => l.message));
-  assert.ok(lines.includes('this site line'));
-  assert.ok(lines.includes('AI is off: test'));
-  assert.ok(!lines.includes('Plume is running at http://127.0.0.1:1'));
-  assert.ok(!lines.includes('other site line'));
+
+  const mine = withSite('test.example', () => recentLogs({ limit: 1000 }).map((l) => l.message));
+  assert.ok(mine.includes('this site line'));
+  for (const m of ['AI is off: test', 'Plume is running at http://127.0.0.1:1', 'other site line']) assert.ok(!mine.includes(m), m);
+
+  const all = systemLogs({ limit: 1000 }).map((l) => l.message);
+  for (const m of ['this site line', 'AI is off: test', 'Plume is running at http://127.0.0.1:1', 'other site line']) assert.ok(all.includes(m), m);
+  assert.deepEqual(systemLogs({ site: 'other.example' }).map((l) => l.message), ['other site line']);
+  const plume = systemLogs({ site: '', limit: 1000 }).map((l) => l.message);
+  assert.ok(plume.includes('AI is off: test') && !plume.includes('this site line'));
+  const problems = systemLogs({ problems: true, limit: 1000 }).map((l) => l.message);
+  assert.ok(problems.includes('other site line') && !problems.includes('this site line'));
 });
