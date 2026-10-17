@@ -12,6 +12,7 @@ import { BudgetExceeded } from './llm/budget';
 import { checkWatched } from './watch';
 import { detectMoves, listTracked } from './seo/rankings';
 import { checkAllSerps, serpCreds } from './seo/serp';
+import { listQuestions, runVisibilityCheck, visibilitySummary } from './geo/visibility';
 import { finishJob, startJob } from './jobs';
 import { currentSite, withSite } from './site';
 import { listSites, siteUrl } from './sites';
@@ -126,6 +127,18 @@ export function taskDefs(): TaskDef[] {
         const r = await checkAllSerps();
         if (r.failed) throw new Error(`checked ${r.checked}, then stopped: ${r.failed}`);
         return `checked ${r.checked} search(es) for $${r.cost.toFixed(3)}`;
+      },
+    },
+    {
+      id: 'ai-visibility',
+      label: 'Ask Claude, GPT and Gemini your customer questions and see who they recommend (about $0.01 per question per assistant)',
+      cron: '53 7 * * 1',
+      costsMoney: true,
+      run: async () => {
+        if (!listQuestions().length) return 'skipped: no questions to check';
+        await runVisibilityCheck();
+        const s = visibilitySummary();
+        return s ? `named in ${s.overall.mentioned} of ${s.overall.answered} answers ($${s.cost.toFixed(3)})` : 'done';
       },
     },
     {

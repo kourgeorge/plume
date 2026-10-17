@@ -50,7 +50,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings', 'ai'];
 
 function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
@@ -87,6 +87,7 @@ async function route() {
     case 'speed': return loadSpeed();
     case 'results': return loadResults();
     case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
+    case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
     case 'settings': return loadSettings();
@@ -249,8 +250,10 @@ function renderTodayCard(item, left) {
       <div class="acts">
         <button id="t-done">Mark as fixed</button>
         ${f.snippet ? '<button class="secondary" id="t-copy">Copy code</button>' : ''}
+        <span data-pr-issue="${esc(f.id)}"></span>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
       </div>${more}</div>`;
+    if (window.plumeGeo) window.plumeGeo.wirePr(box);
     $('t-done').onclick = act(async () => post('/api/audit/done', { id: f.id }));
     if (f.snippet) $('t-copy').onclick = () => navigator.clipboard.writeText(f.snippet).then(() => ($('t-copy').textContent = 'Copied'));
   } else if (item.kind === 'speed') {
@@ -294,6 +297,19 @@ function renderTodayCard(item, left) {
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
       </div>${more}</div>`;
     $('t-seen').onclick = act(async () => post(`/api/rank-alerts/${a.id}/seen`));
+  }
+  else if (item.kind === 'ai-gap') {
+    const g = item.gap;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span>AI visibility</span><span>·</span><span>${g.engines} assistant(s) asked</span></div>
+      <h2 dir="auto">Asked “${esc(g.question)}”, AI assistants recommend ${esc(g.namedInstead.slice(0, 3).join(', '))} — not you</h2>
+      <p class="why">Assistants repeat what they've read most often. A clear page that answers this question, and being mentioned on the sites they cite, is how you get named.</p>
+      <div class="acts">
+        <button id="t-seen">Got it</button>
+        <a href="#ai"><button class="secondary">See all answers</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div>${more}</div>`;
+    $('t-seen').onclick = act(async () => post('/api/ai-visibility/gaps/done', { runId: g.runId, questionId: g.questionId }));
   }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
 }
@@ -619,10 +635,11 @@ function renderAudit({ audit, today }) {
           (i) => `<div class="fix"><span class="sev ${i.severity}">${i.severity} · ${esc(i.area)}</span><h3>${esc(i.title)}</h3>
           <p class="muted">${esc(i.url)}</p><p>${esc(i.why)}</p><ol>${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
           ${i.snippet ? `<pre><code>${esc(i.snippet)}</code></pre><button class="secondary" data-copy="${esc(i.snippet)}">Copy code</button> ` : ''}
-          <button data-done="${esc(i.id)}">Mark as fixed</button></div>`,
+          <button data-done="${esc(i.id)}">Mark as fixed</button> <span data-pr-issue="${esc(i.id)}"></span></div>`,
         )
         .join('')
     : '<p class="muted">Nothing left to fix today.</p>';
+  if (window.plumeGeo) window.plumeGeo.wirePr($('audit-today'));
   for (const b of $('audit-today').querySelectorAll('[data-copy]')) b.onclick = () => navigator.clipboard.writeText(b.dataset.copy);
   for (const b of $('audit-today').querySelectorAll('[data-done]'))
     b.onclick = async () => (await post('/api/audit/done', { id: b.dataset.done }), (b.textContent = 'Marked fixed'), (b.disabled = true));

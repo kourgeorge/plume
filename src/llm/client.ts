@@ -231,6 +231,34 @@ export async function askJson<T>(opts: AskOptions & { schema: Record<string, unk
   }
 }
 
+/**
+ * Ask any model on the gateway one plain question, the way a member of the public would: no system prompt,
+ * no business context, no Claude-only settings (effort, structured output, fallbacks), so GPT and Gemini
+ * models behind a LiteLLM gateway accept it too. Used to see what AI assistants say unprompted.
+ */
+export async function askPlain(opts: { purpose: string; model: string; prompt: string; maxTokens?: number }): Promise<string> {
+  const problem = llmProblem();
+  if (problem) throw new Error(problem);
+  for (let attempt = 0; ; attempt++) {
+    checkBudget(opts.purpose);
+    try {
+      const msg = await anthropic().beta.messages.create(
+        { model: opts.model, max_tokens: opts.maxTokens ?? 1500, messages: [{ role: 'user', content: opts.prompt }] },
+        { timeout: 120_000, maxRetries: 1 },
+      );
+      recordUsage(opts.purpose, msg);
+      if (msg.stop_reason === 'refusal') throw new Error(`${opts.model} declined to answer`);
+      return msg.content
+        .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+    } catch (err) {
+      if (!isCutOff(err) || attempt >= RETRY_DELAYS_MS.length) throw err;
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 export function costOf(model: string, u: { input: number; output: number; cacheRead: number; cacheWrite: number; searches: number }): number {
   const [inP, outP, readP] = priceFor(model);
   const tokens = (u.input * inP + u.output * outP + u.cacheRead * readP + u.cacheWrite * inP * 1.25) / 1e6;

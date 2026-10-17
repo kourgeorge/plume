@@ -199,7 +199,9 @@ export async function runChatTool(threadId: number, name: string, input: any, to
                     ? `- Speed (${i.strategy}, score ${i.performance}): ${i.headline}`
                     : i.kind === 'rank'
                       ? `- Ranking move: "${i.alert.keyword}" went from position ${i.alert.from} to ${i.alert.to} (week of ${i.alert.week})`
-                      : `- Competitor change: ${i.change.name} ${i.change.changes.map((c) => c.text).join('; ')}`,
+                      : i.kind === 'ai-gap'
+                        ? `- AI gap: asked "${i.gap.question}", ${i.gap.engines} AI assistant(s) recommended ${i.gap.namedInstead.join(', ')} and not us`
+                        : `- Competitor change: ${i.change.name} ${i.change.changes.map((c) => c.text).join('; ')}`,
             )
             .join('\n'),
           isError: false,

@@ -283,3 +283,21 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .serp-list li.mine { background: var(--accent-soft); border-radius: 6px; padding-inline: 6px; }
 .serp-list li.mine::after { content: "← you"; font-size: 12px; color: var(--accent); font-weight: 700; }
 #rk-dfs { margin-top: 20px; }
+
+/* ---- AI visibility ---- */
+.ai-gauges { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); margin-top: 12px; }
+.ai-gauges .big { font-size: 30px; font-weight: 700; color: var(--accent); margin: 8px 0 4px; }
+.ring-in { background: var(--panel); width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; }
+.voice { display: grid; gap: 6px; max-width: 640px; }
+.voice-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 40px; gap: 10px; align-items: center; font-size: 14px; }
+.voice-row.you { font-weight: 700; color: var(--accent); }
+.voice-bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+.voice-bar span { display: block; height: 100%; background: var(--muted); }
+.voice-row.you .voice-bar span { background: var(--accent); }
+#ai-q-list li { display: flex; gap: 8px; align-items: center; }
+#ai-q-list li span { flex: 1; }
+#ai-engines { grid-template-columns: repeat(3, 1fr); max-width: none; }
+#ai-engines small { font-size: 12px; }
+.ai-answer-text { white-space: pre-wrap; line-height: 1.6; max-height: 480px; overflow-y: auto; }
+#ai-names { width: 100%; margin-top: 4px; }
+@media (max-width: 760px) { #ai-engines { grid-template-columns: 1fr; } .voice-row { grid-template-columns: 1fr 1fr 32px; } }

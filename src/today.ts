@@ -6,6 +6,7 @@ import { recordFeedback } from './feedback';
 import { ChangeCard, dismissChange, openChanges } from './watch';
 import { RankAlert, dismissAlert, openAlerts } from './seo/rankings';
 import { targetsFor } from './publish';
+import { Gap, gapDone, openGaps } from './geo/visibility';
 
 /** One card in the Today feed. `key` is stable so skips survive a refresh. */
 export type TodayItem =
@@ -13,7 +14,8 @@ export type TodayItem =
   | { key: string; kind: 'fix'; score: number; fix: Issue }
   | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number }
   | { key: string; kind: 'watch'; score: number; change: ChangeCard }
-  | { key: string; kind: 'rank'; score: number; alert: RankAlert };
+  | { key: string; kind: 'rank'; score: number; alert: RankAlert }
+  | { key: string; kind: 'ai-gap'; score: number; gap: Gap };
 
 const SEVERITY_SCORE = { critical: 100, high: 70, medium: 40, low: 20 } as const;
 
@@ -68,6 +70,9 @@ export function todayFeed(now = new Date()): TodayItem[] {
 
   // A tracked search moved a lot: a drop needs a look sooner than a rise.
   for (const a of openAlerts()) items.push({ key: `rank:${a.id}`, kind: 'rank', score: a.to > a.from ? 75 : 45, alert: a });
+
+  // AI assistants recommend someone else for a customer question: a clear content gap. At most three a day.
+  for (const g of openGaps().slice(0, 3)) items.push({ key: `ai-gap:${g.runId}:${g.questionId}`, kind: 'ai-gap', score: 55, gap: g });
 
   // Competitor news: worth a look, but after anything that needs action.
   for (const c of openChanges()) {
@@ -126,5 +131,10 @@ export function changeSeen(id: number): void {
 
 export function rankAlertSeen(id: number): void {
   dismissAlert(id);
+  countDone();
+}
+
+export function aiGapSeen(runId: number, questionId: number): void {
+  gapDone(runId, questionId);
   countDone();
 }
