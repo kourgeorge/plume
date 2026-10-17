@@ -22,10 +22,21 @@ export interface IntegrationDef {
   id: string;
   label: string;
   blurb: string;
+  group?: 'analytics';
   fields: Field[];
 }
 
 export const INTEGRATIONS: IntegrationDef[] = [
+  {
+    id: 'google',
+    label: 'Google Analytics and Search Console',
+    group: 'analytics',
+    blurb: "This website's own Google Cloud OAuth client (type: Desktop app). Plume only ever reads your data.",
+    fields: [
+      { key: 'clientId', env: 'GOOGLE_CLIENT_ID', label: 'Client ID', placeholder: '123456-abc.apps.googleusercontent.com' },
+      { key: 'clientSecret', env: 'GOOGLE_CLIENT_SECRET', label: 'Client secret', secret: true },
+    ],
+  },
   {
     id: 'wordpress',
     label: 'WordPress',
@@ -123,6 +134,7 @@ export function saveIntegration(id: string, values: Record<string, unknown>): vo
     const url = id === 'wordpress' ? next.url : next.siteUrl;
     if (url && !/^https?:\/\/[^\s/]+/i.test(url)) throw new Error(`"${url}" should start with https://`);
   }
+  if (id === 'google' && !/\.apps\.googleusercontent\.com$/.test(next.clientId)) throw new Error('the client ID should end in .apps.googleusercontent.com');
   if (id === 'github' && !/^[\w.-]+\/[\w.-]+$/.test(next.repo)) throw new Error('the repository should look like owner/name');
   writeAll({ ...all, [id]: next });
 }
@@ -142,6 +154,7 @@ export function describeIntegrations() {
       id: def.id,
       label: def.label,
       blurb: def.blurb,
+      group: def.group ?? 'publishing',
       connected: def.fields.every((f) => f.optional || saved[f.key]),
       fields: def.fields.map((f) => ({
         key: f.key,
@@ -211,6 +224,8 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
           ? { ok: false, message: 'Found the repository, but this token cannot write to it.' }
           : { ok: true, message: `Found ${data.full_name}.` };
       }
+      case 'google':
+        return { ok: true, message: 'Saved. Use Connect Google to sign in.' };
       default:
         return { ok: false, message: `unknown integration ${id}` };
     }

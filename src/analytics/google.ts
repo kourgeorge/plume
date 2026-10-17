@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { DATA_DIR } from '../config';
+import { siteDir, withSite } from '../site';
+import { siteEnv } from '../integrations';
 
 /**
  * Google sign-in for a desktop app: the browser comes back to 127.0.0.1 with a code,
@@ -9,7 +10,7 @@ import { DATA_DIR } from '../config';
  */
 export const SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly', 'https://www.googleapis.com/auth/analytics.readonly'];
 
-/** Overridable so tests can point at a fake server. One Google account serves every site; tokens live outside the site folders. */
+/** Overridable so tests can point at a fake server. Each website has its own Google credentials and sign-in, kept in its own folder. */
 export const GOOGLE = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
   token: 'https://oauth2.googleapis.com/token',
@@ -25,9 +26,9 @@ interface Tokens {
   scope?: string;
 }
 
-const tokenFile = () => path.join(DATA_DIR, 'tokens', 'google.json');
+const tokenFile = () => path.join(siteDir(), 'google-token.json');
 
-export function googleConfigured(env = process.env): boolean {
+export function googleConfigured(env: NodeJS.ProcessEnv = siteEnv()): boolean {
   return !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
 }
 
@@ -48,8 +49,8 @@ export function disconnectGoogle(): void {
 // `site` is which website started the sign-in, so the user lands back on that site's dashboard.
 let pending: { state: string; verifier: string; redirectUri: string; site: string; at: number } | null = null;
 
-export function authUrl(redirectUri: string, site: string, env = process.env): string {
-  if (!googleConfigured(env)) throw new Error('set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env first');
+export function authUrl(redirectUri: string, site: string, env: NodeJS.ProcessEnv = siteEnv()): string {
+  if (!googleConfigured(env)) throw new Error('add a Google client ID and secret under Settings first');
   const verifier = crypto.randomBytes(32).toString('base64url');
   const state = crypto.randomBytes(16).toString('base64url');
   pending = { state, verifier, redirectUri, site, at: Date.now() };
@@ -67,17 +68,19 @@ export function authUrl(redirectUri: string, site: string, env = process.env): s
   return `${GOOGLE.auth}?${q}`;
 }
 
-/** Swap the code for tokens. Returns the site that started the sign-in. */
-export async function finishAuth(code: string, state: string, env = process.env): Promise<string> {
+/** Swap the code for tokens. Returns the site that started the sign-in; the tokens are saved in that site's folder. */
+export async function finishAuth(code: string, state: string, env?: NodeJS.ProcessEnv): Promise<string> {
   const p = pending;
   pending = null;
   if (!p || p.state !== state || Date.now() - p.at > 10 * 60_000) throw new Error('sign-in expired or did not start here; try Connect again');
-  const t = await tokenRequest(
-    { code, grant_type: 'authorization_code', redirect_uri: p.redirectUri, code_verifier: p.verifier },
-    env,
-  );
-  if (!t.refresh_token) throw new Error('Google did not return a refresh token; remove Plume from your Google account permissions and connect again');
-  saveTokens(t);
+  await withSite(p.site, async () => {
+    const t = await tokenRequest(
+      { code, grant_type: 'authorization_code', redirect_uri: p.redirectUri, code_verifier: p.verifier },
+      env ?? siteEnv(),
+    );
+    if (!t.refresh_token) throw new Error('Google did not return a refresh token; remove Plume from your Google account permissions and connect again');
+    saveTokens(t);
+  });
   return p.site;
 }
 
@@ -93,7 +96,7 @@ async function tokenRequest(params: Record<string, string>, env: NodeJS.ProcessE
 }
 
 /** A valid access token, refreshed when it's within a minute of expiring. */
-export async function accessToken(env = process.env): Promise<string> {
+export async function accessToken(env: NodeJS.ProcessEnv = siteEnv()): Promise<string> {
   if (!googleConnected()) throw new Error('Google is not connected');
   const t: Tokens = JSON.parse(fs.readFileSync(tokenFile(), 'utf8'));
   if (t.expires_at - 60_000 > Date.now()) return t.access_token;
@@ -104,7 +107,7 @@ export async function accessToken(env = process.env): Promise<string> {
 }
 
 /** Authenticated JSON call to a Google API. */
-export async function googleApi<T>(url: string, body?: unknown, env = process.env): Promise<T> {
+export async function googleApi<T>(url: string, body?: unknown, env: NodeJS.ProcessEnv = siteEnv()): Promise<T> {
   const res = await fetch(url, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { authorization: `Bearer ${await accessToken(env)}`, 'content-type': 'application/json' },

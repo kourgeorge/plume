@@ -913,15 +913,33 @@ async function loadSettings() {
   $('set-url').value = state.site || '';
   $('set-general-status').textContent = '';
   const [ints, g] = await Promise.all([api('/api/integrations'), api('/api/google')]);
-  $('set-publish').innerHTML = ints.map(integrationCard).join('');
+  $('set-publish').innerHTML = ints.filter((i) => i.group === 'publishing').map(integrationCard).join('');
+  const gInt = ints.find((i) => i.id === 'google');
+  $('set-analytics').innerHTML = integrationCard(gInt) + `<div class="int-card" id="g-signin"><div class="int-head"><strong>Sign in</strong>
+    <span class="${g.connected ? 'good' : 'muted'} small">${g.connected ? 'Signed in' : g.configured ? 'Not signed in' : 'Save the client ID and secret first'}</span></div>
+    <p class="muted small">Search Console: ${g.site ? esc(g.site) : 'no site picked'} · Analytics: ${g.property ? esc(g.property) : 'no property picked'}</p>
+    <p class="actions-row">${g.configured ? (g.connected
+      ? '<button id="g-check" class="secondary">Check both services</button> <a href="#results"><button class="secondary">Choose site and property</button></a> <button id="g-out" class="secondary">Sign out</button>'
+      : `<a href="${withSite('/api/google/connect')}"><button>Sign in with Google</button></a>`) : ''}
+      <span id="g-msg" class="small"></span></p>
+    <ul id="g-checks" class="item-list"></ul>
+    <details class="small"><summary>How to get a client ID and secret</summary><ol>
+      <li>In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>, create an <b>OAuth client ID</b> of type <b>Desktop app</b>.</li>
+      <li>Under <b>APIs &amp; Services → Library</b>, turn on <b>Google Search Console API</b>, <b>Google Analytics Data API</b> and <b>Google Analytics Admin API</b>.</li>
+      <li>If the app is in "Testing", add your Google account as a test user.</li>
+      <li>Paste the client ID and secret above, save, then sign in.</li></ol></details></div>`;
   for (const card of document.querySelectorAll('.int-card[data-int]')) wireIntegration(card);
-
-  const gsc = g.site ? `Search Console: ${esc(g.site)}` : 'Search Console: no site picked';
-  const ga = g.property ? `Analytics: ${esc(g.property)}` : 'Analytics: no property picked';
-  $('set-analytics').innerHTML = `<div class="int-card"><div class="int-head"><strong>Google</strong>
-    <span class="${g.connected ? 'good' : 'muted'} small">${!g.configured ? 'Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env' : g.connected ? 'Connected (shared by all websites)' : 'Not connected'}</span></div>
-    <p class="muted small">${gsc} · ${ga}</p>
-    <p>${g.configured ? (g.connected ? '<a href="#results"><button class="secondary">Choose site and property</button></a>' : `<a href="${withSite('/api/google/connect')}"><button>Connect Google</button></a>`) : ''}</p></div>`;
+  if ($('g-check')) $('g-check').onclick = async () => {
+    $('g-msg').textContent = 'Checking…';
+    try {
+      const rows = await post('/api/google/test');
+      $('g-msg').textContent = '';
+      $('g-checks').innerHTML = rows.map((r) => `<li><strong>${esc(r.label)}</strong> — <span class="${r.ok ? 'good' : 'warn'}">${esc(r.message)}</span></li>`).join('');
+    } catch (err) {
+      $('g-msg').textContent = err.message;
+    }
+  };
+  if ($('g-out')) $('g-out').onclick = async () => confirm('Sign out of Google for this website? Saved data stays.') && (await post('/api/google/disconnect'), goTo('#settings'));
 }
 
 function integrationCard(i) {

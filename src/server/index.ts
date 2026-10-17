@@ -306,7 +306,7 @@ export function buildServer(port: number): FastifyInstance {
   const redirectUri = `http://127.0.0.1:${port}/api/google/callback`;
 
   app.get('/api/google', async () => ({
-    configured: googleConfigured(),
+    configured: googleConfigured(siteEnv()),
     connected: googleConnected(),
     site: getSetting<string | null>('gscSite', null),
     property: getSetting<string | null>('ga4Property', null),
@@ -342,6 +342,22 @@ export function buildServer(port: number): FastifyInstance {
     } catch (err: any) {
       return back(slug, err.message);
     }
+  });
+
+  /** Asks each Google service separately, so a switched-off API is named instead of failing the whole page. */
+  app.post('/api/google/test', async (_req, reply) => {
+    if (!googleConnected()) return reply.code(400).send({ error: 'sign in with Google first' });
+    const check = async (label: string, fn: () => Promise<string>) => {
+      try {
+        return { label, ok: true, message: await fn() };
+      } catch (err: any) {
+        return { label, ok: false, message: String(err.message) };
+      }
+    };
+    return [
+      await check('Search Console', async () => `${(await listSearchConsoleSites()).length} site(s) visible`),
+      await check('Analytics', async () => `${(await listAnalyticsProperties()).length} property(ies) visible`),
+    ];
   });
 
   app.post('/api/google/disconnect', async () => {

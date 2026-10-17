@@ -59,7 +59,7 @@ test.before(() => new Promise((r) => server.listen(0, '127.0.0.1', () => {
 test.after(() => server.close());
 
 test('sign-in URL is read-only, offline, PKCE; callback must match state', async () => {
-  const url = new URL(g.authUrl('http://127.0.0.1:4410/api/google/callback', env));
+  const url = new URL(g.authUrl('http://127.0.0.1:4410/api/google/callback', 'test.example', env));
   assert.equal(url.searchParams.get('scope'), g.SCOPES.join(' '));
   assert.ok(g.SCOPES.every((s) => s.endsWith('.readonly')));
   assert.equal(url.searchParams.get('access_type'), 'offline');
@@ -69,9 +69,9 @@ test('sign-in URL is read-only, offline, PKCE; callback must match state', async
 });
 
 test('finishAuth saves tokens privately; expired token is refreshed', async () => {
-  const url = new URL(g.authUrl('http://127.0.0.1:4410/api/google/callback', env));
+  const url = new URL(g.authUrl('http://127.0.0.1:4410/api/google/callback', 'test.example', env));
   await g.finishAuth('the-code', url.searchParams.get('state'), env);
-  const file = path.join(process.env.DATA_DIR, 'tokens', 'google.json');
+  const file = path.join(process.env.DATA_DIR, 'sites', 'test.example', 'google-token.json');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const exchange = new URLSearchParams(calls.find((c) => c.url === '/token').body);
   assert.ok(exchange.get('code_verifier'), 'PKCE verifier missing');
