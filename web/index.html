@@ -42,7 +42,7 @@
   <section id="details" class="details" hidden>
     <div class="details-head">
       <div class="tabs" id="details-tabs">
-        <button data-tab="traffic" class="on">Traffic</button><button data-tab="seo">SEO</button><button data-tab="links" class="locked" title="Coming soon">Links <span class="lock" aria-label="coming soon">🔒</span></button><button data-tab="geo" class="locked" title="See AI answers for the full view">GEO <span class="lock" aria-hidden="true">🔒</span></button><button data-tab="social">Social</button>
+        <button data-tab="traffic" class="on">Traffic</button><button data-tab="seo">SEO</button><button data-tab="links" class="locked" title="Coming soon">Links <span class="lock" aria-label="coming soon">🔒</span></button><button data-tab="geo" title="The full view is on AI answers">GEO</button><button data-tab="social">Social</button>
       </div>
       <span class="spacer"></span>
       <span id="details-range" class="date-pill"></span>
@@ -177,7 +177,7 @@
 
       <section id="view-accounts" class="view" hidden>
         <div class="view-head"><a href="#today" class="back">← Today</a><h1>Brand accounts</h1><span class="actions"><button id="accounts-save">Save</button></span></div>
-        <p class="muted">The business's own social accounts. Posting to them is set up later, when the X and LinkedIn agents arrive; for now agents just know they exist.</p>
+        <p class="muted">The business's own social accounts, so agents write for the right profiles. To let Plume post to them, connect X, LinkedIn or Reddit under <a href="#settings">Settings → Social posting</a>.</p>
         <div class="form">
           <label>X <input id="acc-x" placeholder="@yourbrand"></label>
           <label>LinkedIn page <input id="acc-li" placeholder="linkedin.com/company/…"></label>
@@ -203,8 +203,16 @@
         <h2>Analytics</h2>
         <div id="set-analytics" class="int-list"></div>
 
+        <h2>Social posting</h2>
+        <p class="muted small">Where approved social posts go. Until an account is connected, approving a post saves it as files instead.</p>
+        <div id="set-social" class="int-list"></div>
+
+        <h2>Outreach</h2>
+        <p class="muted small">Sending the outreach emails you approve, and finding creators.</p>
+        <div id="set-outreach" class="int-list"></div>
+
         <h2>Not available yet</h2>
-        <p class="muted small">X, LinkedIn, Wix, Framer, WhatsApp and Telegram. Framer has no write API, so use <em>Save as files</em> for it.</p>
+        <p class="muted small" id="set-later">Facebook and Instagram. WhatsApp needs a public web address for its buttons and message templates approved by Meta, which a private app on your computer can't offer, so use Telegram for now. Framer has no write API, so use <em>Save as files</em> for it.</p>
       </section>
 
       <section id="view-notes" class="view" hidden>

@@ -24,7 +24,7 @@ export interface IntegrationDef {
   id: string;
   label: string;
   blurb: string;
-  group?: 'analytics' | 'phone';
+  group?: 'analytics' | 'phone' | 'social' | 'outreach';
   fields: Field[];
 }
 
@@ -111,6 +111,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'x',
+    group: 'social',
     label: 'X (Twitter)',
     blurb:
       'Post and thread on X. In the X developer portal, open your app → "Keys and tokens", give the app "Read and write" permission, then copy the four values below. X charges for posting through its API.',
@@ -123,6 +124,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'linkedin',
+    group: 'social',
     label: 'LinkedIn',
     blurb:
       'Post to LinkedIn as yourself or as a company page. Needs an access token from your LinkedIn developer app with the "w_member_social" permission (or "w_organization_social" for a page). Tokens last about two months.',
@@ -140,6 +142,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'reddit',
+    group: 'social',
     label: 'Reddit',
     blurb:
       'Reply to threads and post in subreddits. At reddit.com/prefs/apps create an app of type "script", then use its ID and secret with the Reddit account that will post. Plume posts at most a few times a day and only what you approve.',
@@ -153,6 +156,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'email',
+    group: 'outreach',
     label: 'Email (outreach)',
     blurb:
       "Send outreach emails you approve from your own mail account. Use your provider's SMTP settings; for Gmail or Outlook make an \"app password\" instead of using your normal one. Plume sends at most a few a day, never twice to the same person within 30 days, and never again to anyone who said no.",
@@ -176,6 +180,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'youtube',
+    group: 'outreach',
     label: 'YouTube search (for finding creators)',
     blurb: 'Optional. A free YouTube Data API key lets the influencer agent see real subscriber counts. Create one in Google Cloud Console → APIs & Services → Credentials, after turning on "YouTube Data API v3".',
     fields: [{ key: 'key', env: 'YOUTUBE_API_KEY', label: 'API key', secret: true }],

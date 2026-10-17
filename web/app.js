@@ -1442,6 +1442,8 @@ async function loadSettings() {
   $('set-general-status').textContent = '';
   const [ints, g] = await Promise.all([api('/api/integrations'), api('/api/google')]);
   $('set-publish').innerHTML = ints.filter((i) => i.group === 'publishing').map(integrationCard).join('');
+  $('set-social').innerHTML = ints.filter((i) => i.group === 'social').map(integrationCard).join('');
+  $('set-outreach').innerHTML = ints.filter((i) => i.group === 'outreach').map(integrationCard).join('');
   const gInt = ints.find((i) => i.id === 'google');
   $('set-analytics').innerHTML = integrationCard(gInt) + `<div class="int-card" id="g-signin"><div class="int-head"><strong>Sign in</strong>
     <span class="${g.connected ? 'good' : 'muted'} small">${g.connected ? 'Signed in' : g.configured ? 'Not signed in' : 'Save the client ID and secret first'}</span></div>

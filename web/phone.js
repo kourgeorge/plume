@@ -14,12 +14,6 @@
     if (!tgInt) return;
     $('set-phone').innerHTML = integrationCard(tgInt) + '<div class="int-card" id="tg-link"><span class="muted small">Checking the bot…</span></div>';
     wireIntegration(document.querySelector('.int-card[data-int="telegram"]'));
-    // The old "not available yet" line named Telegram; say what's actually missing now.
-    const later = [...document.querySelectorAll('#view-settings h2')].find((h) => h.textContent === 'Not available yet');
-    if (later?.nextElementSibling) {
-      later.nextElementSibling.innerHTML =
-        'WhatsApp needs a public web address for its buttons and message templates approved by Meta, which a private app on your computer can\'t offer — use Telegram for now. Framer has no write API, so use <em>Save as files</em> for it.';
-    }
     await linkCard();
   }
 
