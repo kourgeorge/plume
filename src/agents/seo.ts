@@ -73,6 +73,20 @@ export function searchConsoleGaps(rows: { query: string; impressions: number; po
     }));
 }
 
+/**
+ * How to write so AI assistants (ChatGPT, Claude, Perplexity, Google's AI answers) can quote the page.
+ * They lift single passages, not whole articles, so each section has to stand on its own.
+ * Written as instructions rather than checked by word patterns, so it works in any language.
+ */
+export const QUOTABLE_RULES = `Write so that both people and AI assistants can quote you:
+- Start with the answer. The first two or three sentences under the title say plainly what the reader came to find out; the rest explains.
+- Use headings phrased the way people ask (for example "How long does it take to pass the theory test?"), and answer each one in the first sentence under it.
+- Make each section stand on its own, about 130–170 words: name the subject instead of saying "it" or "this", so a passage quoted alone still makes sense.
+- Be specific. Give numbers, prices, steps, times and names, and say where a fact comes from ("according to the Ministry of Transport…"). Never invent a figure or a source; leave a claim out rather than guess.
+- Show first-hand experience where the profile supports it: what the business sees with its own customers, a real example, a common mistake.
+- Use a numbered list for steps and a table for comparisons.
+- End with a short summary of the key points.`;
+
 function sitePages(): { url: string; title: string }[] {
   return getDb().prepare('SELECT url, title FROM pages WHERE status < 400').all() as { url: string; title: string }[];
 }
@@ -90,6 +104,7 @@ export async function writeArticle(agent: string, opp: Opportunity, role: string
     prompt:
       `Write a ${opp.kind === 'landing_page' ? 'landing page' : 'blog post'} targeting "${opp.keyword ?? opp.title}".\n` +
       `Working title: ${opp.title}\nWhy: ${opp.reason}\n${extra}\n` +
+      `${QUOTABLE_RULES}\n\n` +
       `Link to 2–4 of our own pages where it genuinely helps the reader (use these exact URLs):\n` +
       pages.map((p) => `- ${p.title}: ${p.url}`).join('\n') +
       `\nCheck facts about the topic with web search. Use only claims about our product that the profile supports.`,

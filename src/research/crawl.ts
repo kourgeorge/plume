@@ -2,6 +2,8 @@ import * as cheerio from 'cheerio';
 import { getDb } from '../db';
 import { BrowserFetch, Failed, USER_AGENT, fetchHttp, fetchPage } from './fetchPage';
 import { TechSignal, detectTech, mergeSignals, saveTechSignals } from './techSignals';
+import { contactLinks, pageDate, profileLinks, schemaTypes } from './schema';
+import { setSetting } from '../db';
 
 export interface CrawledPage {
   url: string;
@@ -17,6 +19,18 @@ export interface CrawledPage {
   text: string;
   /** From <html lang>, e.g. "he" or "en-US"; empty if the page doesn't say. */
   lang: string;
+  /** Structured-data kinds on the page, e.g. ["Organization", "WebSite"]. */
+  schemaTypes: string[];
+  /** Newest published/updated date the page states, or null. */
+  pageDate: string | null;
+}
+
+/** Found on the home page, for the structured-data fix: how to reach the business and its profiles elsewhere. */
+export interface HomeFacts {
+  phone: string | null;
+  email: string | null;
+  profiles: string[];
+  logo: string | null;
 }
 
 export interface CrawlOptions {
@@ -63,6 +77,8 @@ export function parseRobots(body: string): string[] {
 export function extractPage(url: string, status: number, html: string): { page: CrawledPage; links: string[] } {
   const $ = cheerio.load(html);
   const schemaCount = $('script[type="application/ld+json"]').length;
+  const schema = schemaTypes(html);
+  const date = pageDate(html);
   const links = $('a[href]').map((_, el) => $(el).attr('href') ?? '').get();
   const imagesMissingAlt = $('img').filter((_, el) => !($(el).attr('alt') ?? '').trim()).length;
   const headings = $('h1, h2, h3')
@@ -86,8 +102,22 @@ export function extractPage(url: string, status: number, html: string): { page: 
       wordCount: text ? text.split(' ').length : 0,
       text,
       lang: ($('html').attr('lang') ?? '').trim(),
+      schemaTypes: schema.types,
+      pageDate: date,
     },
   };
+}
+
+export function homeFacts(html: string, url: string): HomeFacts {
+  const $ = cheerio.load(html);
+  const logo = $('img[src*="logo" i], img[alt*="logo" i], header img').first().attr('src');
+  let logoUrl: string | null = null;
+  try {
+    logoUrl = logo ? new URL(logo, url).toString() : null;
+  } catch {
+    /* bad src */
+  }
+  return { ...contactLinks(html), profiles: profileLinks(html, url), logo: logoUrl };
 }
 
 async function sitemapUrls(origin: string, fetchFn: typeof fetch): Promise<string[]> {
@@ -123,12 +153,18 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   const origin = new URL(startUrl).origin;
 
   let disallow: string[] = [];
+  // Kept for the site check, which reads it again per AI crawler. null = the site has none.
+  let robots: string | null = null;
   try {
     const r = await fetchFn(`${origin}/robots.txt`, { headers: { 'user-agent': USER_AGENT } });
-    if (r.ok) disallow = parseRobots(await r.text());
+    if (r.ok) {
+      robots = await r.text();
+      disallow = parseRobots(robots);
+    }
   } catch {
     /* no robots.txt = no restrictions */
   }
+  setSetting('robotsTxt', { at: new Date().toISOString(), body: robots });
   const allowed = (u: string) => !disallow.some((d) => new URL(u).pathname.startsWith(d));
 
   const seen = new Set<string>();
@@ -146,8 +182,8 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   const pages: CrawledPage[] = [];
   const failures: Failed[] = [];
   const save = getDb().prepare(
-    `INSERT OR REPLACE INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at)
-     VALUES (@url, @status, @title, @metaDescription, @canonical, @h1, @headings, @imagesMissingAlt, @hasSchema, @wordCount, @text, @crawledAt)`,
+    `INSERT OR REPLACE INTO pages (url, status, title, meta_description, canonical, h1, headings, images_missing_alt, has_schema, word_count, text, crawled_at, schema_types, page_date)
+     VALUES (@url, @status, @title, @metaDescription, @canonical, @h1, @headings, @imagesMissingAlt, @hasSchema, @wordCount, @text, @crawledAt, @schemaTypes, @pageDate)`,
   );
   const signals: TechSignal[][] = [];
   // Once a page only opened in a real browser, use the browser for the rest of the site.
@@ -167,7 +203,8 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
     signals.push(detectTech(r.html, url));
     pages.push(page);
     const { lang: _lang, ...row } = page;
-    save.run({ ...row, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString() });
+    save.run({ ...row, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString(), schemaTypes: JSON.stringify(page.schemaTypes) });
+    if (pages.length === 1) setSetting('homeFacts', homeFacts(r.html, r.url));
     opts.onPage?.(page, pages.length);
     for (const l of links) enqueue(l, r.url);
   }

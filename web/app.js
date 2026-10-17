@@ -17,6 +17,7 @@ const post = (path, body = {}) => api(path, { method: 'POST', body: JSON.stringi
 const n = (x) => (x == null ? '—' : Number(x).toLocaleString());
 const pos = (x) => (x == null || !x ? '—' : Number(x).toFixed(1));
 const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const areaLabel = (a) => ({ 'ai-search': 'AI search', 'on-page': 'on the page' })[a] ?? a;
 const band = (score) => (score >= 90 ? 'good' : score >= 50 ? 'mid' : 'bad');
 
 /** Small per-browser preferences. Storage can be unavailable (private mode); everything works without it. */
@@ -241,7 +242,7 @@ function renderTodayCard(item, left) {
   } else if (item.kind === 'fix') {
     const f = item.fix;
     box.innerHTML = `<div class="today">
-      <div class="kicker"><span class="sev ${f.severity}">${esc(f.severity)}</span><span>·</span><span>Site fix · ${esc(f.area)}</span></div>
+      <div class="kicker"><span class="sev ${f.severity}">${esc(f.severity)}</span><span>·</span><span>Site fix · ${esc(areaLabel(f.area))}</span></div>
       <h2>${esc(f.title)}</h2>
       <p class="why">${esc(f.url)}</p>
       <p class="body">${esc(f.why)}</p>
@@ -632,7 +633,7 @@ function renderAudit({ audit, today }) {
   $('audit-today').innerHTML = today.length
     ? today
         .map(
-          (i) => `<div class="fix"><span class="sev ${i.severity}">${i.severity} · ${esc(i.area)}</span><h3>${esc(i.title)}</h3>
+          (i) => `<div class="fix"><span class="sev ${i.severity}">${i.severity} · ${esc(areaLabel(i.area))}</span><h3>${esc(i.title)}</h3>
           <p class="muted">${esc(i.url)}</p><p>${esc(i.why)}</p><ol>${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
           ${i.snippet ? `<pre><code>${esc(i.snippet)}</code></pre><button class="secondary" data-copy="${esc(i.snippet)}">Copy code</button> ` : ''}
           <button data-done="${esc(i.id)}">Mark as fixed</button> <span data-pr-issue="${esc(i.id)}"></span></div>`,

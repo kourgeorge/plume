@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS pages (
   has_schema INTEGER,
   word_count INTEGER,
   text TEXT,
-  crawled_at TEXT
+  crawled_at TEXT,
+  schema_types TEXT NOT NULL DEFAULT '[]', -- JSON array of structured-data @types found on the page
+  page_date TEXT          -- newest date the page states about itself (published/updated); null = none
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,11 +224,21 @@ CREATE INDEX IF NOT EXISTS logs_by_site ON logs (site, id);
 let globalDb: Database.Database | null = null;
 const siteDbs = new Map<string, Database.Database>();
 
+/** Columns added after a table was first created. CREATE TABLE IF NOT EXISTS skips old databases, so these are added by hand. */
+const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: 'pages', column: 'schema_types', type: "TEXT NOT NULL DEFAULT '[]'" },
+  { table: 'pages', column: 'page_date', type: 'TEXT' },
+];
+
 function open(file: string, schema: string): Database.Database {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const d = new Database(file);
   d.pragma('journal_mode = WAL');
   d.exec(schema);
+  for (const c of ADDED_COLUMNS) {
+    const cols = d.prepare(`PRAGMA table_info(${c.table})`).all() as { name: string }[];
+    if (cols.length && !cols.some((x) => x.name === c.column)) d.exec(`ALTER TABLE ${c.table} ADD COLUMN ${c.column} ${c.type}`);
+  }
   return d;
 }
 
