@@ -1,4 +1,4 @@
-import { finishJob, startJob, updateJob } from '../jobs';
+import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { profileComplete } from '../context/profile';
 import { seoAgent } from './seo';
 import { writerAgent } from './writer';
@@ -28,14 +28,26 @@ export async function runAgent(id: string, limit?: number, onProgress: (m: strin
   return written;
 }
 
-/** Same, in the background for the web UI; returns the job id. Setup problems are reported at once. */
+/**
+ * Same, in the background for the web UI; returns the job id. Setup problems are reported at once.
+ * Different agents run side by side; the same agent twice at once would draft the same ideas, so a
+ * second start just returns the run already going.
+ */
 export function startAgentRun(id: string, limit?: number): number {
   const agent = getAgent(id);
   if (!agent) throw new Error(`no agent ${id}`);
   if (!profileComplete()) throw new Error('finish the business profile first — every agent works from it');
+  const already = runningJob(`agent:${id}`);
+  if (already) return already.id;
   const jobId = startJob(`agent:${id}`, `${agent.label}: starting`);
   runAgent(id, limit, (m) => updateJob(jobId, m))
     .then(() => finishJob(jobId))
     .catch((err) => finishJob(jobId, String(err?.message ?? err)));
   return jobId;
+}
+
+/** Start several agents at once, each in its own background job. Returns the job id for each agent started. */
+export function startAgentRuns(ids: string[] = AGENTS.map((a) => a.id)): { id: string; jobId: number }[] {
+  if (!profileComplete()) throw new Error('finish the business profile first — every agent works from it');
+  return ids.filter((id) => getAgent(id)).map((id) => ({ id, jobId: startAgentRun(id) }));
 }

@@ -488,6 +488,17 @@ input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
 /* Something running: a quiet pill in the bar, linked to the timetable */
 .topbar .activity { display: inline-flex; align-items: center; gap: 7px; max-width: 280px; flex-shrink: 1; min-width: 120px; height: 30px; padding: 0 11px; margin-inline-end: 8px; border-radius: 999px; background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.28); color: #fde68a; font-size: 12.5px; }
 .topbar .activity:hover { background: rgba(251,191,36,.2); color: #fef3c7; }
+.topbar .activity { cursor: pointer; font: inherit; font-size: 12.5px; box-shadow: none; }
+.activity-wrap { position: relative; display: inline-flex; }
+.activity-list { position: fixed; top: 48px; right: 14px; z-index: 30; width: min(360px, calc(100vw - 28px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 40px -12px rgba(0,0,0,.35); padding: 6px 0; white-space: normal; }
+.activity-list .al-head { display: flex; justify-content: space-between; padding: 8px 14px 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.activity-list .al-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.activity-list .al-row .spin { margin-top: 3px; color: var(--mid); }
+.topbar .activity-list a.al-foot { display: block; margin-top: 4px; padding: 8px 14px 6px; border-top: 1px solid var(--line-soft); border-radius: 0; color: var(--muted); font-size: 12.5px; }
+.topbar .activity-list a.al-foot:hover { color: var(--ink); background: var(--hover); }
+.flash-note { margin: 0 0 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--accent-soft); color: var(--ink); font-size: 13px; }
+.flash-note[hidden] { display: none; }
+.section-head #run-all { margin-inline-start: auto; }
 .activity b { font-weight: 600; white-space: nowrap; }
 .activity .step { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }
 .activity i { font-style: normal; font-size: 11px; opacity: .7; }

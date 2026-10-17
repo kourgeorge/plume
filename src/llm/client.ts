@@ -168,6 +168,21 @@ export function isCutOff(err: unknown): boolean {
 }
 
 export const RETRY_DELAYS_MS = [2000, 6000];
+/**
+ * A streamed reply that sends nothing for this long is treated as cut off. Without it, a gateway that
+ * stops answering but keeps the connection open would hold its job (and everything waiting on it) forever.
+ */
+let streamIdleMs = 180_000;
+/** Tests shorten the silence limit. */
+export function setStreamIdleForTests(ms: number): void {
+  streamIdleMs = ms;
+}
+/** Thrown when a streamed reply goes silent; counts as cut off, so it is tried again. */
+export class StreamStalled extends Error {
+  constructor(seconds: number) {
+    super(`reply was terminated: nothing arrived for ${seconds}s`);
+  }
+}
 let sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Tests replace the pause so they don't wait. */
 export function setSleepForTests(fn: (ms: number) => Promise<void>): void {
@@ -215,9 +230,24 @@ async function callStream(
     ...(tools.length ? { tools, ...(noMoreTools ? { tool_choice: { type: 'none' as const } } : {}) } : {}),
     ...(fallbackOk ? { fallbacks: 'default' as const, betas: ['server-side-fallback-2026-07-01'] } : {}),
   });
-  const msg = await stream.finalMessage();
-  recordUsage(opts.purpose, msg);
-  return msg;
+  // Every piece of the reply resets the clock; a long answer is fine as long as it keeps coming.
+  let timer: NodeJS.Timeout | undefined;
+  let stalled = false;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ((stalled = true), stream.abort()), streamIdleMs);
+  };
+  stream.on('streamEvent', arm);
+  arm();
+  try {
+    const msg = await stream.finalMessage();
+    recordUsage(opts.purpose, msg);
+    return msg;
+  } catch (err) {
+    throw stalled ? new StreamStalled(Math.round(streamIdleMs / 1000)) : err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Like `ask`, but the answer is JSON matching `schema`, parsed. */

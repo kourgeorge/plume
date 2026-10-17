@@ -238,15 +238,28 @@ async function runResearch(body) {
   route();
 }
 
+/** Start an agent in the background. The page stays usable, so you can start others while it works. */
 async function runAgentNow(id) {
   try {
-    const { jobId } = await post(`/api/agents/${id}/run`);
-    await waitForJob(jobId, 'Agent at work…');
+    await post(`/api/agents/${id}/run`);
+    flash = `${agentLabel(id)} started. It works in the background — start others too, or keep working.`;
+    pollActivity();
+    await route();
   } catch (err) {
     alert(err.message);
   }
-  location.hash = '#today';
-  route();
+}
+
+async function runAllAgents() {
+  if (!confirm('Start every agent at the same time? Each one looks for work and writes drafts, which uses AI.')) return;
+  try {
+    const { started } = await post('/api/agents/run', {});
+    flash = `${started.length} agents started. They work side by side; drafts arrive in Today as each one finishes.`;
+    pollActivity();
+    await goTo('#today');
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 // ---------------------------------------------------------------- what's running right now
@@ -255,11 +268,18 @@ async function runAgentNow(id) {
 function jobLabel(kind) {
   if (kind === 'research') return 'Research';
   if (kind.startsWith('agent:')) return agentLabel(kind.slice(6));
-  if (kind.startsWith('task:')) return { 'site-check': 'Site check', speed: 'Speed check', google: 'Google data' }[kind.slice(5)] ?? kind.slice(5).replace(/-/g, ' ');
-  return kind;
+  const named = {
+    'site-check': 'Site check', speed: 'Speed check', google: 'Google data', 'ai-visibility': 'AI visibility check', 'competitor-watch': 'Competitor check',
+    'competitor-news': 'Competitor news scan', 'competitor-scan': 'Competitor scan', serp: 'Google lookup', 'rank-moves': 'Ranking check', refresh: 'Re-reading the site',
+    codefix: 'Preparing a pull request', cleanup: 'Tidying logs', 'outreach:creator': 'Finding creators', 'outreach:link': 'Finding link pages',
+  };
+  const k = kind.startsWith('task:') ? kind.slice(5) : kind;
+  if (k.startsWith('video:')) return 'Video preview';
+  return named[k] ?? k.replace(/[-:]/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
 let runningIds = '';
+const closeActivity = () => (($('activity-list').hidden = true), $('activity').setAttribute('aria-expanded', 'false'));
 let activityTimer = null;
 /**
  * Asks the server what's running and shows it in the top bar. The server keeps the jobs, so this
@@ -274,9 +294,15 @@ async function pollActivity() {
     if (jobs.length) {
       const j = jobs[0];
       const step = (j.progress || '').replace(/^[^:]+:\s*/, '');
-      el.innerHTML = `<span class="spin" aria-hidden="true"></span><b>${esc(jobLabel(j.kind))}</b><span class="step">${esc(step)}</span>${jobs.length > 1 ? `<i>+${jobs.length - 1}</i>` : ''}`;
-      el.title = jobs.map((x) => `${jobLabel(x.kind)}: ${x.progress || 'working'}`).join('\n');
+      el.innerHTML = jobs.length > 1
+        ? `<span class="spin" aria-hidden="true"></span><b>${jobs.length} running</b><span class="step">${esc(jobs.map((x) => jobLabel(x.kind)).join(', '))}</span>`
+        : `<span class="spin" aria-hidden="true"></span><b>${esc(jobLabel(j.kind))}</b><span class="step">${esc(step)}</span>`;
+      el.title = 'See everything that is running';
+      $('activity-list').innerHTML = `<div class="al-head">Running now <span class="muted small">${jobs.length}</span></div>${jobs
+        .map((x) => `<div class="al-row"><span class="spin" aria-hidden="true"></span><div><b>${esc(jobLabel(x.kind))}</b><div class="muted small">${esc((x.progress || 'working').replace(/^[^:]+:\s*/, ''))} · since ${esc(new Date(x.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</div></div></div>`)
+        .join('')}<a href="#logs" class="al-foot">Timetable and logs →</a>`;
     }
+    if (!jobs.length) closeActivity();
     const research = jobs.find((j) => j.kind === 'research');
     // Mark the document being written in the side list.
     for (const d of state?.docs ?? []) {
@@ -306,8 +332,16 @@ async function pollActivity() {
 
 // ---------------------------------------------------------------- Today
 
+/** Show a one-off message (like "SEO agent started") in a note box, or hide the box when there's none. */
+function showFlash(id) {
+  const m = takeFlash();
+  $(id).hidden = !m;
+  $(id).textContent = m;
+}
+
 async function loadToday() {
   showView('today');
+  showFlash('today-flash');
   const [t, folders] = await Promise.all([api('/api/today'), api('/api/agents')]);
   const total = t.left + t.doneToday;
   $('today-progress').textContent = total ? `${t.doneToday} of ${total} done` : '';
@@ -677,6 +711,11 @@ async function loadFolder(id) {
   if (!f) return (location.hash = '#today');
   $('folder-title').textContent = f.label;
   $('folder-desc').textContent = f.description;
+  showFlash('folder-flash');
+  // Already working: say so instead of offering a second run of the same agent.
+  $('folder-run').disabled = !!f.working;
+  $('folder-run').textContent = f.working ? 'Working…' : 'Find work and draft now';
+  $('folder-run').title = f.working ? `Working now: ${f.working.replace(/^[^:]+:\s*/, '')}` : '';
   $('folder-run').onclick = () => runAgentNow(id);
   const instr = await api(`/api/agents/${encodeURIComponent(id)}/instructions`);
   $('folder-instr').value = instr.text;
@@ -1377,6 +1416,14 @@ $('budget-save').onclick = async () => {
   }
 };
 $('tour-btn').onclick = () => showTour(0);
+$('run-all').onclick = runAllAgents;
+$('activity').onclick = () => {
+  const open = $('activity-list').hidden;
+  $('activity-list').hidden = !open;
+  $('activity').setAttribute('aria-expanded', String(open));
+};
+document.addEventListener('click', (e) => !e.target.closest('.activity-wrap') && closeActivity());
+document.addEventListener('keydown', (e) => e.key === 'Escape' && closeActivity());
 $('tour-next').onclick = () => (tourStep + 1 < TOUR.length ? showTour(tourStep + 1) : endTour());
 $('tour-back').onclick = () => showTour(Math.max(0, tourStep - 1));
 $('tour-close').onclick = endTour;

@@ -13,7 +13,7 @@ import { renderMarkdown } from '../render';
 import { techSignals } from '../research/techSignals';
 import { startResearch } from '../research/profile';
 import { getJob, runningJob, runningJobs } from '../jobs';
-import { AGENTS, getAgent, startAgentRun } from '../agents';
+import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
@@ -235,6 +235,14 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
 
+  /** Several agents side by side; with no list, every agent. */
+  app.post<{ Body: { ids?: string[] } }>('/api/agents/run', async (req, reply) => {
+    try {
+      return { started: startAgentRuns(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : undefined) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
   app.post<{ Params: { id: string }; Body: { limit?: number } }>('/api/agents/:id/run', async (req, reply) => {
     try {
       return { jobId: startAgentRun(req.params.id, req.body?.limit) };

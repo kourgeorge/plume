@@ -27,6 +27,11 @@ const server = http.createServer((req, res) => {
     lastAuth = req.headers.authorization;
     if (mode === 'bad-request') return res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'nope' } }));
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (mode === 'silent-then-ok' && calls === 1) {
+      // The gateway starts the reply, then goes quiet with the line still open.
+      res.write(sse([['message_start', { message }], ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }]]));
+      return;
+    }
     if ((mode === 'cut-then-ok' && calls === 1) || mode === 'always-cut') {
       res.write(sse([['message_start', { message }], ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }]]));
       setTimeout(() => res.socket.destroy(), 20); // the gateway drops the line mid-reply
@@ -75,4 +80,17 @@ test('a bad request is not retried', async () => {
   mode = 'bad-request';
   await assert.rejects(ask(), /nope/);
   assert.equal(calls, 1);
+});
+
+test('a reply that goes silent with the line open is cut off and retried, not waited on forever', async () => {
+  calls = 0;
+  mode = 'silent-then-ok';
+  client.setStreamIdleForTests(150);
+  try {
+    const r = await ask();
+    assert.equal(r.text, 'complete answer');
+    assert.equal(calls, 2);
+  } finally {
+    client.setStreamIdleForTests(180_000);
+  }
 });

@@ -83,31 +83,82 @@ export async function fetchHttp(url: string, fetchFn: typeof fetch = fetch): Pro
   return { ok: true, url: finalUrl, status: res.status, html, via: 'http' };
 }
 
-/** Headless Chrome via the user's installed Chrome (no browser download). */
+/**
+ * Headless Chrome via the user's installed Chrome (no browser download). One Chrome is shared by every
+ * job running at the same time; each page read opens its own tab.
+ */
 let browserPromise: Promise<any> | null = null;
+/** Page reads in progress right now, across every job and site. */
+let openReads = 0;
+/** A close that was asked for while reads were still running, or that waits a moment for the next job. */
+let closeTimer: NodeJS.Timeout | null = null;
+let closeWanted = false;
+let closeDelayMs = 5_000;
+/** How Chrome is started. Swapped in tests so they don't need Chrome. */
+let launchChrome = async () => {
+  const { chromium } = await import('playwright-core');
+  return chromium.launch({ channel: 'chrome', headless: true });
+};
+/** Tests only: use a fake browser and a short close delay. */
+export function setBrowserForTests(launch: () => Promise<any>, delayMs = 20): void {
+  launchChrome = launch;
+  closeDelayMs = delayMs;
+}
+
 export const chromeFetch: BrowserFetch = async (url) => {
-  browserPromise ??= (async () => {
-    const { chromium } = await import('playwright-core');
-    try {
-      return await chromium.launch({ channel: 'chrome', headless: true });
-    } catch (err: any) {
-      browserPromise = null;
-      throw new Error(`Google Chrome could not be started for reading JavaScript pages (${String(err.message).split('\n')[0]})`);
-    }
-  })();
-  const browser = await browserPromise;
-  const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: 'en-US' });
+  if (closeTimer) clearTimeout(closeTimer), (closeTimer = null);
+  openReads++;
   try {
-    const page = await ctx.newPage();
-    const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
-    return { status: resp?.status() ?? 200, html: await page.content(), url: page.url() };
+    browserPromise ??= (async () => {
+      try {
+        return await launchChrome();
+      } catch (err: any) {
+        browserPromise = null;
+        throw new Error(`Google Chrome could not be started for reading JavaScript pages (${String(err.message).split('\n')[0]})`);
+      }
+    })();
+    const browser = await browserPromise;
+    const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: 'en-US' });
+    try {
+      const page = await ctx.newPage();
+      const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
+      return { status: resp?.status() ?? 200, html: await page.content(), url: page.url() };
+    } finally {
+      await ctx.close().catch(() => {});
+    }
   } finally {
-    await ctx.close();
+    openReads--;
+    if (closeWanted && openReads === 0) scheduleClose();
   }
 };
 
+function scheduleClose(): void {
+  if (closeTimer) clearTimeout(closeTimer);
+  closeTimer = setTimeout(() => {
+    closeTimer = null;
+    if (openReads > 0) return;
+    closeWanted = false;
+    const b = browserPromise;
+    browserPromise = null;
+    void b?.then((x) => x.close()).catch(() => {});
+  }, closeDelayMs);
+  closeTimer.unref?.();
+}
+
+/**
+ * A job is done with Chrome. Other jobs may still be reading pages, so Chrome only closes once nothing is
+ * open, and a few seconds later in case the next job wants it. Never closes a page someone else is reading.
+ */
 export async function closeBrowser(): Promise<void> {
+  if (!browserPromise) return;
+  closeWanted = true;
+  if (openReads === 0) scheduleClose();
+}
+
+/** Close Chrome now, whatever is running (shutdown only). */
+export async function shutdownBrowser(): Promise<void> {
+  if (closeTimer) clearTimeout(closeTimer), (closeTimer = null);
   const b = await browserPromise?.catch(() => null);
   browserPromise = null;
   await b?.close().catch(() => {});

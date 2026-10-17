@@ -16,7 +16,8 @@
     <a href="/" class="site-name" title="Switch website"><img id="site-icon" alt="" width="16" height="16"><span id="site-name"></span><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></a>
     <span id="google-pill" class="pill-btn"></span>
     <span class="spacer"></span>
-    <a href="#logs" id="activity" class="activity" hidden></a>
+    <span class="activity-wrap"><button type="button" id="activity" class="activity" hidden aria-expanded="false" aria-controls="activity-list"></button>
+      <div id="activity-list" class="activity-list" hidden></div></span>
     <nav class="bar-links">
       <a href="#today">Dashboard</a>
       <a href="#analytics">Analytics</a>
@@ -73,10 +74,12 @@
           <h1>Today</h1>
           <span id="today-progress" class="muted"></span>
         </div>
+        <p id="today-flash" class="flash-note" hidden></p>
         <div id="today-card"></div>
         <div class="section-head">
           <h2>Agents</h2>
-          <span class="muted small">Each works on its own channel. Open one to see everything it made.</span>
+          <span class="muted small">Each works on its own channel, and several can work at the same time. Open one to see everything it made.</span>
+          <button id="run-all" class="secondary small-btn" title="Every agent looks for work and drafts, all at the same time. Uses AI.">Run all agents</button>
         </div>
         <div id="folders" class="folders"></div>
       </section>
@@ -217,6 +220,7 @@
           <span class="actions"><button id="folder-run">Find work and draft now</button></span>
         </div>
         <p id="folder-desc" class="muted"></p>
+        <p id="folder-flash" class="flash-note" hidden></p>
         <details class="instructions" id="folder-instr-box">
           <summary>Instructions for this agent <span id="folder-instr-tag" class="muted small"></span></summary>
           <p class="muted small">Standing rules it follows every time it writes for this site, e.g. "never mention prices" or "always end with a question". They override the brand voice where the two disagree.</p>
