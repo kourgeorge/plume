@@ -4,13 +4,15 @@ import { AuditResult, Issue, dailyFixes, markFixDone, pinIssue } from './agents/
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
 import { ChangeCard, dismissChange, openChanges } from './watch';
+import { RankAlert, dismissAlert, openAlerts } from './seo/rankings';
 
 /** One card in the Today feed. `key` is stable so skips survive a refresh. */
 export type TodayItem =
   | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number } }
   | { key: string; kind: 'fix'; score: number; fix: Issue }
   | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number }
-  | { key: string; kind: 'watch'; score: number; change: ChangeCard };
+  | { key: string; kind: 'watch'; score: number; change: ChangeCard }
+  | { key: string; kind: 'rank'; score: number; alert: RankAlert };
 
 const SEVERITY_SCORE = { critical: 100, high: 70, medium: 40, low: 20 } as const;
 
@@ -62,6 +64,9 @@ export function todayFeed(now = new Date()): TodayItem[] {
     if (r?.headline && issue && issue.severity === 'critical' && handled[strategy] !== r.at)
       items.push({ key: `speed:${strategy}`, kind: 'speed', score: strategy === 'mobile' ? 90 : 85, strategy, headline: r.headline, performance: r.scores.performance });
   }
+
+  // A tracked search moved a lot: a drop needs a look sooner than a rise.
+  for (const a of openAlerts()) items.push({ key: `rank:${a.id}`, kind: 'rank', score: a.to > a.from ? 75 : 45, alert: a });
 
   // Competitor news: worth a look, but after anything that needs action.
   for (const c of openChanges()) {
@@ -115,5 +120,10 @@ export function sendSpeedToSeo(strategy: Strategy): Issue | null {
 
 export function changeSeen(id: number): void {
   dismissChange(id);
+  countDone();
+}
+
+export function rankAlertSeen(id: number): void {
+  dismissAlert(id);
   countDone();
 }

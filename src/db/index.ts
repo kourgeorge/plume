@@ -139,6 +139,29 @@ CREATE TABLE IF NOT EXISTS chat_actions (
   status TEXT NOT NULL,           -- pending | applied | discarded | done | undone
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tracked_keywords (
+  keyword TEXT PRIMARY KEY,       -- lowercased search term
+  source TEXT NOT NULL,           -- user | suggested
+  added_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS serp_snapshots (
+  keyword TEXT NOT NULL,
+  at TEXT NOT NULL,
+  location TEXT NOT NULL,         -- e.g. "Israel"; results differ by country
+  results TEXT NOT NULL,          -- JSON list of {position, url, domain, title}
+  our_position INTEGER,           -- null = not in the top results
+  cost REAL NOT NULL DEFAULT 0,   -- what the lookup cost, in USD, as the provider reported it
+  PRIMARY KEY (keyword, at)
+);
+CREATE TABLE IF NOT EXISTS rank_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  keyword TEXT NOT NULL,
+  week TEXT NOT NULL,             -- the week (Monday) the move was measured
+  from_position REAL NOT NULL,
+  to_position REAL NOT NULL,
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (keyword, week)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON

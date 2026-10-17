@@ -11,6 +11,7 @@ import { auditPages } from '../agents/seoAudit';
 import { parseReport } from '../analytics/pagespeed';
 import { addCompetitor, savePerson } from '../context/extra';
 import { saveTechSignals } from '../research/techSignals';
+import { detectMoves, trackKeyword } from '../seo/rankings';
 
 const { site: demo, created } = addSite('https://acme-widgets.example');
 if (!created) {
@@ -112,5 +113,35 @@ saveTechSignals([
   { name: 'Instagram', kind: 'social', seenOn: `${site}/about`, detail: 'https://www.instagram.com/acmewidgets' },
 ]);
 savePerson({ name: 'Dana Levi', role: 'Founder', bio: 'Former office designer. Writes short, practical posts; never uses buzzwords.', linkedinUrl: 'linkedin.com/in/dana-levi-example' });
+
+// Twelve weeks of made-up Search Console history, ending last Sunday, so Rankings has something to show.
+const lastSunday = new Date();
+lastSunday.setUTCDate(lastSunday.getUTCDate() - ((lastSunday.getUTCDay() + 7) % 7 || 7));
+const gsc = getDb().prepare('INSERT OR REPLACE INTO gsc_daily (date, query, page, clicks, impressions, position) VALUES (?, ?, ?, ?, ?, ?)');
+const series: [string, string, (w: number) => number, number][] = [
+  ['modular desk organiser', '/products/starter-kit', (w) => 18 - w * 0.9, 40], // steady climb onto page one
+  ['cable management desk', '/blog/cable-management', (w) => 6 + (w >= 11 ? 5 : 0), 60], // sudden drop in the last week
+  ['desk widgets', '/', (w) => 3 + (w % 2) * 0.4, 25],
+  ['small desk ideas', '/blog/small-desk', (w) => 24 - w * 0.4, 15],
+];
+for (let d = 0; d < 84; d++) {
+  const date = new Date(lastSunday.getTime() - (83 - d) * 86400e3).toISOString().slice(0, 10);
+  const w = Math.floor(d / 7);
+  for (const [query, page, pos, imp] of series) {
+    const p = Math.max(1, pos(w));
+    gsc.run(date, query, `${site}${page}`, p <= 10 ? Math.round(imp * (0.12 - p / 120)) : 0, imp, Math.round(p * 10) / 10);
+  }
+}
+for (const k of ['modular desk organiser', 'cable management desk', 'desk widgets']) trackKeyword(k);
+detectMoves();
+getDb()
+  .prepare('INSERT OR REPLACE INTO serp_snapshots (keyword, at, location, results, our_position, cost) VALUES (?, ?, ?, ?, ?, ?)')
+  .run('cable management desk', new Date().toISOString(), 'United States', JSON.stringify([
+    { position: 1, url: 'https://desktidy.example/cables', domain: 'desktidy.example', title: 'Cable management ideas for any desk' },
+    { position: 2, url: 'https://www.bigstore.example/cable-trays', domain: 'www.bigstore.example', title: 'Cable trays — free delivery' },
+    { position: 3, url: 'https://cableco.example/', domain: 'cableco.example', title: 'CableCo under-desk trays' },
+    { position: 4, url: 'https://blog.example/tidy', domain: 'blog.example', title: '11 ways to tidy desk cables' },
+    { position: 5, url: `${site}/blog/cable-management`, domain: 'acme-widgets.example', title: 'Cable management for small desks' },
+  ]), 5, 0.002);
 });
 console.log(`Demo site added: open http://127.0.0.1:${process.env.PORT ?? 4410}/s/${demo.slug}/`);

@@ -10,6 +10,8 @@ import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
 import { checkWatched } from './watch';
+import { detectMoves, listTracked } from './seo/rankings';
+import { checkAllSerps, serpCreds } from './seo/serp';
 import { finishJob, startJob } from './jobs';
 import { currentSite, withSite } from './site';
 import { listSites, siteUrl } from './sites';
@@ -100,6 +102,30 @@ export function taskDefs(): TaskDef[] {
         } finally {
           await closeBrowser();
         }
+      },
+    },
+    {
+      id: 'rank-moves',
+      label: 'Check tracked searches for big ranking moves',
+      cron: '27 7 * * 1',
+      costsMoney: false,
+      run: async () => {
+        if (!listTracked().length) return 'skipped: no searches are tracked';
+        const n = detectMoves();
+        return n ? `${n} search(es) moved 3 or more places` : 'no big moves';
+      },
+    },
+    {
+      id: 'serp',
+      label: 'Look up who outranks you on Google (DataForSEO, about $0.002 per search)',
+      cron: '43 7 * * 1',
+      costsMoney: true,
+      run: async () => {
+        if (!serpCreds()) return 'skipped: DataForSEO is not connected';
+        if (!listTracked().length) return 'skipped: no searches are tracked';
+        const r = await checkAllSerps();
+        if (r.failed) throw new Error(`checked ${r.checked}, then stopped: ${r.failed}`);
+        return `checked ${r.checked} search(es) for $${r.cost.toFixed(3)}`;
       },
     },
     {

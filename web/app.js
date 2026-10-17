@@ -5,9 +5,12 @@ if (!SITE) location.replace('/');
 const withSite = (url) => `${url}${url.includes('?') ? '&' : '?'}site=${encodeURIComponent(SITE)}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const api = async (path, opts = {}) => {
-  const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', 'x-plume-site': SITE, ...(opts.headers || {}) } });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  // Only say "this is JSON" when there is a body: the server rejects an empty body sent with that header,
+  // which broke every delete button (DELETE requests carry no body).
+  const headers = { 'x-plume-site': SITE, ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(opts.headers || {}) };
+  const res = await fetch(path, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || data.message || res.statusText);
   return data;
 };
 const post = (path, body = {}) => api(path, { method: 'POST', body: JSON.stringify(body) });
@@ -47,10 +50,11 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings', 'rankings'];
 
 function showView(id) {
-  for (const v of VIEWS) $(`view-${v}`).hidden = v !== id;
+  // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
+  for (const v of VIEWS) if ($(`view-${v}`)) $(`view-${v}`).hidden = v !== id;
   for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
   $('col-center').scrollTop = 0;
 }
@@ -82,6 +86,7 @@ async function route() {
     case 'check': return loadAudit();
     case 'speed': return loadSpeed();
     case 'results': return loadResults();
+    case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
     case 'settings': return loadSettings();
@@ -273,6 +278,22 @@ function renderTodayCard(item, left) {
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
       </div>${more}</div>`;
     $('t-seen').onclick = act(async () => post(`/api/changes/${c.id}/seen`));
+  }
+  else if (item.kind === 'rank') {
+    const a = item.alert;
+    const down = a.to > a.from;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span class="${down ? 'sev critical' : 'good'}">${down ? 'Ranking drop' : 'Ranking rise'}</span><span>·</span><span>week of ${esc(a.week)}</span></div>
+      <h2 dir="auto">“${esc(a.keyword)}” ${down ? 'fell' : 'rose'} from position ${a.from} to ${a.to}</h2>
+      <p class="why">${down
+        ? 'A drop this size usually means a competitor published something better, or your page changed. Check who is ahead now and whether your page still answers the search.'
+        : 'Worth knowing what worked, so you can do more of it.'}</p>
+      <div class="acts">
+        <button id="t-seen">Got it</button>
+        <a href="#rankings"><button class="secondary">See rankings</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div>${more}</div>`;
+    $('t-seen').onclick = act(async () => post(`/api/rank-alerts/${a.id}/seen`));
   }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
 }

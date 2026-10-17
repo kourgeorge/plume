@@ -28,6 +28,7 @@ import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, 
 import {
   MENTIONS, applyAction, createThread, deleteThread, discardAction, getThread, isThreadRunning, listThreads, sendMessage, showThread, suggestions, undoAction,
 } from '../chat';
+import { rankAlertSeen } from '../today';
 import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
@@ -40,6 +41,8 @@ import { closeBrowser } from '../research/fetchPage';
 import { Level, recentLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
+import { MAX_TRACKED, completeWeeks, listTracked, normalizeKeyword, rankingsTable, suggestKeywords, trackKeyword, untrackKeyword } from '../seo/rankings';
+import { checkSerp, clearSerpCreds, describeSerp, latestSerp, saveSerpCreds, setSerpLocation } from '../seo/serp';
 
 /** Only this machine may talk to the API: reject other Host headers (DNS rebinding) and cross-site Origins. */
 function localOnly(port: number) {
@@ -542,6 +545,57 @@ export function buildServer(port: number): FastifyInstance {
       }
     });
   }
+
+  // ---- rankings ----
+  app.get<{ Querystring: { weeks?: string } }>('/api/rankings', async (req) => {
+    const weeks = Math.min(52, Math.max(4, Number(req.query.weeks) || 12));
+    return { rows: rankingsTable(weeks), suggestions: suggestKeywords(10), serp: describeSerp(), hasData: completeWeeks(1).length > 0, max: MAX_TRACKED };
+  });
+  app.post<{ Body: { keyword?: string; keywords?: string[]; source?: 'user' | 'suggested' } }>('/api/rankings', async (req, reply) => {
+    const list = req.body?.keywords ?? (req.body?.keyword !== undefined ? [req.body.keyword] : []);
+    if (!list.length) return reply.code(400).send({ error: 'type a search term' });
+    try {
+      const added = list.map((k) => trackKeyword(k, req.body?.source === 'suggested' ? 'suggested' : 'user')).filter(Boolean);
+      return { added: added.length, already: list.length - added.length };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.delete<{ Querystring: { keyword?: string } }>('/api/rankings', async (req, reply) => {
+    try {
+      untrackKeyword(req.query.keyword ?? '');
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.get<{ Querystring: { keyword?: string } }>('/api/rankings/serp', async (req, reply) => {
+    try {
+      return { serp: latestSerp(normalizeKeyword(req.query.keyword ?? '')) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.post<{ Body: { keyword?: string } }>('/api/rankings/serp', async (req, reply) => {
+    try {
+      const k = normalizeKeyword(req.body?.keyword ?? '');
+      if (!listTracked().some((t) => t.keyword === k)) return reply.code(400).send({ error: 'track this search first' });
+      return await checkSerp(k);
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.put<{ Body: { login?: string; password?: string; location?: string } }>('/api/serp', async (req, reply) => {
+    try {
+      if (req.body?.login !== undefined) saveSerpCreds(req.body.login, req.body.password ?? '');
+      if (req.body?.location !== undefined) setSerpLocation(req.body.location);
+      return describeSerp();
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.delete('/api/serp', async () => (clearSerpCreds(), describeSerp()));
+  app.post<{ Params: { id: string } }>('/api/rank-alerts/:id/seen', async (req) => (rankAlertSeen(Number(req.params.id)), { ok: true }));
 
   // ---- Today ----
   app.get('/api/today', async () => ({ items: todayFeed(), ...todayProgress() }));

@@ -266,3 +266,20 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .int-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; }
 .int-card .form { margin: 10px 0; }
 .actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ---- rankings ---- */
+.rk-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0 8px; }
+.rk-form input { flex: 1; min-width: 220px; }
+#rk-suggest-box { margin: 6px 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.table-wrap { overflow-x: auto; }
+.rk-table td { vertical-align: middle; }
+.rk-table td.good strong { color: var(--good); } .rk-table td.mid strong { color: var(--mid); }
+.spark-cell { color: var(--accent); }
+.spark { display: block; }
+.rk-serp { margin-top: 16px; max-width: 860px; }
+.serp-list { margin: 8px 0 0; padding-inline-start: 26px; }
+.serp-list li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.serp-list li small { display: block; color: var(--muted); }
+.serp-list li.mine { background: var(--accent-soft); border-radius: 6px; padding-inline: 6px; }
+.serp-list li.mine::after { content: "← you"; font-size: 12px; color: var(--accent); font-weight: 700; }
+#rk-dfs { margin-top: 20px; }

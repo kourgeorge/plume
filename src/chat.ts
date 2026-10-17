@@ -197,7 +197,9 @@ export async function runChatTool(threadId: number, name: string, input: any, to
                   ? `- Site fix (${i.fix.severity}): ${i.fix.title} on ${i.fix.url}`
                   : i.kind === 'speed'
                     ? `- Speed (${i.strategy}, score ${i.performance}): ${i.headline}`
-                    : `- Competitor change: ${i.change.name} ${i.change.changes.map((c) => c.text).join('; ')}`,
+                    : i.kind === 'rank'
+                      ? `- Ranking move: "${i.alert.keyword}" went from position ${i.alert.from} to ${i.alert.to} (week of ${i.alert.week})`
+                      : `- Competitor change: ${i.change.name} ${i.change.changes.map((c) => c.text).join('; ')}`,
             )
             .join('\n'),
           isError: false,
