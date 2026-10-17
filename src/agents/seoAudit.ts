@@ -1,6 +1,7 @@
 import { getDb, getSetting, setSetting } from '../db';
 import { escapeHtml } from '../publish';
 import { aiAccess, unblockSnippet } from '../research/aiCrawlers';
+import { saveAuditHistory } from '../actions';
 import { BusinessFacts, IDENTITY_TYPES, RETIRED_RICH_RESULTS, identitySchema } from '../research/schema';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
@@ -301,6 +302,7 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
   if (origin) site.business = businessFacts(origin, pages);
   const result = auditPages(pages, site);
   setSetting('lastAudit', result);
+  saveAuditHistory(result);
   return result;
 }
 

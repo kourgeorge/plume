@@ -41,6 +41,17 @@ const server = http.createServer((req, res) => {
         { keys: ['2026-10-11', 'best widgets 2026', 'https://www.acme.com/blog/best-widgets'], clicks: 1, impressions: 100, position: 18 },
       ] });
     if (req.url.startsWith('/admin/accountSummaries')) return json(200, { accountSummaries: [{ propertySummaries: [{ property: 'properties/123', displayName: 'Acme' }] }] });
+    if (req.url === '/data/properties/123:runReport' && body.includes('sessionDefaultChannelGroup'))
+      return json(200, { rows: [
+        { dimensionValues: [{ value: '20261015' }, { value: 'Organic Search' }], metricValues: [{ value: '300' }, { value: '350' }] },
+        { dimensionValues: [{ value: '20261014' }, { value: 'Direct' }], metricValues: [{ value: '100' }, { value: '120' }] },
+        { dimensionValues: [{ value: '20261005' }, { value: 'Direct' }], metricValues: [{ value: '50' }, { value: '60' }] },
+      ] });
+    if (req.url === '/data/properties/123:runReport' && body.includes('totalUsers'))
+      return json(200, { rows: [
+        { dimensionValues: [{ value: '20261015' }], metricValues: [{ value: '300' }, { value: '500' }, { value: '90' }] },
+        { dimensionValues: [{ value: '20261014' }], metricValues: [{ value: '100' }, { value: '100' }, { value: '10' }] },
+      ] });
     if (req.url === '/data/properties/123:runReport')
       return json(200, { rows: [
         { dimensionValues: [{ value: '20261015' }, { value: '/pricing' }], metricValues: [{ value: '600' }, { value: '500' }, { value: '0.7' }, { value: '45' }] },
@@ -131,6 +142,17 @@ test('7-day window counts only the last 7 days; engagement is averaged by sessio
   assert.equal(results.topPages(50, 7).find((p) => p.page === '/pricing').views, 600);
 });
 
+test('summary: visitors and revenue come from the whole-site report; sources compare with the period before', () => {
+  const s = results.resultsSummary(7);
+  assert.equal(s.now.users, 400, 'visitors are not added up from pages');
+  assert.equal(s.now.revenue, 100);
+  assert.equal(s.now.sessions, 600);
+  assert.deepEqual(s.visits.at(-1), { date: '2026-10-15', users: 300, views: 600 });
+  assert.deepEqual(s.sources.map((r) => [r.channel, r.users, r.before]), [['Organic Search', 300, 0], ['Direct', 100, 50]]);
+  assert.equal(s.pages[0].page, '/pricing');
+  assert.equal(s.pages[0].views, 600);
+});
+
 test('GA dates convert from YYYYMMDD', () => {
   assert.equal(pull.gaDate('20261015'), '2026-10-15');
   assert.equal(pull.gaDate('2026-10-15'), '2026-10-15');
@@ -156,9 +178,11 @@ test('notes list winners and near-misses, and reach agents after the cached docs
   assert.match(notes, /page 2–3[\s\S]*"best widgets": 400 impressions/);
   assert.match(notes, /"Best widgets" \(seo\): 3 clicks/);
   const blocks = agentSystem('role', fs.mkdtempSync(path.join(os.tmpdir(), 'p-')), notes);
-  assert.equal(blocks.length, 3);
-  assert.ok(blocks[0].cache_control && !blocks[1].cache_control, 'daily notes must not be inside the cached prefix');
+  // docs, results, what we did (the published draft above), role
+  assert.equal(blocks.length, 4);
+  assert.ok(blocks[0].cache_control && !blocks[1].cache_control && !blocks[2].cache_control, 'daily notes must not be inside the cached prefix');
   assert.match(blocks[1].text, /^<results>/);
+  assert.match(blocks[2].text, /^<what-we-did>[\s\S]*Published "Best widgets"/);
 });
 
 test('SEO opportunities start from Search Console near-misses', async () => {

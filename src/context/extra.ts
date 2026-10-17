@@ -73,6 +73,7 @@ export function removeCompetitor(id: number): void {
   db.transaction(() => {
     db.prepare('DELETE FROM competitor_changes WHERE competitor_id = ?').run(id);
     db.prepare('DELETE FROM competitor_snapshots WHERE competitor_id = ?').run(id);
+    db.prepare('DELETE FROM competitor_scans WHERE competitor_id = ?').run(id);
     db.prepare('DELETE FROM competitors WHERE id = ?').run(id);
   })();
 }

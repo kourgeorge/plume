@@ -18,7 +18,7 @@
     mentions = info.mentions;
     $('chat-threads').innerHTML =
       '<option value="">Earlier chats…</option>' + info.threads.map((t) => `<option value="${t.id}" ${t.id === threadId ? 'selected' : ''}>${esc(t.title)}</option>`).join('');
-    $('chat-threads').hidden = !info.threads.length;
+    $('chat-threads').parentElement.hidden = !info.threads.length;
     if (!info.aiReady) {
       log.innerHTML = `<div class="chat-empty warn">${esc(info.aiProblem)} — <a href="/#llm">set it up</a>.</div>`;
       $('chat-suggest').innerHTML = '';
@@ -27,6 +27,7 @@
     }
     input.disabled = $('chat-send').disabled = false;
     if (!threadId) {
+      $('chat-title').textContent = 'Ask Plume';
       log.innerHTML = '<div class="chat-empty muted">Ask about your marketing, or have Plume write something. It knows your documents, results and competitors. Changes it suggests wait for you to apply them.</div>';
       showSuggestions(info.suggestions);
     }
@@ -34,7 +35,7 @@
 
   function showSuggestions(list) {
     $('chat-suggest').innerHTML = list.map((s) => `<button type="button" class="chip-btn" dir="auto">${esc(s)}</button>`).join('');
-    for (const b of $('chat-suggest').querySelectorAll('button')) b.onclick = () => ((input.value = b.textContent), input.focus());
+    for (const b of $('chat-suggest').querySelectorAll('button')) b.onclick = () => ((input.value = b.textContent), grow(), input.focus());
   }
 
   async function openThread(id) {
@@ -53,6 +54,7 @@
       threadId = null;
       return loadChat();
     }
+    $('chat-title').textContent = t.thread.title || 'Ask Plume';
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
     log.innerHTML = t.items.map(renderItem).join('') + (t.thread.running ? '<div class="msg assistant thinking"><span class="dot-anim"></span> Working…</div>' : '') + (t.thread.error ? `<div class="msg error">${esc(t.thread.error)}</div>` : '');
     wireActions();
@@ -66,12 +68,16 @@
     if (t.thread.running || jobRunning) polling = setTimeout(refreshThread, t.thread.running ? 1200 : 4000);
   }
 
+  const COPY_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V6a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
   function renderItem(item) {
     if (item.role === 'you') return `<div class="msg you" dir="auto">${esc(item.text)}</div>`;
     const steps = item.steps?.length ? `<div class="steps">${item.steps.map((s) => `<span>${esc(s)}</span>`).join('')}</div>` : '';
     const body = item.html ? `<div class="msg-body doc" dir="auto">${item.html}</div>` : '';
     const actions = (item.actions ?? []).map(renderAction).join('');
-    return `<div class="msg assistant">${steps}${body}${actions}</div>`;
+    const tools = item.html ? `<div class="msg-tools"><button type="button" data-copy title="Copy" aria-label="Copy">${COPY_ICON}</button></div>` : '';
+    return `<div class="msg assistant">${steps}${body}${actions}${tools}</div>`;
   }
 
   function renderAction(a) {
@@ -106,6 +112,13 @@
   }
 
   function wireActions() {
+    for (const b of log.querySelectorAll('[data-copy]')) {
+      b.onclick = async () => {
+        await navigator.clipboard.writeText(b.closest('.msg').querySelector('.msg-body').innerText);
+        b.innerHTML = CHECK_ICON;
+        setTimeout(() => (b.innerHTML = COPY_ICON), 1500);
+      };
+    }
     for (const [attr, verb] of [['data-apply', 'apply'], ['data-discard', 'discard'], ['data-undo', 'undo']]) {
       for (const b of log.querySelectorAll(`[${attr}]`)) {
         b.onclick = async () => {
@@ -131,6 +144,7 @@
     try {
       const r = await post('/api/chat', { threadId, text });
       input.value = '';
+      grow();
       $('chat-suggest').innerHTML = '';
       if (r.threadId !== threadId) {
         threadId = r.threadId;
@@ -170,7 +184,12 @@
     input.focus();
   }
 
-  input.addEventListener('input', showMentions);
+  // The box grows with what you type, up to the CSS max-height.
+  function grow() {
+    input.style.height = 'auto';
+    input.style.height = `${input.scrollHeight}px`;
+  }
+  input.addEventListener('input', () => (grow(), showMentions()));
   input.addEventListener('keydown', (e) => {
     const box = $('mention-box');
     if (!box.hidden) {

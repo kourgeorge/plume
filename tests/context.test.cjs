@@ -89,6 +89,66 @@ test('competitor watch: first look is silent, then new pages, headline and price
   assert.ok(!today.todayFeed(new Date('2026-10-19T09:00:00Z')).some((i) => i.kind === 'watch'));
 });
 
+test('competitor watch: every scan is recorded as baseline, changed or unchanged, and findings carry their source', async () => {
+  const rival = x.listCompetitors().find((c) => c.name === 'Rival');
+  const scans = watch.listScans(rival.id).filter((s) => s.scope === 'site');
+  assert.deepEqual(scans.map((s) => s.outcome), ['changed', 'baseline']);
+  const prices = scans[0].findings.find((f) => f.kind === 'prices');
+  assert.equal(prices.url, 'https://rival.com/pricing');
+  assert.equal(scans[0].findings.find((f) => f.kind === 'headline').url, 'https://rival.com/');
+  await watch.checkCompetitor(rival, { fetchFn: fake, browserFn: null, now: new Date('2026-10-26T06:00:00Z') });
+  assert.equal(watch.listScans(rival.id)[0].outcome, 'unchanged');
+});
+
+test('findSocials keeps company LinkedIn pages and X accounts, not share links or personal profiles', () => {
+  assert.deepEqual(
+    watch.findSocials([
+      'https://www.linkedin.com/in/someone',
+      'https://twitter.com/intent/tweet?text=hi',
+      'https://linkedin.com/company/rival-inc/about',
+      'https://twitter.com/rivalhq',
+      'https://x.com/other',
+    ]),
+    { linkedin: 'https://www.linkedin.com/company/rival-inc', x: 'https://x.com/rivalhq' },
+  );
+});
+
+test('news & social scan: links required, repeats dropped, first scan is a baseline that still shows news, suggestions kept once', async () => {
+  const rival = x.listCompetitors().find((c) => c.name === 'Rival');
+  let prompt = '';
+  const answer = {
+    findings: [
+      { kind: 'news', text: 'Rival raised a $5M seed round (Oct 2026).', url: 'https://news.example/rival-seed' },
+      { kind: 'linkedin', text: 'Posted about their new API.', url: 'not a link' },
+      { kind: 'x', text: 'Launched dark mode.', url: 'https://x.com/rivalhq/status/1' },
+    ],
+    other_competitors: [
+      { name: 'Rival', website: 'rival.com', reason: 'already listed', source_url: 'https://news.example/rival-seed' },
+      { name: 'NewCo', website: 'newco.io', reason: 'Sells the same widgets to the same teams.', source_url: 'https://news.example/rival-seed' },
+    ],
+  };
+  const ask = async (p) => ((prompt = p), answer);
+  const first = await watch.scanNewsSocial(rival, { ask, now: new Date('2026-10-20T06:00:00Z') });
+  assert.equal(first.outcome, 'baseline');
+  assert.deepEqual(first.findings.map((f) => f.kind), ['news', 'x']);
+  assert.equal(first.suggested, 1);
+  assert.match(prompt, /from the last 30 days/);
+  assert.ok(watch.openChanges().some((c) => c.changes.some((f) => f.url === 'https://news.example/rival-seed')), 'news shows in Today even on the first scan');
+
+  const again = await watch.scanNewsSocial(rival, { ask, now: new Date('2026-10-27T06:00:00Z') });
+  assert.equal(again.outcome, 'unchanged');
+  assert.equal(again.findings.length, 0);
+  assert.equal(again.suggested, 0);
+  assert.match(prompt, /since 2026-10-20/);
+
+  const [sg] = watch.openSuggestions();
+  assert.equal(sg.name, 'NewCo');
+  assert.equal(sg.url, 'https://newco.io');
+  watch.settleSuggestion(sg.id, 'dismissed');
+  assert.equal(watch.openSuggestions().length, 0);
+  assert.equal(watch.suggestCompetitor({ name: 'newco', reason: 'again' }), false, 'a dismissed suggestion does not come back');
+});
+
 test('competitor watch: a site that stops answering is reported once it was readable before', async () => {
   const rival = x.listCompetitors().find((c) => c.name === 'Rival');
   site = {};

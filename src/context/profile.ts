@@ -6,7 +6,8 @@ import { performanceNotes } from '../analytics/results';
 import { languageRule } from './language';
 import { feedbackNote } from '../feedback';
 import { extraContext } from './extra';
-import { instructionsNote } from '../agents/instructions';
+import { generalNote, instructionsNote } from '../agents/instructions';
+import { actionsNote } from '../actions';
 
 /**
  * The documents every agent reads before writing anything. Order is fixed so the cached prefix stays stable,
@@ -74,6 +75,15 @@ function safeNotes(): string | null {
   }
 }
 
+/** What was done lately and how it went; none when nothing was recorded (or no site is selected, as in tests). */
+function safeActions(): string | null {
+  try {
+    return actionsNote();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * System-prompt blocks for any agent: its own role first, then all the docs in one cached block.
  * Docs are never shortened — an agent working from a clipped voice guide drifts off-brand.
@@ -86,8 +96,10 @@ export function agentSystem(
   agent?: string,
 ): Anthropic.Beta.BetaTextBlockParam[] {
   const rejected = agent ? feedbackNote(agent) : null;
+  const general = generalNote();
   const standing = agent ? instructionsNote(agent) : null;
   const extra = safeExtra();
+  const done = safeActions();
   const docs = PROFILE_DOCS.map((d) => `<doc id="${d.id}" title="${d.title}">\n${readDoc(d.id, dir) ?? '(not written yet)'}\n</doc>`).join('\n\n');
   return [
     {
@@ -101,6 +113,7 @@ export function agentSystem(
     // After the cached docs: these change more often, so they must not sit inside the cached prefix.
     ...(extra ? [{ type: 'text' as const, text: `<more-context>\n${extra}\n</more-context>` }] : []),
     ...(notes ? [{ type: 'text' as const, text: `<results>\n${notes}\n</results>` }] : []),
-    { type: 'text', text: [role, languageRule(), standing, rejected].filter(Boolean).join('\n\n') },
+    ...(done ? [{ type: 'text' as const, text: `<what-we-did>\n${done}\n</what-we-did>` }] : []),
+    { type: 'text', text: [role, languageRule(), general, standing, rejected].filter(Boolean).join('\n\n') },
   ];
 }

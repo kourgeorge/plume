@@ -1,6 +1,7 @@
 import { getSetting, setSetting } from './db';
 import { listDrafts, getDraft, moveDraft, Draft } from './queue';
-import { AuditResult, Issue, dailyFixes, markFixDone, pinIssue } from './agents/seoAudit';
+import { AuditResult, Issue, dailyFixes, markFixDone, pinIssue, pinnedIssues } from './agents/seoAudit';
+import { recordFixDone } from './actions';
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
 import { ChangeCard, dismissChange, openChanges } from './watch';
@@ -110,7 +111,10 @@ export function notUseful(draftId: number, reason: string | null): void {
 }
 
 export function fixDone(id: string): void {
+  // Look it up before marking it: a pinned fix leaves the pinned list once done.
+  const issue = getSetting<AuditResult | null>('lastAudit', null)?.issues.find((i) => i.id === id) ?? pinnedIssues().find((i) => i.id === id);
   markFixDone(id);
+  if (issue) recordFixDone(issue);
   countDone();
 }
 

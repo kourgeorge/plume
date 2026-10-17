@@ -26,6 +26,14 @@ test('adding sites: one folder each, same site twice is the same site, bad addre
   withSite('alpha.example', () => assert.equal(sites.siteUrl(), 'https://www.alpha.example'));
 });
 
+test('changing a site address keeps its folder, and refuses bad or taken addresses', () => {
+  assert.equal(sites.setSiteUrl('alpha.example', 'alpha-new.example/home').url, 'https://alpha-new.example');
+  assert.equal(sites.getSite('alpha.example').slug, 'alpha.example');
+  assert.throws(() => sites.setSiteUrl('alpha.example', 'not a site'), /not a website address/);
+  assert.throws(() => sites.setSiteUrl('alpha.example', 'beta.example'), /already in your website list/);
+  sites.setSiteUrl('alpha.example', 'https://www.alpha.example');
+});
+
 test("two sites never see each other's data, even when their work interleaves", async () => {
   const work = (slug, n) =>
     withSite(slug, async () => {

@@ -41,13 +41,18 @@ export function siteSummaries(): SiteSummary[] {
   );
 }
 
+/** "acme.com/about" → "https://acme.com". */
+function originFor(rawUrl: string): string {
+  const u = new URL(/^https?:\/\//i.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`);
+  return `${u.protocol}//${u.hostname.toLowerCase()}`;
+}
+
 /** Register a website and give it its own folder. Adding one that exists returns the existing one. */
 export function addSite(rawUrl: string): { site: Site; created: boolean } {
   const slug = slugFor(rawUrl);
   const existing = getSite(slug);
   if (existing) return { site: existing, created: false };
-  const u = new URL(/^https?:\/\//i.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`);
-  const url = `${u.protocol}//${u.hostname.toLowerCase()}`;
+  const url = originFor(rawUrl);
   getGlobalDb().prepare('INSERT INTO sites (slug, url, name, created_at) VALUES (?, ?, ?, ?)').run(slug, url, slug, new Date().toISOString());
   return { site: getSite(slug)!, created: true };
 }
@@ -65,6 +70,21 @@ export function touchSite(slug: string): void {
 export function renameSite(slug: string, name: string): Site {
   if (!getSite(slug)) throw new Error(`no site ${slug}`);
   getGlobalDb().prepare('UPDATE sites SET name = ? WHERE slug = ?').run(name.trim() || slug, slug);
+  return getSite(slug)!;
+}
+
+/** Change the address a site is researched from (e.g. after moving domains). Its folder, and so its data, stays put. */
+export function setSiteUrl(slug: string, rawUrl: string): Site {
+  if (!getSite(slug)) throw new Error(`no site ${slug}`);
+  let url: string;
+  try {
+    url = originFor(rawUrl);
+  } catch {
+    throw new Error('that is not a website address');
+  }
+  const other = getSite(slugFor(rawUrl));
+  if (other && other.slug !== slug) throw new Error(`${other.name} is already in your website list`);
+  getGlobalDb().prepare('UPDATE sites SET url = ? WHERE slug = ?').run(url, slug);
   return getSite(slug)!;
 }
 

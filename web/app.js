@@ -16,6 +16,18 @@ const api = async (path, opts = {}) => {
 const post = (path, body = {}) => api(path, { method: 'POST', body: JSON.stringify(body) });
 const n = (x) => (x == null ? '—' : Number(x).toLocaleString());
 const pos = (x) => (x == null || !x ? '—' : Number(x).toFixed(1));
+
+// ---- what we did and what happened (shared by Results and Site fixes)
+const ACTION_WORDS = { 'fix-done': 'Fixed', published: 'Published', 'doc-edited': 'Edited document', 'code-pr': 'Code fix opened' };
+const actionPage = (a) => (a.url ? (() => { try { return new URL(a.url).pathname; } catch { return a.url; } })() : a.kind === 'doc-edited' ? '—' : 'whole site');
+const PROBLEM_WORDS = { gone: '✓ gone', 'still there': '✗ still there', 'not checked yet': 'not checked yet' };
+/** "40 → 61", "61 so far" for new pages, or "too early" while there are under two weeks of data. */
+function beforeAfter(a, key, fmt) {
+  if (a.kind === 'doc-edited') return '—';
+  if (a.tooEarly) return `<small class="muted">too early (${a.daysAfter}d)</small>`;
+  if (!a.after) return '—';
+  return a.before ? `${fmt(a.before[key])} → ${fmt(a.after[key])}` : `${fmt(a.after[key])} <small class="muted">since</small>`;
+}
 const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—');
 const areaLabel = (a) => ({ 'ai-search': 'AI search', 'on-page': 'on the page' })[a] ?? a;
 const band = (score) => (score >= 90 ? 'good' : score >= 50 ? 'mid' : 'bad');
@@ -64,8 +76,15 @@ async function route() {
   state = await api('/api/state');
   $('key-warning').hidden = state.hasApiKey;
   document.title = `${state.siteName} — Plume`;
-  // Nothing researched yet: offer to start (unless research is already running).
+  // Nothing researched yet: if research is already running (say, after a reload), show it; otherwise offer to start.
   if (!state.docs.some((d) => d.written) && $('view-job').hidden) {
+    const research = (await api('/api/jobs/running').catch(() => [])).find((j) => j.kind === 'research');
+    if (research) {
+      $('onboard').hidden = true;
+      $('workspace').hidden = false;
+      waitForJob(research.id, 'Researching your site…').catch((err) => alert(`Research stopped: ${err.message}`)).then(() => ((location.hash = '#doc/product'), route()));
+      return;
+    }
     $('workspace').hidden = true;
     $('onboard').hidden = false;
     $('onboard-site').textContent = new URL(state.site).hostname;
@@ -100,23 +119,55 @@ async function route() {
 
 // ---------------------------------------------------------------- frame: top bar + left + right
 
+const svgIco = (d) => `<svg class="nav-svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const NAV_ICON = {
+  doc: svgIco('M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4'),
+  note: svgIco('M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z'),
+  file: svgIco('M4 6h16M4 12h16M4 18h10'),
+};
+
 async function renderChrome() {
-  $('site-name').textContent = `${state.siteName} ▾`;
+  $('site-name').textContent = state.siteName;
+  if (state.site) $('site-icon').src = `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(new URL(state.site).hostname)}`;
+  loadBarNumbers();
   const lang = state.language;
   $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
   for (const b of $('range').querySelectorAll('button')) b.classList.toggle('on', Number(b.dataset.days) === days);
 
   $('doc-list').innerHTML =
-    state.docs.map((d) => `<li><a href="#doc/${d.id}">${esc(d.title)}<span class="tag">${d.written ? '' : 'not written'}</span></a></li>`).join('') +
-    '<li><a href="#notes">Your notes</a></li><li><a href="#llms">llms.txt</a></li>';
+    state.docs.map((d) => `<li><a href="#doc/${d.id}"><span class="nav-label">${NAV_ICON.doc}${esc(d.title)}</span><span class="tag">${d.written ? '' : 'not written'}</span></a></li>`).join('') +
+    `<li><a href="#notes"><span class="nav-label">${NAV_ICON.note}Your notes</span></a></li><li><a href="#llms"><span class="nav-label">${NAV_ICON.file}llms.txt</span></a></li>`;
   api('/api/context').then((c) => {
     context = c;
+    $('comp-count').textContent = c.competitors.length || '';
     $('comp-list').innerHTML = c.competitors.length
-      ? c.competitors.map((x) => `<li><a href="#competitor/${x.id}" dir="auto">${esc(x.name)}<span class="tag">${x.watch ? 'watching<span class="dot"></span>' : ''}</span></a></li>`).join('')
-      : '<li class="muted small">None yet. Research fills this in, or add your own.</li>';
+      ? c.competitors
+          .map((x) => {
+            const ico = x.url ? `<img class="nav-fav" alt="" loading="lazy" src="https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(new URL(x.url).hostname)}">` : `<span class="nav-ico">${esc(x.name[0] ?? '?')}</span>`;
+            const tag = x.unseen ? `<span class="tag new" title="${x.unseen} finding(s) waiting in Today">${x.unseen} new</span>` : x.watch ? '<span class="tag" title="Scanned every week"><span class="dot"></span>watching</span>' : '<span class="tag"></span>';
+            return `<li><a href="#competitor/${x.id}" dir="auto"><span class="nav-label">${ico}${esc(x.name)}</span>${tag}</a></li>`;
+          })
+          .join('')
+      : '<li class="nav-empty">None yet. Research fills this in, or add your own.</li>';
+    $('comp-suggest').innerHTML = c.suggestions.length
+      ? `<div class="suggest-head">Spotted in your space</div>` +
+        c.suggestions
+          .slice(0, 4)
+          .map((sg) => `<div class="suggest" title="${esc(sg.reason)}"><span class="suggest-name" dir="auto">${esc(sg.name)}${sg.sourceUrl ? ` <a href="${esc(sg.sourceUrl)}" target="_blank" rel="noopener" class="muted" title="Where it was seen">↗</a>` : ''}</span><button class="small-btn" data-sg-add="${sg.id}">Add</button><button class="small-btn secondary" data-sg-dismiss="${sg.id}" title="Not a competitor">×</button></div>`)
+          .join('')
+      : '';
+    for (const b of $('comp-suggest').querySelectorAll('button')) {
+      b.onclick = async () => {
+        b.disabled = true;
+        const add = b.dataset.sgAdd;
+        await post(`/api/competitor-suggestions/${add ?? b.dataset.sgDismiss}/${add ? 'add' : 'dismiss'}`).catch((err) => alert(err.message));
+        context = null;
+        renderChrome();
+      };
+    }
     $('people-list').innerHTML = c.people.length
-      ? c.people.map((p) => `<li><a href="#person/${p.id}" dir="auto">${esc(p.name)}<span class="tag">${esc(p.role)}</span></a></li>`).join('')
-      : '<li class="muted small">Add the founder or whoever posts for the business.</li>';
+      ? c.people.map((p) => `<li><a href="#person/${p.id}" dir="auto"><span class="nav-label"><span class="nav-ico round">${esc((p.name[0] ?? '?').toUpperCase())}</span>${esc(p.name)}</span><span class="tag">${esc(p.role)}</span></a></li>`).join('')
+      : '<li class="nav-empty">Add the founder or whoever posts for the business.</li>';
     $('accounts-tag').textContent = [c.profiles.x && 'X', c.profiles.linkedin && 'LinkedIn'].filter(Boolean).join(' · ') || 'not set';
     for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
   }, () => {});
@@ -139,6 +190,7 @@ async function renderChrome() {
     $('cost-link').textContent = b.limit ? `AI $${b.spent.toFixed(2)} / $${b.limit}` : `AI $${b.spent.toFixed(2)}`;
   }, () => {});
   renderQuick();
+  pollActivity();
 }
 
 /** First real paragraph of the product document: the one-paragraph business summary. */
@@ -168,6 +220,7 @@ function renderQuick() {
 // ---------------------------------------------------------------- jobs
 
 async function waitForJob(jobId, label) {
+  pollActivity();
   showView('job');
   $('job-title').textContent = label;
   for (;;) {
@@ -199,6 +252,61 @@ async function runAgentNow(id) {
   }
   location.hash = '#today';
   route();
+}
+
+// ---------------------------------------------------------------- what's running right now
+
+/** Plain-words name for a job kind. */
+function jobLabel(kind) {
+  if (kind === 'research') return 'Research';
+  if (kind.startsWith('agent:')) return agentLabel(kind.slice(6));
+  if (kind.startsWith('task:')) return { 'site-check': 'Site check', speed: 'Speed check', google: 'Google data' }[kind.slice(5)] ?? kind.slice(5).replace(/-/g, ' ');
+  return kind;
+}
+
+let runningIds = '';
+let activityTimer = null;
+/**
+ * Asks the server what's running and shows it in the top bar. The server keeps the jobs, so this
+ * survives reloads. Checks every few seconds while something runs, and now and then otherwise.
+ */
+async function pollActivity() {
+  clearTimeout(activityTimer);
+  const jobs = await api('/api/jobs/running').catch(() => null);
+  if (jobs) {
+    const el = $('activity');
+    el.hidden = !jobs.length;
+    if (jobs.length) {
+      const j = jobs[0];
+      const step = (j.progress || '').replace(/^[^:]+:\s*/, '');
+      el.innerHTML = `<span class="spin" aria-hidden="true"></span><b>${esc(jobLabel(j.kind))}</b><span class="step">${esc(step)}</span>${jobs.length > 1 ? `<i>+${jobs.length - 1}</i>` : ''}`;
+      el.title = jobs.map((x) => `${jobLabel(x.kind)}: ${x.progress || 'working'}`).join('\n');
+    }
+    const research = jobs.find((j) => j.kind === 'research');
+    // Mark the document being written in the side list.
+    for (const d of state?.docs ?? []) {
+      const a = document.querySelector(`#doc-list a[href="#doc/${d.id}"]`);
+      if (!a) continue;
+      const busy = !!research && (research.progress || '').toLowerCase().includes(`writing ${d.title.toLowerCase()}`);
+      a.classList.toggle('writing', busy);
+      if (busy) a.querySelector('.tag').textContent = 'writing…';
+      else if (a.querySelector('.tag').textContent === 'writing…') a.querySelector('.tag').textContent = d.written ? '' : 'not written';
+    }
+    $('doc-working').hidden = !research;
+    if (research) $('doc-working').innerHTML = `<span class="spin" aria-hidden="true"></span><span><b>Research is running.</b> ${esc(research.progress || '')}. This page updates when it finishes.</span>`;
+    const ids = jobs.map((j) => j.id).join(',');
+    // Something just finished: refresh the page so its results show up.
+    if (runningIds && ids !== runningIds && $('view-job').hidden) {
+      const before = runningIds.split(',');
+      // Only on pages that just show results, so nobody loses half-typed edits.
+      const safe = /^#?(today|folder\/|check|speed)?$/.test(location.hash.split('?')[0]) || location.hash.startsWith('#folder/') || (location.hash.startsWith('#doc/') && $('doc-edit-actions').hidden);
+      if (safe && before.some((id) => !ids.split(',').includes(id))) route();
+    }
+    runningIds = ids;
+    activityTimer = setTimeout(pollActivity, jobs.length ? 2500 : 15000);
+  } else {
+    activityTimer = setTimeout(pollActivity, 15000);
+  }
 }
 
 // ---------------------------------------------------------------- Today
@@ -276,8 +384,8 @@ function renderTodayCard(item, left) {
     const c = item.change;
     box.innerHTML = `<div class="today">
       <div class="kicker"><span>Competitor watch</span><span>·</span><span>${esc(when(c.at))}</span></div>
-      <h2 dir="auto">${esc(c.name)} ${c.changes.length === 1 ? esc(c.changes[0].text) : 'changed their site'}</h2>
-      ${changeList(c.changes.length === 1 && !c.changes[0].items ? [] : c.changes)}
+      <h2 dir="auto">${esc(c.name)}${c.changes.some((x) => FINDING_AREA[x.kind]) ? ': news and posts' : c.changes.length === 1 ? ` ${esc(c.changes[0].text)}` : ' changed their site'}</h2>
+      ${changeList(c.changes.length === 1 && !c.changes[0].items && !c.changes[0].url && !FINDING_AREA[c.changes[0].kind] ? [] : c.changes)}
       <div class="acts">
         <button id="t-seen">Got it</button>
         ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><button class="secondary">Open their site</button></a>` : ''}
@@ -318,12 +426,29 @@ function renderTodayCard(item, left) {
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
 }
 
+const FINDING_AREA = { linkedin: 'LinkedIn', x: 'X', news: 'News' };
+const sourceName = (url) => {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, '') + (u.pathname.length > 1 ? u.pathname.replace(/\/$/, '') : '');
+  } catch {
+    return url;
+  }
+};
+
 function changeList(changes) {
   if (!changes.length) return '';
   return `<ul class="change-list">${changes
-    .map((ch) => `<li>${esc(ch.text.replace(/^./, (x) => x.toUpperCase()))}${ch.items ? `: ${ch.items.map((i) => `<code>${esc(i)}</code>`).join(', ')}` : ''}</li>`)
+    .map(
+      (ch) =>
+        `<li dir="auto">${FINDING_AREA[ch.kind] ? `<span class="area-tag">${FINDING_AREA[ch.kind]}</span> ` : ''}${esc(ch.text.replace(/^./, (x) => x.toUpperCase()))}${ch.items ? `: ${ch.items.map((i) => `<code>${esc(i)}</code>`).join(', ')}` : ''}${
+          ch.url ? ` <a class="source" href="${esc(ch.url)}" target="_blank" rel="noopener" title="${esc(ch.url)}">${esc(sourceName(ch.url).slice(0, 60))} ↗</a>` : ''
+        }</li>`,
+    )
     .join('')}</ul>`;
 }
+
+const OUTCOME = { baseline: ['First look', 'Recorded as the starting point. Changes show from the next scan.'], changed: ['Changed', ''], unchanged: ['No change', 'Nothing new since the scan before.'], failed: ['Failed', ''] };
 
 /** Wrap a card action: run it, then show the next card. Returning 'cancel' keeps the card. */
 function act(fn) {
@@ -368,7 +493,8 @@ function renderFolders(folders) {
           : f.waiting
             ? `<span class="state ready">${f.waiting} ready</span>`
             : `<span class="state">${f.schedule?.enabled ? 'On' : 'Off'} · ${f.total} made</span>`;
-      return `<a class="folder" href="${href}"><span class="glyph">${AGENT_GLYPH[f.id] ?? '•'}</span><span class="name">${esc(f.label)}</span>${status}</a>`;
+      const cls = `folder${f.waiting && !f.working ? ' has-ready' : ''}${f.working ? ' is-working' : ''}`;
+      return `<a class="${cls}" href="${href}"><span class="glyph" aria-hidden="true"><span class="sheet"></span><span class="front">${AGENT_GLYPH[f.id] ?? '•'}</span></span><span class="name">${esc(f.label)}</span>${status}</a>`;
     })
     .join('');
 }
@@ -427,14 +553,25 @@ async function loadCompetitor(id) {
   $('comp-watch').checked = !!c?.watch;
   $('comp-delete').hidden = !c;
   $('comp-status').textContent = takeFlash() || (c ? (c.source === 'research' ? 'Found during research.' : 'Added by you.') : '');
-  $('comp-watch-box').hidden = !c?.url;
-  if (c?.url) {
-    $('comp-checked').textContent = c.lastChecked ? `Last checked ${when(c.lastChecked)}.` : 'Not checked yet. The first check records how their site looks; changes show from the second one.';
-    const t = await api('/api/today');
-    const mine = t.items.filter((i) => i.kind === 'watch' && i.change.competitorId === c.id);
-    $('comp-changes').innerHTML = mine.length
-      ? mine.map((i) => `<li><small>${esc(when(i.change.at))}</small>${changeList(i.change.changes)}</li>`).join('')
-      : '<li class="muted">No changes waiting.</li>';
+  $('comp-watch-box').hidden = !c;
+  if (c) {
+    $('comp-check').hidden = !c.url;
+    $('comp-checked').textContent = c.lastChecked ? `Website last checked ${when(c.lastChecked)}.` : c.url ? 'Not scanned yet. The first scan records how they look now; changes show from the second one.' : 'Add their website for the free website check. News and social work with just a name.';
+    const so = c.socials ?? {};
+    $('comp-socials').innerHTML = so.linkedin || so.x
+      ? `Found on their site: ${[so.linkedin && `<a href="${esc(so.linkedin)}" target="_blank" rel="noopener">LinkedIn ↗</a>`, so.x && `<a href="${esc(so.x)}" target="_blank" rel="noopener">X ↗</a>`].filter(Boolean).join(' · ')}`
+      : '';
+    const scans = await api(`/api/competitors/${c.id}/scans`);
+    $('comp-scans').innerHTML = scans.length
+      ? scans
+          .map((sc) => {
+            const [label, note] = OUTCOME[sc.outcome] ?? [sc.outcome, ''];
+            return `<li><div class="scan-head"><span class="outcome ${sc.outcome}">${label}</span><span>${sc.scope === 'site' ? 'Website' : 'News &amp; social'}</span><small>${esc(when(sc.at))}</small></div>${
+              sc.findings.length ? changeList(sc.findings) : note ? `<p class="muted small">${note}</p>` : ''
+            }</li>`;
+          })
+          .join('')
+      : '<li class="muted small">No scans yet.</li>';
   }
   $('comp-save').onclick = async () => {
     const body = { name: $('comp-name').value, url: $('comp-url').value, notes: $('comp-notes').value, watch: $('comp-watch').checked };
@@ -452,6 +589,21 @@ async function loadCompetitor(id) {
     context = null;
     location.hash = '#today';
   };
+  $('comp-news').onclick = async () => {
+    $('comp-news').disabled = true;
+    $('comp-news').textContent = 'Searching…';
+    try {
+      const r = await post(`/api/competitors/${c.id}/scan-news`);
+      context = null;
+      const extra = r.suggested ? ` Spotted ${r.suggested} other competitor(s) — see the left column.` : '';
+      await goTo(`#competitor/${c.id}`, (r.findings.length ? `Found ${r.findings.length} new item(s).` : r.outcome === 'baseline' ? 'First scan done — nothing recent found.' : 'Nothing new since last time.') + extra);
+    } catch (err) {
+      $('comp-status').textContent = err.message;
+    } finally {
+      $('comp-news').disabled = false;
+      $('comp-news').textContent = 'Scan news & social';
+    }
+  };
   $('comp-check').onclick = async () => {
     $('comp-check').disabled = true;
     $('comp-check').textContent = 'Checking…';
@@ -463,7 +615,7 @@ async function loadCompetitor(id) {
       $('comp-status').textContent = err.message;
     } finally {
       $('comp-check').disabled = false;
-      $('comp-check').textContent = 'Check now';
+      $('comp-check').textContent = 'Check website';
     }
   };
 }
@@ -629,12 +781,16 @@ async function runAudit() {
   }
 }
 
-function renderAudit({ audit, today }) {
+function renderAudit({ audit, today, history = [], fixed = [] }) {
   $('audit-empty').hidden = !!audit;
   $('audit-body').hidden = !audit;
   if (!audit) return;
   $('audit-score').textContent = audit.score;
-  $('audit-counts').textContent = `${audit.counts.critical} critical · ${audit.counts.warnings} warnings · ${audit.counts.passed} passed · ${audit.pagesChecked} pages · checked ${when(audit.at)}`;
+  const trend = history.length > 1 ? ` · score over ${history.length} checks: ${history.slice(-6).map((h) => h.score).join(' → ')}` : '';
+  $('audit-counts').textContent = `${audit.counts.critical} critical · ${audit.counts.warnings} warnings · ${audit.counts.passed} passed · ${audit.pagesChecked} pages · checked ${when(audit.at)}${trend}`;
+  $('audit-fixed').innerHTML =
+    fixed.map((a) => `<tr><td><small>${when(a.at)}</small></td><td>${esc(a.title)}</td><td>${esc(actionPage(a))}</td><td>${esc(PROBLEM_WORDS[a.problem] ?? '—')}</td><td>${beforeAfter(a, 'clicks', n)}</td><td>${beforeAfter(a, 'position', pos)}</td></tr>`).join('') ||
+    '<tr><td colspan="6" class="muted">Nothing marked fixed yet.</td></tr>';
   $('audit-today').innerHTML = today.length
     ? today
         .map(
@@ -768,6 +924,9 @@ function renderResults(r) {
     r.published.map((m) => `<tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener" dir="auto">${esc(m.title)}</a> <small class="muted">${m.publishedDaysAgo}d ago</small></td><td>${n(m.clicks)}</td><td>${n(m.impressions)}</td><td>${pos(m.position)}</td><td>${n(m.views)}</td><td dir="auto">${esc(m.topQuery ?? '—')}</td></tr>`).join('') || empty(6);
   $('r-queries').innerHTML = r.queries.map((q) => `<tr><td dir="auto">${esc(q.query)}</td><td>${n(q.clicks)}</td><td>${n(q.impressions)}</td><td>${(q.ctr * 100).toFixed(1)}%</td><td>${pos(q.position)}</td></tr>`).join('') || empty(5);
   $('r-pages').innerHTML = r.pages.map((p) => `<tr><td>${esc(p.page)}</td><td>${n(p.views)}</td><td>${p.engagement == null ? '—' : (p.engagement * 100).toFixed(0) + '%'}</td><td>${n(p.clicks)}</td></tr>`).join('') || empty(4);
+  $('r-actions').innerHTML =
+    (r.actions ?? []).map((a) => `<tr><td><small>${when(a.at)}</small></td><td>${esc(ACTION_WORDS[a.kind] ?? a.kind)}: ${esc(a.title)}${a.data?.prUrl ? ` <a href="${esc(a.data.prUrl)}" target="_blank" rel="noopener">PR</a>` : ''}</td><td>${esc(actionPage(a))}</td><td>${esc(PROBLEM_WORDS[a.problem] ?? '—')}</td><td>${beforeAfter(a, 'clicks', n)}</td><td>${beforeAfter(a, 'position', pos)}</td><td>${beforeAfter(a, 'views', n)}</td></tr>`).join('') ||
+    empty(7);
   $('r-notes').textContent = r.notes ?? 'Nothing yet — agents will be told once there is data.';
 }
 
@@ -824,6 +983,282 @@ async function loadUsage() {
     .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${n(r.input)} / ${n(r.output)}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
     .join('');
 }
+
+// ---------------------------------------------------------------- top-bar numbers and the Details panel
+
+let summary = null;
+let detailsTab = 'traffic';
+let trafficView = pref.get('trafficView', 'visitors');
+let seoView = pref.get('seoView', 'speed');
+
+/** Percent change, or null when there's nothing to compare against. */
+const change = (now, before) => (now == null || !before ? null : ((now - before) / before) * 100);
+function delta(pct, lowerIsBetter = false) {
+  if (pct == null || !isFinite(pct)) return '';
+  const up = pct >= 0;
+  const good = lowerIsBetter ? !up : up;
+  return `<i class="delta ${Math.abs(pct) < 0.5 ? '' : good ? 'up' : 'down'}">${up ? '↑' : '↓'} ${Math.abs(pct).toFixed(1)}%</i>`;
+}
+const money = (x) => (x == null ? '—' : `$${Number(x).toLocaleString(undefined, { maximumFractionDigits: x < 10 && x % 1 ? 2 : 0 })}`);
+
+async function loadBarNumbers() {
+  try {
+    summary = await api(`/api/results/summary?days=${days === 7 ? 7 : 30}`);
+  } catch {
+    summary = null;
+  }
+  const s = summary;
+  if (!s?.from) {
+    $('bar-numbers').innerHTML = '';
+  } else {
+    // Visitors when Analytics has them, else page views, else Google clicks.
+    const [label, key] = s.now.users != null ? ['Visitors', 'users'] : s.now.views != null ? ['Views', 'views'] : ['Clicks', 'clicks'];
+    const spark = (key === 'clicks' ? s.daily : s.visits).slice(-7);
+    const max = Math.max(1, ...spark.map((d) => d[key] ?? 0));
+    $('bar-numbers').innerHTML = `
+      <button type="button" class="bar-stat" data-open="traffic" title="${label}, last ${s.days} days">
+        <span class="live-dot"></span><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}
+        <span class="spark-bars" aria-hidden="true">${spark.map((d, i) => `<i style="height:${Math.max(8, (100 * (d[key] ?? 0)) / max)}%"${i === spark.length - 1 ? ' class="last"' : ''}></i>`).join('')}</span>
+      </button>
+      ${s.now.revenue != null ? `<button type="button" class="bar-stat" data-open="traffic" title="GA4 conversion value"><span class="lbl">Revenue</span><b>${money(s.now.revenue)}</b>${delta(change(s.now.revenue, s.before.revenue))}</button>` : ''}
+      <button type="button" class="bar-stat" data-open="seo" title="Average position in Google; lower is better"><span class="lbl">Position</span><b>${s.now.position ? s.now.position.toFixed(1) : '—'}</b>${delta(change(s.now.position, s.before.position), true)}</button>`;
+    for (const b of $('bar-numbers').querySelectorAll('[data-open]')) b.onclick = () => openDetails(b.dataset.open);
+  }
+  if (!$('details').hidden) renderDetails();
+}
+
+function openDetails(tab) {
+  if (tab) detailsTab = tab;
+  $('details').hidden = false;
+  $('details-btn').setAttribute('aria-expanded', 'true');
+  $('details-btn').classList.add('on');
+  renderDetails();
+}
+function closeDetails() {
+  $('details').hidden = true;
+  $('details-btn').setAttribute('aria-expanded', 'false');
+  $('details-btn').classList.remove('on');
+}
+
+function statCard(label, value, deltaHtml, foot) {
+  return `<div class="stat-card"><span class="lbl">${label}</span><span class="val"><b>${value}</b>${deltaHtml}</span><span class="foot">${foot}</span></div>`;
+}
+/** Small segmented switch inside a card. `items` is [[value, label], ...]. */
+function seg(id, items, current) {
+  return `<div class="tabs seg" id="${id}">${items.map(([v, label]) => `<button data-v="${v}" class="${v === current ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+}
+function onSeg(id, fn) {
+  for (const b of $(id).querySelectorAll('button')) b.onclick = () => fn(b.dataset.v);
+}
+const fmtDay = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const shortDay = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const emptyNote = (html) => `<p class="muted small details-empty">${html}</p>`;
+const NO_GOOGLE = 'No Google data yet. Connect Google under <a href="#settings">Settings</a>, then get the data on <a href="#results">Results</a>.';
+
+async function renderDetails() {
+  for (const b of $('details-tabs').querySelectorAll('button')) b.classList.toggle('on', b.dataset.tab === detailsTab);
+  const s = summary;
+  $('details-range').textContent = s?.from ? `Last ${s.days} days · ${fmtDay(s.from)} – ${fmtDay(s.to)}` : '';
+  const tab = detailsTab;
+  const body = $('details-body');
+  if (tab === 'traffic') return renderTraffic(body, s);
+  if (tab === 'seo') return renderSeo(body, s);
+  if (tab === 'social') return renderSocial(body);
+  if (tab === 'geo') {
+    const v = await api('/api/ai-visibility').catch(() => null);
+    if (detailsTab !== tab) return;
+    const o = v?.summary?.overall;
+    body.innerHTML = o
+      ? `<div class="stat-cards">${statCard('Named in AI answers', `${o.mentioned} of ${o.answered}`, '', 'answers that mention you')}</div>${emptyNote('The full breakdown by AI engine is on <a href="#ai">AI answers</a>.')}`
+      : emptyNote('Find out whether ChatGPT, Claude and others mention you. Start on <a href="#ai">AI answers</a>.');
+    return;
+  }
+  body.innerHTML = emptyNote('Links are coming soon: who links to you, and links you have lost.');
+}
+
+function renderTraffic(body, s) {
+  if (!s?.from) return (body.innerHTML = emptyNote(NO_GOOGLE));
+  const was = (x, f = n) => (x == null || x === 0 ? 'no earlier data' : `was ${f(x)}`);
+  const hasUsers = s.now.users != null;
+  const perVisitor = (t) => (t.users ? t.revenue / t.users : null);
+  const cards = hasUsers
+    ? [
+        statCard('Visitors', n(s.now.users), delta(change(s.now.users, s.before.users)), was(s.before.users)),
+        statCard('Sessions', n(s.now.sessions), delta(change(s.now.sessions, s.before.sessions)), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
+        statCard('Revenue', money(s.now.revenue), delta(change(s.now.revenue, s.before.revenue)), 'GA4 conversion value'),
+        statCard('Revenue per visitor', money(perVisitor(s.now)), delta(change(perVisitor(s.now), perVisitor(s.before))), 'revenue ÷ visitors'),
+      ]
+    : s.now.views != null
+      ? [
+          statCard('Page views', n(s.now.views), delta(change(s.now.views, s.before.views)), was(s.before.views)),
+          statCard('Sessions', n(s.now.sessions), delta(change(s.now.sessions, s.before.sessions)), was(s.before.sessions)),
+          statCard('Visitors', '—', '', 'get the latest data on <a href="#results">Results</a> to see this'),
+          statCard('Revenue', '—', '', 'get the latest data on <a href="#results">Results</a> to see this'),
+        ]
+      : [
+          statCard('Visitors', '—', '', 'connect Analytics to see this'),
+          statCard('Clicks from Google', n(s.now.clicks), delta(change(s.now.clicks, s.before.clicks)), was(s.before.clicks)),
+        ];
+  body.innerHTML = `<div class="stat-cards">${cards.join('')}</div>
+    <div class="chart-card">
+      <div class="chart-head">${seg('traffic-view', [['visitors', hasUsers ? 'Visitors per day' : s.now.views != null ? 'Views per day' : 'Clicks per day'], ['sources', 'Sources'], ['pages', 'Top pages']], trafficView)}</div>
+      <div id="traffic-main"></div>
+    </div>`;
+  onSeg('traffic-view', (v) => ((trafficView = v), pref.set('trafficView', v), renderTraffic(body, s)));
+  const main = $('traffic-main');
+  if (trafficView === 'sources') {
+    const total = s.sources.reduce((a, r) => a + r.users, 0);
+    main.innerHTML = s.sources.length
+      ? `<table class="bars-table"><thead><tr><th>Source</th><th></th><th>Visitors</th><th>Sessions</th><th>Change</th></tr></thead><tbody>${s.sources
+          .map((r) => `<tr><td>${esc(r.channel)}</td><td class="bar-cell"><span style="width:${total ? (100 * r.users) / total : 0}%"></span></td><td>${n(r.users)}</td><td>${n(r.sessions)}</td><td>${delta(change(r.users, r.before))}</td></tr>`)
+          .join('')}</tbody></table>`
+      : emptyNote('No source data yet. Click "Get latest data" on <a href="#results">Results</a> to fetch it.');
+  } else if (trafficView === 'pages') {
+    const max = Math.max(1, ...s.pages.map((p) => p.views));
+    main.innerHTML = s.pages.length
+      ? `<table class="bars-table"><thead><tr><th>Page</th><th></th><th>Views</th><th>Sessions</th></tr></thead><tbody>${s.pages
+          .map((p) => `<tr><td dir="auto">${esc(p.page)}</td><td class="bar-cell"><span style="width:${(100 * p.views) / max}%"></span></td><td>${n(p.views)}</td><td>${n(p.sessions)}</td></tr>`)
+          .join('')}</tbody></table>`
+      : emptyNote('No page data yet.');
+  } else {
+    const key = hasUsers ? 'users' : s.now.views != null ? 'views' : 'clicks';
+    drawChart(main, key === 'users' ? 'Visitors per day' : key === 'views' ? 'Views per day' : 'Clicks per day', (key === 'clicks' ? s.daily : s.visits).map((d) => ({ x: d.date, y: d[key] ?? 0 })), s.before[key] ? s.before[key] / s.days : null);
+  }
+}
+
+async function renderSeo(body, s) {
+  const [speed, check] = await Promise.all([api('/api/speed').catch(() => ({})), api('/api/audit').catch(() => ({}))]);
+  if (detailsTab !== 'seo') return;
+  const r = speed[speedDevice] ?? speed.mobile ?? speed.desktop;
+  const audit = check.audit;
+  const dates = [r && `speed`, audit && 'audit'].filter(Boolean);
+  const latest = [r?.at, audit?.at].filter(Boolean).sort().pop();
+  if (s?.from) $('details-range').textContent = `Last ${s.days} days${dates.length ? ` · ${dates.join(' and ')} ${shortDay(latest)}` : ''}`;
+
+  // The single worst problem, phones first: that's what Google ranks by.
+  const worst = speed.mobile?.headline ? speed.mobile : speed.desktop?.headline ? speed.desktop : null;
+  const lead = worst?.vitals.filter((v) => v.rating !== 'good')[0];
+  const banner = worst
+    ? `<div class="headline"><div><div>${esc(worst.headline)}</div>${lead ? `<small class="muted">${esc(lead.label)}: ${esc(lead.target)}.</small>` : ''}</div><button class="secondary" id="seo-send">💬 Send to SEO agent</button></div>`
+    : '';
+  const speedDot = r && r.vitals.some((v) => v.rating === 'poor') ? ' <span class="dot-bad"></span>' : '';
+  body.innerHTML = `${banner}${seg('seo-view', [['speed', `Speed${speedDot}`], ['search', 'Search'], ['onpage', `On-page${audit ? ` · ${audit.score}` : ''}`]], seoView)}<div id="seo-main"></div>`;
+  if (worst)
+    $('seo-send').onclick = async () => {
+      try {
+        await post('/api/speed/send', { strategy: worst.strategy });
+        $('seo-send').textContent = 'Added to today’s fixes';
+        $('seo-send').disabled = true;
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  onSeg('seo-view', (v) => ((seoView = v), pref.set('seoView', v), renderSeo(body, s)));
+  const main = $('seo-main');
+
+  if (seoView === 'search') {
+    if (!s?.from) return (main.innerHTML = emptyNote(NO_GOOGLE));
+    const ctr = (t) => (t.impressions ? (100 * t.clicks) / t.impressions : null);
+    const c = ctr(s.now), cb = ctr(s.before);
+    const was = (x) => (x ? `was ${n(x)}` : 'no earlier data');
+    main.innerHTML = `<div class="stat-cards">${[
+      statCard('Clicks', n(s.now.clicks), delta(change(s.now.clicks, s.before.clicks)), was(s.before.clicks)),
+      statCard('Shown', n(s.now.impressions), delta(change(s.now.impressions, s.before.impressions)), was(s.before.impressions)),
+      statCard('Click rate', c == null ? '—' : `${c.toFixed(1)}%`, delta(change(c, cb)), cb == null ? 'no earlier data' : `was ${cb.toFixed(1)}%`),
+      statCard('Average position', s.now.position ? s.now.position.toFixed(1) : '—', delta(change(s.now.position, s.before.position), true), s.before.position ? `was ${s.before.position.toFixed(1)} · lower is better` : 'lower is better'),
+    ].join('')}</div><div class="chart-card"><div class="chart-head"><strong>Clicks from Google per day</strong></div><div id="seo-chart"></div></div>`;
+    drawChart($('seo-chart'), 'Clicks from Google per day', s.daily.map((d) => ({ x: d.date, y: d.clicks })), s.before.clicks ? s.before.clicks / s.days : null);
+    return;
+  }
+
+  if (seoView === 'onpage') {
+    if (!audit) return (main.innerHTML = emptyNote('No site check yet. <a href="#check">Run a site check</a>.'));
+    main.innerHTML = `<div class="chart-card"><div class="chart-head"><span><strong>On-page check</strong> <span class="muted">${audit.pagesChecked} pages · ${shortDay(audit.at)}</span></span><a href="#check">Open site check</a></div>
+      <div class="gauges-row">${gauge(audit.score, 'Score')}${[['Critical', audit.counts.critical, 'bad'], ['Warnings', audit.counts.warnings, 'mid'], ['Passed', audit.counts.passed, 'good']].map(([l, v, c]) => `<div class="count"><b class="${c}">${v}</b>${l}</div>`).join('')}</div>
+      <div class="vital-rows">${audit.issues.slice(0, 8).map((i) => `<div class="vital-row"><span class="dot-${i.severity === 'critical' ? 'bad' : i.severity === 'high' ? 'mid' : 'muted'}"></span><span>${esc(i.title)}</span><span></span><span class="muted small path">${esc(new URL(i.url).pathname)}</span></div>`).join('') || '<p class="muted small">No problems found.</p>'}</div></div>`;
+    return;
+  }
+
+  if (!r) return (main.innerHTML = emptyNote('No speed check yet. <a href="#speed">Check speed</a>.'));
+  const labels = { performance: 'Performance', accessibility: 'Accessibility', bestPractices: 'Best Practices', seo: 'SEO' };
+  main.innerHTML = `<div class="chart-card">
+    <div class="chart-head"><span><strong>Page speed</strong> <span class="muted">Lighthouse · ${shortDay(r.at)}</span></span>${seg('seo-device', [['mobile', 'Mobile'], ['desktop', 'Desktop']], speedDevice)}</div>
+    <div class="gauges-row">${Object.entries(labels).map(([k, l]) => gauge(r.scores[k], l)).join('')}</div>
+    <div class="muted small vitals-title">Core Web Vitals</div>
+    <div class="vital-rows">${r.vitals
+      .map((v) => {
+        const c = v.rating === 'good' ? 'good' : v.rating === 'poor' ? 'bad' : 'mid';
+        return `<div class="vital-row"><span class="dot-${c}"></span><span>${esc(v.label)}</span><b class="${c}">${esc(v.display)}</b><span class="muted small">${esc(v.target)}</span></div>`;
+      })
+      .join('')}</div>
+    <div class="legend muted small"><span><i class="dot-bad"></i>0–49</span><span><i class="dot-mid"></i>50–89</span><span><i class="dot-good"></i>90–100</span><span>Lighthouse scores, out of 100</span></div>
+  </div>`;
+  onSeg('seo-device', (v) => {
+    if (!speed[v]) return alert(`No ${v} speed check yet.`);
+    speedDevice = v;
+    pref.set('speedDevice', v);
+    renderSeo(body, s);
+    renderChrome();
+  });
+}
+
+/** A score ring out of 100, coloured by Lighthouse's bands. */
+function gauge(v, label) {
+  const R = 26, C = 2 * Math.PI * R;
+  return `<div class="gauge2"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><circle cx="32" cy="32" r="${R}" class="track"/><circle cx="32" cy="32" r="${R}" class="arc ${band(v)}" stroke-dasharray="${((C * v) / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 32 32)"/><text x="32" y="37" text-anchor="middle">${v}</text></svg><span>${esc(label)}</span></div>`;
+}
+
+async function renderSocial(body) {
+  const drafts = await api('/api/drafts').catch(() => []);
+  if (detailsTab !== 'social') return;
+  const mine = drafts.filter((d) => d.agent === 'social' || d.agent === 'reddit');
+  const count = (st) => mine.filter((d) => d.status === st).length;
+  body.innerHTML = mine.length
+    ? `<div class="stat-cards">${[
+        statCard('Waiting for you', count('draft'), '', 'posts to review'),
+        statCard('Approved', count('approved'), '', 'waiting to go out'),
+        statCard('Published', count('published'), '', 'on X, LinkedIn and Reddit'),
+      ].join('')}</div>
+      <div class="chart-card"><div class="chart-head"><strong>Latest posts</strong></div><div class="vital-rows">${mine
+        .slice(0, 8)
+        .map((d) => `<div class="vital-row"><span class="dot-${d.status === 'published' ? 'good' : d.status === 'failed' ? 'bad' : 'muted'}"></span><a href="#draft/${d.id}" dir="auto">${esc(d.title)}</a><span class="muted small">${esc(kindLabel(d.kind))}</span><span class="muted small">${esc(d.status)}</span></div>`)
+        .join('')}</div></div>`
+    : emptyNote('No social posts yet. Switch on the Social and Reddit agents under <a href="#logs">Timetable</a>.');
+}
+
+/** A plain SVG line chart: this period as a line, last period's daily average as a dashed line. */
+function drawChart(box, title, points, avg) {
+  const W = Math.max(320, box.clientWidth || 1000), H = 220, L = 36, B = 22, T = 18;
+  const max = Math.max(1, avg ?? 0, ...points.map((p) => p.y));
+  // Round the top up to a tidy number so the line fills the chart instead of hugging the floor.
+  const mag = 10 ** Math.floor(Math.log10(max));
+  const top = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((t) => t >= max) ?? 10 * mag;
+  const x = (i) => L + (i * (W - L - 8)) / Math.max(1, points.length - 1);
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join('');
+  const area = `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z`;
+  const step = Math.ceil(points.length / 8);
+  const last = points[points.length - 1];
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="line-chart" role="img" aria-label="${esc(title)}">
+    ${[0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W}" y1="${y(top * f)}" y2="${y(top * f)}" class="grid"/><text x="${L - 6}" y="${y(top * f) + 4}" class="axis" text-anchor="end">${Math.round(top * f).toLocaleString()}</text>`).join('')}
+    ${avg != null ? `<line x1="${L}" x2="${W - 8}" y1="${y(avg)}" y2="${y(avg)}" class="avg"/>` : ''}
+    <path d="${area}" class="area"/><path d="${path}" class="line"/>
+    <circle cx="${x(points.length - 1)}" cy="${y(last.y)}" r="4" class="dot"/>
+    <text x="${x(points.length - 1)}" y="${y(last.y) - 9}" class="axis strong" text-anchor="end">${fmtDay(last.x)} · ${n(last.y)}</text>
+    ${points.map((p, i) => ((i % step === 0 && points.length - 1 - i >= step / 2) || i === points.length - 1 ? `<text x="${x(i)}" y="${H - 4}" class="axis" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${p.x.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/')}</text>` : '')).join('')}
+  </svg>
+  <div class="chart-legend muted small"><span><span class="lg-line"></span>This period</span>${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>`;
+}
+
+$('details-btn').onclick = () => ($('details').hidden ? openDetails() : closeDetails());
+$('details-close').onclick = closeDetails;
+// Clicking the dimmed page behind the panel closes it.
+document.addEventListener('click', (e) => !$('details').hidden && !e.target.closest('#details, .topbar') && closeDetails(), true);
+for (const b of $('details-tabs').querySelectorAll('button')) b.onclick = () => ((detailsTab = b.dataset.tab), renderDetails());
+// The window is resized: redraw so the chart keeps its width.
+window.addEventListener('resize', () => !$('details').hidden && detailsTab === 'traffic' && trafficView === 'visitors' && renderDetails());
+document.addEventListener('keydown', (e) => e.key === 'Escape' && !$('details').hidden && closeDetails());
+window.addEventListener('hashchange', closeDetails);
 
 // ---------------------------------------------------------------- tour
 
@@ -935,6 +1370,7 @@ for (const b of $('range').querySelectorAll('button'))
     pref.set('days', days);
     for (const x of $('range').querySelectorAll('button')) x.classList.toggle('on', x === b);
     if (location.hash.startsWith('#results')) loadResults();
+    loadBarNumbers();
   };
 $('budget-save').onclick = async () => {
   try {
@@ -955,11 +1391,46 @@ window.onhashchange = () => {
   if (location.hash === '#today') draftBack = '#today';
   route().catch((err) => alert(err.message));
 };
+pollActivity();
 route()
   .then(() => {
     if (state?.site && !pref.get('tourDone', false)) setTimeout(() => showTour(0), 600);
   })
   .catch((err) => alert(err.message));
+
+// ---------------------------------------------------------------- company settings window
+
+let companySaved = '';
+function companyCount() {
+  const t = $('company-instr').value;
+  $('company-count').textContent = `${t.length.toLocaleString()} / 4,000`;
+  $('company-save').disabled = t.trim() === companySaved;
+}
+$('company-btn').onclick = async () => {
+  $('company-msg').textContent = '';
+  $('company-instr').value = companySaved = (await api('/api/instructions')).text;
+  companyCount();
+  $('company').showModal();
+};
+$('company-close').onclick = () => $('company').close();
+$('company').onclick = (e) => e.target === $('company') && $('company').close();
+$('company-instr').oninput = companyCount;
+$('company-save').onclick = async () => {
+  try {
+    const r = await api('/api/instructions', { method: 'PUT', body: JSON.stringify({ text: $('company-instr').value }) });
+    $('company-instr').value = companySaved = r.text;
+    companyCount();
+    $('company-msg').textContent = r.text ? 'Saved. Every agent follows these from its next run.' : 'Cleared.';
+  } catch (err) {
+    $('company-msg').textContent = err.message;
+  }
+};
+$('company-sync').onclick = () => {
+  if (!confirm(`Re-scan ${state.site} and rewrite all product documents? Edits you made to them will be replaced.`)) return;
+  $('company').close();
+  runResearch({});
+};
+$('company-url').onclick = async () => ($('company').close(), await goTo('#settings'), $('set-url').focus());
 
 // ---------------------------------------------------------------- settings (this website)
 
@@ -1053,7 +1524,7 @@ function wireIntegration(card) {
 
 $('set-name-save').onclick = async () => {
   try {
-    await api(`/api/sites/${encodeURIComponent(SITE)}`, { method: 'PUT', body: JSON.stringify({ name: $('set-name').value }) });
+    await api(`/api/sites/${encodeURIComponent(SITE)}`, { method: 'PUT', body: JSON.stringify({ name: $('set-name').value, url: $('set-url').value }) });
     await goTo('#settings');
     $('set-general-status').textContent = 'Saved.';
   } catch (err) {

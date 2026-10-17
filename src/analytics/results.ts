@@ -25,6 +25,33 @@ export function pathOf(url: string): string {
   }
 }
 
+/** The newest day each source has data for (Search Console runs a day or two behind Analytics). */
+export function lastDataDay(table: 'gsc_daily' | 'ga_daily'): string | null {
+  return (getDb().prepare(`SELECT MAX(date) d FROM ${table}`).get() as { d: string | null }).d;
+}
+
+export interface PageTotals { clicks: number; impressions: number; position: number | null; views: number | null }
+
+/**
+ * Search and visit totals for one page (matched by path, like everywhere else) or, with path null,
+ * the whole site, between two dates inclusive.
+ */
+export function pageTotals(path: string | null, from: string, to: string): PageTotals {
+  const db = getDb();
+  const gsc = db.prepare('SELECT page, SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) pw FROM gsc_daily WHERE date BETWEEN ? AND ? GROUP BY page').all(from, to) as { page: string; clicks: number; impressions: number; pw: number }[];
+  const ga = db.prepare('SELECT path, SUM(views) views FROM ga_daily WHERE date BETWEEN ? AND ? GROUP BY path').all(from, to) as { path: string; views: number }[];
+  const hasGa = (db.prepare('SELECT 1 FROM ga_daily WHERE date BETWEEN ? AND ? LIMIT 1').get(from, to) as unknown) != null;
+  const s = gsc.filter((r) => path === null || pathOf(r.page) === path);
+  const a = ga.filter((r) => path === null || pathOf(r.path) === path);
+  const impressions = s.reduce((n, r) => n + r.impressions, 0);
+  return {
+    clicks: s.reduce((n, r) => n + r.clicks, 0),
+    impressions,
+    position: impressions ? s.reduce((n, r) => n + r.pw, 0) / impressions : null,
+    views: hasGa ? a.reduce((n, r) => n + r.views, 0) : null,
+  };
+}
+
 export function topQueries(limit = 50, days = 28): QueryRow[] {
   const from = since('gsc_daily', days);
   if (!from) return [];
@@ -135,4 +162,72 @@ export function performanceNotes(now = new Date()): string | null {
     lines.push('Write more like what is working; don\'t repeat topics that got no impressions after 4 weeks.');
   }
   return lines.join('\n');
+}
+
+export interface Totals { clicks: number; impressions: number; position: number | null; views: number | null; sessions: number | null; users: number | null; revenue: number | null }
+export interface DayPoint { date: string; clicks: number; impressions: number; views: number | null }
+export interface VisitDay { date: string; users: number | null; views: number | null }
+export interface SourceRow { channel: string; users: number; sessions: number; before: number }
+export interface Summary {
+  days: number; from: string | null; to: string | null; now: Totals; before: Totals; daily: DayPoint[];
+  /** Analytics per day, on Analytics' own dates (Search Console runs a day or two behind). */
+  visits: VisitDay[];
+  sources: SourceRow[]; pages: { page: string; views: number; sessions: number }[];
+}
+
+const shift = (date: string, days: number) => new Date(new Date(`${date}T00:00:00Z`).getTime() + days * 86400e3).toISOString().slice(0, 10);
+
+function totals(gscFrom: string | null, gscTo: string | null, gaFrom: string | null, gaTo: string | null): Totals {
+  const db = getDb();
+  const s = gscFrom && gscTo
+    ? (db.prepare(`SELECT SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / NULLIF(SUM(impressions), 0) position FROM gsc_daily WHERE date BETWEEN ? AND ?`).get(gscFrom, gscTo) as { clicks: number | null; impressions: number | null; position: number | null })
+    : { clicks: 0, impressions: 0, position: null };
+  const a = gaFrom && gaTo
+    ? (db.prepare(`SELECT SUM(views) views, SUM(sessions) sessions FROM ga_daily WHERE date BETWEEN ? AND ?`).get(gaFrom, gaTo) as { views: number | null; sessions: number | null })
+    : { views: null, sessions: null };
+  // Whole-site table: only filled by pulls made since it was added, so fall back to page sessions until then.
+  const w = gaFrom && gaTo
+    ? (db.prepare(`SELECT SUM(users) users, SUM(sessions) sessions, SUM(revenue) revenue, COUNT(*) n FROM ga_site_daily WHERE date BETWEEN ? AND ?`).get(gaFrom, gaTo) as { users: number | null; sessions: number | null; revenue: number | null; n: number })
+    : { users: null, sessions: null, revenue: null, n: 0 };
+  return {
+    clicks: s.clicks ?? 0, impressions: s.impressions ?? 0, position: s.position, views: a.views,
+    sessions: w.n ? w.sessions : a.sessions, users: w.n ? w.users : null, revenue: w.n ? w.revenue ?? 0 : null,
+  };
+}
+
+/** Headline numbers for the last `days` days with data, the same-length period before it, and a per-day line. */
+export function resultsSummary(days = 7): Summary {
+  const db = getDb();
+  const gscFrom = since('gsc_daily', days);
+  const gaFrom = since('ga_daily', days);
+  const gscTo = gscFrom ? shift(gscFrom, days - 1) : null;
+  const gaTo = gaFrom ? shift(gaFrom, days - 1) : null;
+  const now = totals(gscFrom, gscTo, gaFrom, gaTo);
+  const before = totals(gscFrom && shift(gscFrom, -days), gscFrom && shift(gscFrom, -1), gaFrom && shift(gaFrom, -days), gaFrom && shift(gaFrom, -1));
+  const from = gscFrom ?? gaFrom;
+  const daily: DayPoint[] = [];
+  if (from) {
+    const gsc = new Map((db.prepare(`SELECT date, SUM(clicks) clicks, SUM(impressions) impressions FROM gsc_daily WHERE date >= ? GROUP BY date`).all(from) as { date: string; clicks: number; impressions: number }[]).map((r) => [r.date, r]));
+    const ga = new Map((db.prepare(`SELECT date, SUM(views) views FROM ga_daily WHERE date >= ? GROUP BY date`).all(from) as { date: string; views: number }[]).map((r) => [r.date, r.views]));
+    for (let i = 0; i < days; i++) {
+      const d = shift(from, i);
+      daily.push({ date: d, clicks: gsc.get(d)?.clicks ?? 0, impressions: gsc.get(d)?.impressions ?? 0, views: ga.has(d) ? ga.get(d)! : null });
+    }
+  }
+  let sources: SourceRow[] = [];
+  let pages: Summary['pages'] = [];
+  const visits: VisitDay[] = [];
+  if (gaFrom && gaTo) {
+    const users = new Map((db.prepare(`SELECT date, users FROM ga_site_daily WHERE date >= ?`).all(gaFrom) as { date: string; users: number }[]).map((r) => [r.date, r.users]));
+    const views = new Map((db.prepare(`SELECT date, SUM(views) views FROM ga_daily WHERE date >= ? GROUP BY date`).all(gaFrom) as { date: string; views: number }[]).map((r) => [r.date, r.views]));
+    for (let i = 0; i < days; i++) {
+      const d = shift(gaFrom, i);
+      visits.push({ date: d, users: users.get(d) ?? (users.size ? 0 : null), views: views.get(d) ?? 0 });
+    }
+    const was = new Map((db.prepare(`SELECT channel, SUM(users) users FROM ga_sources WHERE date BETWEEN ? AND ? GROUP BY channel`).all(shift(gaFrom, -days), shift(gaFrom, -1)) as { channel: string; users: number }[]).map((r) => [r.channel, r.users]));
+    sources = (db.prepare(`SELECT channel, SUM(users) users, SUM(sessions) sessions FROM ga_sources WHERE date BETWEEN ? AND ? GROUP BY channel ORDER BY users DESC`).all(gaFrom, gaTo) as { channel: string; users: number; sessions: number }[])
+      .map((r) => ({ ...r, before: was.get(r.channel) ?? 0 }));
+    pages = db.prepare(`SELECT path page, SUM(views) views, SUM(sessions) sessions FROM ga_daily WHERE date BETWEEN ? AND ? GROUP BY path ORDER BY views DESC LIMIT 10`).all(gaFrom, gaTo) as Summary['pages'];
+  }
+  return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, sources, pages };
 }

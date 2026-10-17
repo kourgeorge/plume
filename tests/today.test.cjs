@@ -76,6 +76,17 @@ test('jobs left running by a restart are closed on startup', () => {
   assert.match(getJob(id).error, /restarted/);
 });
 
+test('general instructions reach every agent, are trimmed, capped, and clearable', () => {
+  const ins = require('../src/agents/instructions');
+  assert.equal(ins.setGeneralInstructions('  Always call it a platform.\r\n '), 'Always call it a platform.');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p-'));
+  for (const agent of ['writer', 'seo', undefined]) assert.match(agentSystem('role', dir, null, agent).at(-1).text, /General instructions[\s\S]*Always call it a platform\./);
+  assert.throws(() => ins.setGeneralInstructions('x'.repeat(ins.MAX_INSTRUCTIONS + 1)), /keep instructions under/);
+  ins.setGeneralInstructions('');
+  assert.equal(ins.generalInstructions(), '');
+  assert.doesNotMatch(agentSystem('role', dir, null, 'writer').at(-1).text, /General instructions/);
+});
+
 test('per-agent instructions reach only that agent, are trimmed, capped, and clearable', () => {
   const ins = require('../src/agents/instructions');
   assert.equal(ins.setAgentInstructions('writer', '  Always end with a question.\r\n  '), 'Always end with a question.');

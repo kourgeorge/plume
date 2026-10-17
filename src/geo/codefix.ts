@@ -7,6 +7,7 @@ import { techSignals } from '../research/techSignals';
 import { AuditResult, Issue, pinnedIssues } from '../agents/seoAudit';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { log } from '../log';
+import { recordAction } from '../actions';
 
 /**
  * Site fixes as GitHub pull requests. Plume finds the files behind the page, asks for exact find → replace
@@ -301,6 +302,7 @@ export async function openFixPullRequest(issue: Issue, onProgress: (m: string) =
   ].join('\n\n');
   const pr = await call(g, 'POST', '/pulls', { title: `Fix: ${issue.title}`.slice(0, 250), head: branch, base, body });
   record(issue.id, 'opened', plan.summary, pr.html_url ?? null, changed);
+  recordAction({ kind: 'code-pr', ref: issue.id, url: issue.url, title: issue.title, data: { prUrl: pr.html_url ?? null, files: changed } });
   log('info', 'codefix', `opened ${pr.html_url} for ${issue.check} (${changed.length} file(s))`);
   return { prUrl: pr.html_url ?? null, message: plan.summary };
 }

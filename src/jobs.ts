@@ -36,6 +36,11 @@ export function runningJob(kind: string): Job | undefined {
   return getDb().prepare(`SELECT * FROM jobs WHERE kind = ? AND status = 'running' ORDER BY id DESC LIMIT 1`).get(kind) as Job | undefined;
 }
 
+/** Everything still running for this site, newest first — so a reloaded page can show what's in progress. */
+export function runningJobs(): Job[] {
+  return getDb().prepare(`SELECT * FROM jobs WHERE status = 'running' ORDER BY id DESC`).all() as Job[];
+}
+
 /** On startup: anything still marked running was cut off by a restart. */
 export function closeStaleJobs(): number {
   return getDb()

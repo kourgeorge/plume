@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS ga_daily (
   views INTEGER, sessions INTEGER, engagement_rate REAL, avg_seconds REAL,
   PRIMARY KEY (date, path)
 );
+-- Whole-site numbers per day. Visitors can't be added up from pages (one visitor sees many), so they come separately.
+CREATE TABLE IF NOT EXISTS ga_site_daily (
+  date TEXT PRIMARY KEY,
+  users INTEGER, sessions INTEGER, revenue REAL
+);
+CREATE TABLE IF NOT EXISTS ga_sources (
+  date TEXT NOT NULL,
+  channel TEXT NOT NULL,          -- GA4 default channel group: Organic Search, Direct, ...
+  users INTEGER, sessions INTEGER,
+  PRIMARY KEY (date, channel)
+);
 CREATE TABLE IF NOT EXISTS task_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task TEXT NOT NULL,
@@ -105,6 +116,23 @@ CREATE TABLE IF NOT EXISTS competitor_changes (
   at TEXT NOT NULL,
   changes TEXT NOT NULL,          -- JSON list of {kind, text}
   dismissed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS competitor_scans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  competitor_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  scope TEXT NOT NULL,            -- site (free website check) | news-social (AI + web search)
+  outcome TEXT NOT NULL,          -- baseline | changed | unchanged | failed
+  findings TEXT NOT NULL          -- JSON list of {area, kind, text, url, items?}
+);
+CREATE TABLE IF NOT EXISTS competitor_suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT,
+  reason TEXT NOT NULL,
+  source_url TEXT,
+  at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'   -- open | added | dismissed
 );
 CREATE TABLE IF NOT EXISTS people (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,11 +192,32 @@ CREATE TABLE IF NOT EXISTS rank_alerts (
   dismissed INTEGER NOT NULL DEFAULT 0,
   UNIQUE (keyword, week)
 );
+-- What was done to the site, dated, so its effect can be measured afterwards.
+CREATE TABLE IF NOT EXISTS actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,             -- fix-done | published | doc-edited | code-pr
+  ref TEXT NOT NULL,              -- issue id / draft id / document id
+  url TEXT,                       -- the page it affects; null = the whole site
+  title TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}' -- JSON: severity, target, PR link, ...
+);
+-- One row per day with a site check, so the score and the problems can be followed over time.
+CREATE TABLE IF NOT EXISTS audit_history (
+  day TEXT PRIMARY KEY,           -- YYYY-MM-DD; a second check the same day replaces the first
+  at TEXT NOT NULL,
+  score INTEGER NOT NULL,
+  critical INTEGER NOT NULL,
+  warnings INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  issue_ids TEXT NOT NULL         -- JSON list of the problems found
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL     -- JSON
 );
 -- Lookups the app makes on every page load or task run.
+CREATE INDEX IF NOT EXISTS actions_by_kind ON actions (kind, ref);
 CREATE INDEX IF NOT EXISTS chat_messages_by_thread ON chat_messages (thread_id, id);
 CREATE INDEX IF NOT EXISTS chat_actions_by_thread ON chat_actions (thread_id);
 CREATE INDEX IF NOT EXISTS drafts_by_status ON drafts (status, agent);
@@ -177,6 +226,7 @@ CREATE INDEX IF NOT EXISTS jobs_by_kind ON jobs (kind, status);
 CREATE INDEX IF NOT EXISTS task_runs_by_task ON task_runs (task, id);
 CREATE INDEX IF NOT EXISTS feedback_by_agent ON feedback (agent, id);
 CREATE INDEX IF NOT EXISTS snapshots_by_competitor ON competitor_snapshots (competitor_id, at);
+CREATE INDEX IF NOT EXISTS scans_by_competitor ON competitor_scans (competitor_id, id);
 CREATE INDEX IF NOT EXISTS changes_by_competitor ON competitor_changes (competitor_id, dismissed);
 CREATE INDEX IF NOT EXISTS gsc_by_query ON gsc_daily (query, date);
 `;
@@ -228,6 +278,7 @@ const siteDbs = new Map<string, Database.Database>();
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'pages', column: 'schema_types', type: "TEXT NOT NULL DEFAULT '[]'" },
   { table: 'pages', column: 'page_date', type: 'TEXT' },
+  { table: 'competitors', column: 'socials', type: "TEXT NOT NULL DEFAULT '{}'" },
 ];
 
 function open(file: string, schema: string): Database.Database {

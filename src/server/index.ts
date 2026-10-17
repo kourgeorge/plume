@@ -3,7 +3,7 @@ import fastifyStatic from '@fastify/static';
 import path from 'path';
 import { getDb, getGlobalDb, getSetting, setSetting } from '../db';
 import { currentSite, isSlug, withSite } from '../site';
-import { addSite, getSite, removeSite, renameSite, siteSummaries, siteUrl, touchSite } from '../sites';
+import { addSite, getSite, removeSite, renameSite, setSiteUrl, siteSummaries, siteUrl, touchSite } from '../sites';
 import { MODELS } from '../config';
 import { clearLlmConfig, describeLlm, getLlmConfig, llmProblem, saveLlmConfig } from '../llm/settings';
 import { searchMode, testConnection } from '../llm/client';
@@ -12,9 +12,9 @@ import { PROFILE_DOCS, docWrittenAt, isProfileDocId, profileComplete, readDoc, w
 import { renderMarkdown } from '../render';
 import { techSignals } from '../research/techSignals';
 import { startResearch } from '../research/profile';
-import { getJob, runningJob } from '../jobs';
+import { getJob, runningJob, runningJobs } from '../jobs';
 import { AGENTS, getAgent, startAgentRun } from '../agents';
-import { agentInstructions, setAgentInstructions } from '../agents/instructions';
+import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher, targetsFor } from '../publish';
@@ -22,7 +22,7 @@ import { describeIntegrations, getIntegration, removeIntegration, saveIntegratio
 import { publishOne } from '../publish/runner';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
-import { performanceNotes, publishedResults, topPages, topQueries } from '../analytics/results';
+import { performanceNotes, publishedResults, resultsSummary, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
 import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
 import {
@@ -34,7 +34,7 @@ import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
   savePerson, setBrandProfiles, setUserNotes, updateCompetitor, userNotes,
 } from '../context/extra';
-import { checkCompetitor, lastChecked } from '../watch';
+import { checkCompetitor, getSuggestion, openChanges, lastChecked, listScans, openSuggestions, scanNewsSocial, settleSuggestion, socialsOf } from '../watch';
 import { extractCompetitors } from '../research/competitors';
 import { buildLlmsTxt } from '../research/llmstxt';
 import { closeBrowser } from '../research/fetchPage';
@@ -42,6 +42,7 @@ import { Level, recentLogs } from '../log';
 import { budgetStatus, setBudgetLimit } from '../llm/budget';
 import { lastSpeed } from '../analytics/pagespeed';
 import { registerGeoRoutes } from './geoRoutes';
+import { actionResults, actionsNote, auditHistory, recordAction } from '../actions';
 import { registerOutreachRoutes } from './outreachRoutes';
 import { registerPhoneRoutes } from './phoneRoutes';
 import { registerToolsRoutes } from './toolsRoutes';
@@ -117,11 +118,13 @@ export function buildServer(port: number): FastifyInstance {
       return reply.code(400).send({ error: err.message });
     }
   });
-  app.put<{ Params: { slug: string }; Body: { name?: string } }>('/api/sites/:slug', async (req, reply) => {
+  app.put<{ Params: { slug: string }; Body: { name?: string; url?: string } }>('/api/sites/:slug', async (req, reply) => {
+    if (!getSite(req.params.slug)) return reply.code(404).send({ error: `no site ${req.params.slug}` });
     try {
-      return renameSite(req.params.slug, req.body?.name ?? '');
+      if (typeof req.body?.url === 'string') setSiteUrl(req.params.slug, req.body.url);
+      return typeof req.body?.name === 'string' ? renameSite(req.params.slug, req.body.name) : getSite(req.params.slug);
     } catch (err: any) {
-      return reply.code(404).send({ error: err.message });
+      return reply.code(400).send({ error: err.message });
     }
   });
   app.delete<{ Params: { slug: string } }>('/api/sites/:slug', async (req, reply) => {
@@ -153,6 +156,7 @@ export function buildServer(port: number): FastifyInstance {
     return { jobId: startResearch(site.url, only as never) };
   });
 
+  app.get('/api/jobs/running', async () => runningJobs());
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
     const job = getJob(Number(req.params.id));
     return job ?? reply.code(404).send({ error: 'no such job' });
@@ -167,7 +171,9 @@ export function buildServer(port: number): FastifyInstance {
   app.put<{ Params: { id: string }; Body: { body?: string } }>('/api/profile/:id', async (req, reply) => {
     if (!isProfileDocId(req.params.id)) return reply.code(404).send({ error: 'no such document' });
     if (typeof req.body?.body !== 'string') return reply.code(400).send({ error: 'body must be text' });
+    const before = readDoc(req.params.id);
     writeDoc(req.params.id, req.body.body);
+    if (before !== null && before.trim() !== req.body.body.trim()) recordAction({ kind: 'doc-edited', ref: req.params.id, title: PROFILE_DOCS.find((d) => d.id === req.params.id)!.title });
     return { ok: true };
   });
 
@@ -205,6 +211,17 @@ export function buildServer(port: number): FastifyInstance {
     ];
   });
 
+  /** Company-wide instructions: every agent and the chat follow them. */
+  app.get('/api/instructions', async () => ({ text: generalInstructions() }));
+  app.put<{ Body: { text?: string } }>('/api/instructions', async (req, reply) => {
+    if (typeof req.body?.text !== 'string') return reply.code(400).send({ error: 'text must be text' });
+    try {
+      return { text: setGeneralInstructions(req.body.text) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
   app.get<{ Params: { id: string } }>('/api/agents/:id/instructions', async (req, reply) =>
     getAgent(req.params.id) ? { text: agentInstructions(req.params.id) } : reply.code(404).send({ error: 'no such agent' }),
   );
@@ -229,11 +246,11 @@ export function buildServer(port: number): FastifyInstance {
   // ---- daily site check ----
   app.get('/api/audit', async () => {
     const audit = getSetting<AuditResult | null>('lastAudit', null);
-    return { audit, today: audit ? dailyFixes(audit) : [] };
+    return { audit, today: audit ? dailyFixes(audit) : [], history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
   });
   app.post('/api/audit', async () => {
     const audit = await runAudit(siteUrl() ?? undefined);
-    return { audit, today: dailyFixes(audit) };
+    return { audit, today: dailyFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
   });
   app.post<{ Body: { id?: string } }>('/api/audit/done', async (req, reply) => {
     if (!req.body?.id) return reply.code(400).send({ error: 'id required' });
@@ -397,9 +414,12 @@ export function buildServer(port: number): FastifyInstance {
       nearlyThere: searchConsoleGaps(topQueries(500, days), days === 7 ? 15 : 50).slice(0, 20),
       pages: topPages(30, days),
       published: publishedResults(new Date(), days),
-      notes: performanceNotes(),
+      actions: actionResults(50),
+      notes: [performanceNotes(), actionsNote()].filter(Boolean).join('\n\n') || null,
     };
   });
+
+  app.get<{ Querystring: { days?: string } }>('/api/results/summary', async (req) => resultsSummary(req.query.days === '30' ? 30 : 7));
 
   // ---- timetable, logs, budget, speed ----
   app.get('/api/tasks', async () => taskOverview());
@@ -440,7 +460,8 @@ export function buildServer(port: number): FastifyInstance {
   // ---- what the agents know: competitors, people, profiles, notes, llms.txt ----
   const bad = (reply: any, err: any) => reply.code(400).send({ error: err.message });
   app.get('/api/context', async () => ({
-    competitors: listCompetitors().map((c) => ({ ...c, lastChecked: lastChecked(c.id) })),
+    competitors: listCompetitors().map((c) => ({ ...c, lastChecked: lastChecked(c.id), socials: socialsOf(c.id), unseen: openChanges().filter((x) => x.competitorId === c.id).length })),
+    suggestions: openSuggestions(),
     people: listPeople(),
     profiles: brandProfiles(),
     notes: userNotes(),
@@ -474,6 +495,29 @@ export function buildServer(port: number): FastifyInstance {
       await closeBrowser();
     }
   });
+  app.get<{ Params: { id: string } }>('/api/competitors/:id/scans', async (req) => listScans(Number(req.params.id)));
+  /** The paid part of the scan: news, LinkedIn and X. Runs now, for one competitor. */
+  app.post<{ Params: { id: string } }>('/api/competitors/:id/scan-news', async (req, reply) => {
+    const c = getCompetitor(Number(req.params.id));
+    if (!c) return reply.code(404).send({ error: 'no such competitor' });
+    try {
+      return await scanNewsSocial(c);
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.post<{ Params: { id: string } }>('/api/competitor-suggestions/:id/add', async (req, reply) => {
+    const s = getSuggestion(Number(req.params.id));
+    if (!s) return reply.code(404).send({ error: 'that suggestion is gone' });
+    try {
+      const c = addCompetitor({ name: s.name, url: s.url, notes: s.reason, source: 'research' });
+      settleSuggestion(s.id, 'added');
+      return c ?? { ok: true };
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.post<{ Params: { id: string } }>('/api/competitor-suggestions/:id/dismiss', async (req) => (settleSuggestion(Number(req.params.id), 'dismissed'), { ok: true }));
   app.post('/api/competitors/fill', async (_req, reply) => {
     try {
       return { added: await extractCompetitors() };

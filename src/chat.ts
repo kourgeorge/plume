@@ -11,13 +11,15 @@ import { AuditResult } from './agents/seoAudit';
 import { lastSpeed } from './analytics/pagespeed';
 import { publishedResults, topQueries } from './analytics/results';
 import { searchConsoleGaps } from './agents/seo';
-import { openChanges } from './watch';
-import { getJob } from './jobs';
+import { checkCompetitor, listScans, openChanges, openSuggestions, scanNewsSocial } from './watch';
+import { closeBrowser } from './research/fetchPage';
+import { finishJob, getJob, runningJob, startJob, updateJob } from './jobs';
 import { startPageRefresh } from './research/refresh';
 import { lineDiff, diffStats } from './diff';
 import { renderMarkdown } from './render';
 import { currentSite } from './site';
 import { log } from './log';
+import { actionResults, auditHistory, describeResult, recordAction } from './actions';
 
 /**
  * The chat assistant: a conversation per thread, with tools that read the site's data and propose work.
@@ -106,7 +108,22 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     input_schema: { type: 'object', additionalProperties: false, properties: { days: { type: 'integer', enum: [7, 30] } } },
   },
   { name: 'get_site_health', description: 'Latest site check (score, top problems) and page speed for phones and computers.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
-  { name: 'list_competitors', description: 'The competitor list with notes, and any recent changes spotted on their sites.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
+  {
+    name: 'list_competitors',
+    description:
+      'The competitor list with notes, the result of the latest scans (baseline / changed / unchanged, each finding with its source link), and competitors the scan suggested adding.',
+    input_schema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'scan_competitors',
+    description:
+      'Scan competitors now, in the background: their website (new pages, prices, headline — free) and, with include_news, news and their LinkedIn/X posts (costs money — only when the owner asked). Leave competitor out to scan every watched one.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { competitor: { type: 'string', description: 'Name of one competitor; omit for all watched.' }, include_news: { type: 'boolean' } },
+    },
+  },
   {
     name: 'add_competitor',
     description: 'Add a competitor to the list (the owner can undo it).',
@@ -213,6 +230,7 @@ export async function runChatTool(threadId: number, name: string, input: any, to
         if (!q.length) return { content: 'No Google data yet (Search Console is not connected or has not been pulled).', isError: false };
         const near = searchConsoleGaps(topQueries(500, days), days === 7 ? 15 : 50).slice(0, 10);
         const mine = publishedResults(new Date(), days).slice(0, 10);
+        const done = actionResults(15);
         return {
           content: [
             `Last ${days} days.`,
@@ -222,6 +240,7 @@ export async function runChatTool(threadId: number, name: string, input: any, to
             ...near.map((o) => `- "${o.keyword}": ${o.impressions} impressions, position ${Number(o.position).toFixed(1)}`),
             mine.length ? 'Published by Plume:' : '',
             ...mine.map((m) => `- "${m.title}": ${m.clicks} clicks, ${m.impressions} impressions${m.position ? `, position ${m.position.toFixed(1)}` : ''}`),
+            ...(done.length ? ['What was done and what happened afterwards:', ...done.map(describeResult)] : []),
           ]
             .filter(Boolean)
             .join('\n'),
@@ -235,6 +254,10 @@ export async function runChatTool(threadId: number, name: string, input: any, to
         if (audit) {
           lines.push(`Site check: ${audit.score}/100 on ${audit.pagesChecked} pages (${audit.counts.critical} critical, ${audit.counts.warnings} warnings).`);
           lines.push(...audit.issues.slice(0, 8).map((i) => `- ${i.severity}: ${i.title} (${i.url})`));
+          const hist = auditHistory(10);
+          if (hist.length > 1) lines.push(`Score over the last ${hist.length} checks: ${hist.map((h) => `${h.score} (${h.day})`).join(' → ')}.`);
+          const fixed = actionResults(30).filter((a) => a.kind === 'fix-done').slice(0, 8);
+          if (fixed.length) lines.push('Fixes the owner marked done:', ...fixed.map(describeResult));
         } else lines.push('No site check yet.');
         for (const k of ['mobile', 'desktop'] as const) {
           const r = speed[k];
@@ -245,14 +268,59 @@ export async function runChatTool(threadId: number, name: string, input: any, to
       case 'list_competitors': {
         const comps = listCompetitors();
         const changes = openChanges();
+        const suggestions = openSuggestions();
         if (!comps.length) return { content: 'No competitors listed yet.', isError: false };
+        const scanLine = (c: (typeof comps)[number]) =>
+          (['site', 'news-social'] as const)
+            .map((scope) => {
+              const last = listScans(c.id, 20).find((x) => x.scope === scope);
+              return last ? `  ${scope === 'site' ? 'Website' : 'News & social'} scan ${last.at.slice(0, 10)}: ${last.outcome}` : `  ${scope === 'site' ? 'Website' : 'News & social'}: never scanned`;
+            })
+            .join('\n');
         return {
           content: [
-            ...comps.map((c) => `- ${c.name}${c.url ? ` (${c.url})` : ''}${c.watch ? ' [watched]' : ''}${c.notes ? `: ${c.notes}` : ''}`),
-            ...(changes.length ? ['Recent changes:', ...changes.map((c) => `- ${c.name}: ${c.changes.map((x) => x.text).join('; ')}`)] : []),
+            ...comps.map((c) => `- ${c.name}${c.url ? ` (${c.url})` : ''}${c.watch ? ' [watched]' : ''}${c.notes ? `: ${c.notes}` : ''}\n${scanLine(c)}`),
+            ...(changes.length
+              ? ['Findings not yet seen by the owner:', ...changes.flatMap((c) => c.changes.map((x) => `- ${c.name}: ${x.text}${x.url ? ` — ${x.url}` : ''}`))]
+              : []),
+            ...(suggestions.length ? ['Suggested competitors (not on the list yet):', ...suggestions.map((s) => `- ${s.name}${s.url ? ` (${s.url})` : ''}: ${s.reason}`)] : []),
           ].join('\n'),
           isError: false,
         };
+      }
+      case 'scan_competitors': {
+        const want = str(input?.competitor, 200).toLowerCase();
+        const pool = listCompetitors();
+        const targets = want ? pool.filter((c) => c.name.toLowerCase().includes(want)) : pool.filter((c) => c.watch);
+        if (!targets.length) return { content: want ? `No competitor called "${input?.competitor}".` : 'No competitors are being watched. Name one to scan it.', isError: true };
+        if (runningJob('competitor-scan')) return { content: 'A competitor scan is already running.', isError: true };
+        const news = !!input?.include_news;
+        const jobId = startJob('competitor-scan', `Scanning ${targets.length} competitor(s)`);
+        (async () => {
+          const notes: string[] = [];
+          try {
+            for (const c of targets) {
+              updateJob(jobId, `Scanning ${c.name}`);
+              if (c.url) {
+                const ch = await checkCompetitor(c);
+                const last = listScans(c.id, 1)[0];
+                notes.push(`${c.name} website: ${last?.outcome ?? 'checked'}${ch.length ? ` (${ch.length} change${ch.length > 1 ? 's' : ''})` : ''}`);
+              }
+              if (news) {
+                const r = await scanNewsSocial(c);
+                notes.push(`${c.name} news & social: ${r.outcome}${r.findings.length ? ` (${r.findings.length} finding${r.findings.length > 1 ? 's' : ''})` : ''}`);
+              }
+            }
+            updateJob(jobId, notes.join(' · '));
+            finishJob(jobId);
+          } catch (err: any) {
+            finishJob(jobId, String(err?.message ?? err));
+          } finally {
+            await closeBrowser();
+          }
+        })();
+        createAction(threadId, 'job', { jobId, label: `Competitor scan (${targets.map((c) => c.name).join(', ')})`, doneText: 'finished — findings are in Today and on each competitor', toolUseId }, 'done');
+        return { content: `Started scanning ${targets.map((c) => c.name).join(', ')} (job ${jobId})${news ? ', including news and social' : ', website only'}. Results go to Today; call list_competitors afterwards to read them.`, isError: false };
       }
       case 'add_competitor': {
         const c = addCompetitor({ name: str(input?.name, 200), url: str(input?.website, 300) || null, notes: str(input?.notes, 1000), source: 'user' });
@@ -431,6 +499,7 @@ export function applyAction(id: number): ChatAction {
   if (readChatDoc(doc) !== a.data.before) throw new Error(`${docTitle(doc)} has changed since this was proposed — ask the assistant to propose it again`);
   if (doc === 'notes') setUserNotes(a.data.after);
   else writeDoc(doc, a.data.after);
+  recordAction({ kind: 'doc-edited', ref: doc, title: docTitle(doc), data: { via: 'chat' } });
   setActionStatus(id, 'applied');
   addNote(a.threadId, `The owner applied change #${id} to "${docTitle(doc)}". It now reads as you proposed.`);
   return getAction(id)!;

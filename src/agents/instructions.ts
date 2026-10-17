@@ -18,6 +18,26 @@ export function setAgentInstructions(agent: string, text: string): string {
   return clean;
 }
 
+/** Instructions for the whole company, which every agent and the chat follow ("always call it a platform"). */
+const GENERAL_KEY = 'generalInstructions';
+
+export function generalInstructions(): string {
+  return getSetting<string>(GENERAL_KEY, '');
+}
+
+export function setGeneralInstructions(text: string): string {
+  const clean = text.replace(/\r\n/g, '\n').trim();
+  if (clean.length > MAX_INSTRUCTIONS) throw new Error(`keep instructions under ${MAX_INSTRUCTIONS.toLocaleString()} characters (now ${clean.length.toLocaleString()})`);
+  setSetting(GENERAL_KEY, clean);
+  return clean;
+}
+
+/** The note every prompt gets, or null when the user set none. */
+export function generalNote(): string | null {
+  const t = generalInstructions();
+  return t ? `General instructions from the owner. Keep them in mind in everything you write; they override the brand voice document where the two disagree:\n${t}` : null;
+}
+
 /** The note an agent's prompt gets, or null when the user set none. */
 export function instructionsNote(agent: string): string | null {
   const t = agentInstructions(agent);

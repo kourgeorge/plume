@@ -1,6 +1,7 @@
 import { dueDrafts, getDraft, listDrafts, moveDraft, Draft } from '../queue';
 import { getPublisher, publishDraft } from './index';
 import { siteEnv } from '../integrations';
+import { recordAction } from '../actions';
 import { emailDailyLimit, emailsSentToday } from '../outreach/email';
 
 let busy = false;
@@ -12,6 +13,8 @@ export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv())
   if (d.status !== 'approved') throw new Error(`draft ${id} is ${d.status}, not approved`);
   try {
     const r = await publishDraft(d, d.target ?? 'export', env);
+    // Only a live page can be measured later; file exports and dry runs are not on the site.
+    if (!r.dryRun && r.url?.startsWith('http')) recordAction({ kind: 'published', ref: String(id), url: r.url, title: d.title, data: { target: d.target } });
     return moveDraft(id, 'published', {
       publishedUrl: r.url ?? undefined,
       externalId: r.externalId ?? undefined,

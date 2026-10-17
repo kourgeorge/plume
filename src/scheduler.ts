@@ -9,7 +9,7 @@ import { dailyFixes, runAudit } from './agents/seoAudit';
 import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
-import { checkWatched } from './watch';
+import { checkWatched, scanWatchedNews } from './watch';
 import { detectMoves, listTracked } from './seo/rankings';
 import { checkAllSerps, serpCreds } from './seo/serp';
 import { listQuestions, runVisibilityCheck, visibilitySummary } from './geo/visibility';
@@ -103,6 +103,17 @@ export function taskDefs(): TaskDef[] {
         } finally {
           await closeBrowser();
         }
+      },
+    },
+    {
+      id: 'competitor-news',
+      label: 'Search news and LinkedIn/X posts for watched competitors',
+      cron: '47 6 * * 1',
+      costsMoney: true,
+      run: async () => {
+        const r = await scanWatchedNews();
+        if (!r.scanned) return 'skipped: no competitors are being watched';
+        return `scanned ${r.scanned}, ${r.withNews} with news${r.suggested ? `, ${r.suggested} new competitor(s) suggested` : ''}${r.failed.length ? `, failed for ${r.failed.join(', ')}` : ''}`;
       },
     },
     {
