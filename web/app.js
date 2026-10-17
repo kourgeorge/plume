@@ -47,7 +47,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage'];
+const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'logs', 'usage', 'settings'];
 
 function showView(id) {
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== id;
@@ -84,6 +84,7 @@ async function route() {
     case 'results': return loadResults();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
+    case 'settings': return loadSettings();
     default: return loadToday();
   }
 }
@@ -902,3 +903,91 @@ route()
     if (state?.site && !pref.get('tourDone', false)) setTimeout(() => showTour(0), 600);
   })
   .catch((err) => alert(err.message));
+
+// ---------------------------------------------------------------- settings (this website)
+
+async function loadSettings() {
+  showView('settings');
+  $('settings-site').textContent = state.siteName;
+  $('set-name').value = state.siteName;
+  $('set-url').value = state.site || '';
+  $('set-general-status').textContent = '';
+  const [ints, g] = await Promise.all([api('/api/integrations'), api('/api/google')]);
+  $('set-publish').innerHTML = ints.map(integrationCard).join('');
+  for (const card of document.querySelectorAll('.int-card[data-int]')) wireIntegration(card);
+
+  const gsc = g.site ? `Search Console: ${esc(g.site)}` : 'Search Console: no site picked';
+  const ga = g.property ? `Analytics: ${esc(g.property)}` : 'Analytics: no property picked';
+  $('set-analytics').innerHTML = `<div class="int-card"><div class="int-head"><strong>Google</strong>
+    <span class="${g.connected ? 'good' : 'muted'} small">${!g.configured ? 'Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env' : g.connected ? 'Connected (shared by all websites)' : 'Not connected'}</span></div>
+    <p class="muted small">${gsc} · ${ga}</p>
+    <p>${g.configured ? (g.connected ? '<a href="#results"><button class="secondary">Choose site and property</button></a>' : `<a href="${withSite('/api/google/connect')}"><button>Connect Google</button></a>`) : ''}</p></div>`;
+}
+
+function integrationCard(i) {
+  const fields = i.fields
+    .map((f) => `<label>${esc(f.label)}${f.optional ? ' <span class="muted">(optional)</span>' : ''}
+      <input data-key="${f.key}" type="${f.secret ? 'password' : 'text'}" autocomplete="off" spellcheck="false" value="${esc(f.value)}"
+        placeholder="${esc(f.secret && f.hint ? `saved (ends ${f.hint}) — leave empty to keep` : f.placeholder)}">
+      ${f.help ? `<span class="muted small">${esc(f.help)}</span>` : ''}</label>`)
+    .join('');
+  return `<details class="int-card" data-int="${i.id}">
+    <summary class="int-head"><strong>${esc(i.label)}</strong><span class="small ${i.connected ? 'good' : 'muted'}">${i.connected ? 'Connected' : 'Not connected'}</span></summary>
+    <p class="muted small">${esc(i.blurb)}</p>
+    <div class="form">${fields}</div>
+    <p class="actions-row"><button data-act="save">Save</button> <button data-act="test" class="secondary" ${i.connected ? '' : 'disabled'}>Test</button>
+      ${i.connected ? '<button data-act="remove" class="secondary">Disconnect</button>' : ''} <span class="int-msg small"></span></p>
+  </details>`;
+}
+
+function wireIntegration(card) {
+  const id = card.dataset.int;
+  const msg = (text, cls = 'muted') => ((card.querySelector('.int-msg').textContent = text), (card.querySelector('.int-msg').className = `int-msg small ${cls}`));
+  const values = () => Object.fromEntries([...card.querySelectorAll('input[data-key]')].map((el) => [el.dataset.key, el.value]));
+  card.querySelector('[data-act="save"]').onclick = async () => {
+    try {
+      await api(`/api/integrations/${id}`, { method: 'PUT', body: JSON.stringify({ values: values() }) });
+      publishers = [];
+      await goTo('#settings', '');
+      document.querySelector(`.int-card[data-int="${id}"]`).open = true;
+      const m = document.querySelector(`.int-card[data-int="${id}"] .int-msg`);
+      m.textContent = 'Saved. Press Test to check it works.';
+    } catch (err) {
+      msg(err.message, 'warn');
+    }
+  };
+  const test = card.querySelector('[data-act="test"]');
+  test.onclick = async () => {
+    msg('Checking…');
+    try {
+      const r = await post(`/api/integrations/${id}/test`);
+      msg(r.message, r.ok ? 'good' : 'warn');
+    } catch (err) {
+      msg(err.message, 'warn');
+    }
+  };
+  const rm = card.querySelector('[data-act="remove"]');
+  if (rm) rm.onclick = async () => {
+    if (!confirm('Disconnect? The saved details are deleted from this computer.')) return;
+    await api(`/api/integrations/${id}`, { method: 'DELETE' });
+    publishers = [];
+    await goTo('#settings');
+  };
+}
+
+$('set-name-save').onclick = async () => {
+  try {
+    await api(`/api/sites/${encodeURIComponent(SITE)}`, { method: 'PUT', body: JSON.stringify({ name: $('set-name').value }) });
+    await goTo('#settings');
+    $('set-general-status').textContent = 'Saved.';
+  } catch (err) {
+    $('set-general-status').textContent = err.message;
+  }
+};
+$('set-remove').onclick = async () => {
+  const typed = prompt(`This deletes ${SITE}'s folder: documents, drafts, results and saved connections. AI cost records stay.\n\nType this to confirm:\n\n${SITE}`);
+  if (typed === null) return;
+  if (typed.trim() !== SITE) return alert('That did not match, so nothing was removed.');
+  await api(`/api/sites/${encodeURIComponent(SITE)}`, { method: 'DELETE' });
+  location.href = '/';
+};

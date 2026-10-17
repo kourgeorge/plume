@@ -18,6 +18,7 @@ import { agentInstructions, setAgentInstructions } from '../agents/instructions'
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher } from '../publish';
+import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
 import { publishOne } from '../publish/runner';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
@@ -235,7 +236,29 @@ export function buildServer(port: number): FastifyInstance {
 
   // ---- inbox ----
   app.get('/api/publishers', async () =>
-    PUBLISHERS.map((p) => ({ id: p.id, label: p.label, configured: p.configured(), needs: p.needs.filter((n) => !process.env[n]) })),
+    {
+    const env = siteEnv();
+    return PUBLISHERS.map((p) => ({ id: p.id, label: p.label, configured: p.configured(env), needs: p.needs.filter((n) => !env[n]) }));
+  });
+
+  // ---- this website's settings: where it publishes ----
+  app.get('/api/integrations', async () => describeIntegrations());
+  app.put<{ Params: { id: string }; Body: { values?: Record<string, unknown> } }>('/api/integrations/:id', async (req, reply) => {
+    if (!getIntegration(req.params.id)) return reply.code(404).send({ error: 'no such integration' });
+    try {
+      saveIntegration(req.params.id, req.body?.values ?? {});
+      return describeIntegrations().find((i) => i.id === req.params.id);
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.delete<{ Params: { id: string } }>('/api/integrations/:id', async (req, reply) => {
+    if (!getIntegration(req.params.id)) return reply.code(404).send({ error: 'no such integration' });
+    removeIntegration(req.params.id);
+    return { ok: true };
+  });
+  app.post<{ Params: { id: string } }>('/api/integrations/:id/test', async (req, reply) =>
+    getIntegration(req.params.id) ? testIntegration(req.params.id) : reply.code(404).send({ error: 'no such integration' }),
   );
 
   app.get<{ Querystring: { status?: DraftStatus; agent?: string } }>('/api/drafts', async (req) =>

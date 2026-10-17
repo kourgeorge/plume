@@ -259,3 +259,10 @@ tr.level-error td { color: var(--bad); } tr.level-warn td:first-child { color: v
 .quick-wrap .quick { margin-top: 8px; }
 .col.right.chat-col { max-height: calc(100vh - 54px); }
 @media (max-width: 1100px) { .col.right.chat-col { max-height: none; } .chat-log { max-height: 60vh; } }
+
+/* Settings */
+.int-list { display: grid; gap: 10px; max-width: 760px; margin-bottom: 20px; }
+.int-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.int-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; }
+.int-card .form { margin: 10px 0; }
+.actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

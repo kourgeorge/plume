@@ -1,10 +1,11 @@
 import { dueDrafts, getDraft, moveDraft, Draft } from '../queue';
 import { publishDraft } from './index';
+import { siteEnv } from '../integrations';
 
 let busy = false;
 
 /** Publish one approved draft to its target. Failures land in the inbox with the reason, never thrown away. */
-export async function publishOne(id: number, env = process.env): Promise<Draft> {
+export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv()): Promise<Draft> {
   const d = getDraft(id);
   if (!d) throw new Error(`no draft ${id}`);
   if (d.status !== 'approved') throw new Error(`draft ${id} is ${d.status}, not approved`);
@@ -22,7 +23,7 @@ export async function publishOne(id: number, env = process.env): Promise<Draft> 
 }
 
 /** Publish everything that is approved and due. Called every minute. */
-export async function publishDue(env = process.env): Promise<number> {
+export async function publishDue(env: NodeJS.ProcessEnv = siteEnv()): Promise<number> {
   if (busy) return 0;
   busy = true;
   try {

@@ -2,9 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { marked } from 'marked';
 import { siteDir } from '../site';
+import { siteEnv } from '../integrations';
 import type { Draft } from '../queue';
 import { wordpress } from './wordpress';
 import { webflow } from './webflow';
+import { sanity } from './sanity';
+import { hubspot } from './hubspot';
+import { github } from './github';
 
 export interface PublishResult {
   url: string | null;
@@ -47,14 +51,14 @@ export const exportFiles: Publisher = {
   },
 };
 
-export const PUBLISHERS: Publisher[] = [wordpress, webflow, exportFiles];
+export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, exportFiles];
 
 export function getPublisher(id: string): Publisher | undefined {
   return PUBLISHERS.find((p) => p.id === id);
 }
 
 /** Publish, or — if the target has no credentials — save the files and say it was a dry run. */
-export async function publishDraft(draft: Draft, targetId: string, env = process.env): Promise<PublishResult> {
+export async function publishDraft(draft: Draft, targetId: string, env: NodeJS.ProcessEnv = siteEnv()): Promise<PublishResult> {
   const pub = getPublisher(targetId);
   if (!pub) throw new Error(`unknown publishing target ${targetId}`);
   const html = toHtml(stripTitle(draft.body));
