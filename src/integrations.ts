@@ -95,6 +95,48 @@ export const INTEGRATIONS: IntegrationDef[] = [
       { key: 'path', env: 'GITHUB_PATH', label: 'Folder for articles', optional: true, placeholder: 'content/blog' },
     ],
   },
+  {
+    id: 'x',
+    label: 'X (Twitter)',
+    blurb:
+      'Post and thread on X. In the X developer portal, open your app → "Keys and tokens", give the app "Read and write" permission, then copy the four values below. X charges for posting through its API.',
+    fields: [
+      { key: 'apiKey', env: 'X_API_KEY', label: 'API key (consumer key)', secret: true },
+      { key: 'apiSecret', env: 'X_API_SECRET', label: 'API key secret', secret: true },
+      { key: 'accessToken', env: 'X_ACCESS_TOKEN', label: 'Access token', secret: true },
+      { key: 'accessSecret', env: 'X_ACCESS_SECRET', label: 'Access token secret', secret: true },
+    ],
+  },
+  {
+    id: 'linkedin',
+    label: 'LinkedIn',
+    blurb:
+      'Post to LinkedIn as yourself or as a company page. Needs an access token from your LinkedIn developer app with the "w_member_social" permission (or "w_organization_social" for a page). Tokens last about two months.',
+    fields: [
+      { key: 'token', env: 'LINKEDIN_TOKEN', label: 'Access token', secret: true },
+      {
+        key: 'author',
+        env: 'LINKEDIN_AUTHOR',
+        label: 'Who posts',
+        optional: true,
+        placeholder: 'leave empty for yourself, or urn:li:organization:12345',
+        help: 'Empty = your own profile. For a company page, paste its URN (the number is in the page admin address).',
+      },
+    ],
+  },
+  {
+    id: 'reddit',
+    label: 'Reddit',
+    blurb:
+      'Reply to threads and post in subreddits. At reddit.com/prefs/apps create an app of type "script", then use its ID and secret with the Reddit account that will post. Plume posts at most a few times a day and only what you approve.',
+    fields: [
+      { key: 'clientId', env: 'REDDIT_CLIENT_ID', label: 'App ID (under the app name)' },
+      { key: 'clientSecret', env: 'REDDIT_CLIENT_SECRET', label: 'App secret', secret: true },
+      { key: 'username', env: 'REDDIT_USERNAME', label: 'Reddit username' },
+      { key: 'password', env: 'REDDIT_PASSWORD', label: 'Reddit password', secret: true },
+      { key: 'daily', env: 'REDDIT_DAILY_LIMIT', label: 'Posts per day, at most', optional: true, placeholder: '2', help: 'Approved Reddit posts beyond this wait for the next day.' },
+    ],
+  },
 ];
 
 export const getIntegration = (id: string) => INTEGRATIONS.find((i) => i.id === id);
@@ -226,6 +268,12 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
       }
       case 'google':
         return { ok: true, message: 'Saved. Use Connect Google to sign in.' };
+      case 'x':
+      case 'linkedin':
+      case 'reddit': {
+        const { testSocial } = await import('./social/publishers');
+        return await testSocial(id, env);
+      }
       default:
         return { ok: false, message: `unknown integration ${id}` };
     }

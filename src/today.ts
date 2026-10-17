@@ -5,10 +5,11 @@ import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
 import { ChangeCard, dismissChange, openChanges } from './watch';
 import { RankAlert, dismissAlert, openAlerts } from './seo/rankings';
+import { targetsFor } from './publish';
 
 /** One card in the Today feed. `key` is stable so skips survive a refresh. */
 export type TodayItem =
-  | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number } }
+  | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number; targets: string[] } }
   | { key: string; kind: 'fix'; score: number; fix: Issue }
   | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number }
   | { key: string; kind: 'watch'; score: number; change: ChangeCard }
@@ -77,7 +78,7 @@ export function todayFeed(now = new Date()): TodayItem[] {
   for (const d of listDrafts({ status: 'draft' })) {
     const { body, originalBody, ...rest } = d;
     const fromData = d.meta.source === 'search-console';
-    items.push({ key: `draft:${d.id}`, kind: 'draft', score: fromData ? 80 : 60, draft: { ...rest, preview: preview(body), words: body.split(/\s+/).length } });
+    items.push({ key: `draft:${d.id}`, kind: 'draft', score: fromData ? 80 : 60, draft: { ...rest, preview: preview(body), words: body.split(/\s+/).length, targets: targetsFor(d.kind) } });
   }
 
   return items.filter((i) => !skip.has(i.key)).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));

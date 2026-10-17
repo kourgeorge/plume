@@ -224,12 +224,12 @@ function renderTodayCard(item, left) {
       ${d.meta.reason ? `<p class="why">${esc(d.meta.reason)}</p>` : ''}
       <p class="body" dir="auto">${esc(d.preview)}</p>
       <div class="acts">
-        <select id="t-target">${publishers.map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' (dry run)'}</option>`).join('')}</select>
+        <select id="t-target">${fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' (dry run)'}</option>`).join('')}</select>
         <button id="t-approve">Approve</button>
         <a href="#draft/${d.id}"><button class="secondary">Read and edit</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button><button class="secondary" id="t-no">Not useful</button></span>
       </div>${more}</div>`;
-    const firstLive = publishers.find((p) => p.configured && p.id !== 'export');
+    const firstLive = fitting(d).find((p) => p.configured && p.id !== 'export');
     if (firstLive) $('t-target').value = firstLive.id;
     $('t-approve').onclick = act(async () => post(`/api/drafts/${d.id}/approve`, { target: $('t-target').value }));
     $('t-no').onclick = act(async () => {
@@ -319,12 +319,21 @@ function act(fn) {
   };
 }
 
-const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙' };
+const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙', social: '✦', reddit: '◉' };
 function agentLabel(id) {
-  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes' }[id] ?? id;
+  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes', social: 'Social', reddit: 'Reddit', chat: 'Chat' }[id] ?? id;
 }
 function kindLabel(k) {
-  return { blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article' }[k] ?? k;
+  return (
+    {
+      blog_post: 'Blog post', landing_page: 'Landing page', article: 'Article', social_post: 'Social post',
+      x_post: 'X post', x_thread: 'X thread', linkedin_post: 'LinkedIn post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post',
+    }[k] ?? k
+  );
+}
+/** Only the destinations that can take this draft (no articles on X, no tweets on WordPress). */
+function fitting(d) {
+  return d.targets ? publishers.filter((p) => d.targets.includes(p.id)) : publishers;
 }
 
 function renderFolders(folders) {
@@ -542,8 +551,12 @@ async function loadDraft(id) {
   $('draft-meta').value = d.meta.metaDescription ?? '';
   updateMetaLen();
   $('draft-body').value = d.body;
-  $('draft-target').innerHTML = publishers.map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`).join('');
-  if (d.target) $('draft-target').value = d.target;
+  $('draft-target').innerHTML = fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`).join('');
+  if (d.target && fitting(d).some((p) => p.id === d.target)) $('draft-target').value = d.target;
+  else {
+    const firstLive = fitting(d).find((p) => p.configured && p.id !== 'export');
+    if (firstLive) $('draft-target').value = firstLive.id;
+  }
   const editable = d.status === 'draft' || d.status === 'failed';
   for (const el of ['draft-title', 'draft-slug', 'draft-meta', 'draft-body', 'draft-save', 'draft-approve', 'draft-target', 'draft-when']) $(el).disabled = !editable;
   $('draft-reject').textContent = d.status === 'rejected' ? 'Reopen' : 'Not useful';

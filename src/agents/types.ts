@@ -22,5 +22,6 @@ export interface Agent {
   /** One line for the agents page. */
   description: string;
   findOpportunities(opts: AgentRunOptions): Promise<Opportunity[]>;
-  draft(opp: Opportunity): Promise<Draft>;
+  /** Null when, on a closer look, there is nothing worth writing (e.g. a Reddit thread we can't help with). */
+  draft(opp: Opportunity): Promise<Draft | null>;
 }

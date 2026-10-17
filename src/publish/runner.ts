@@ -1,5 +1,5 @@
-import { dueDrafts, getDraft, moveDraft, Draft } from '../queue';
-import { publishDraft } from './index';
+import { dueDrafts, getDraft, listDrafts, moveDraft, Draft } from '../queue';
+import { getPublisher, publishDraft } from './index';
 import { siteEnv } from '../integrations';
 
 let busy = false;
@@ -22,14 +22,36 @@ export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv())
   }
 }
 
-/** Publish everything that is approved and due. Called every minute. */
-export async function publishDue(env: NodeJS.ProcessEnv = siteEnv()): Promise<number> {
+/** How many Reddit posts may go out per day. Subreddits ban accounts that post a lot, so the default is small. */
+export function redditDailyLimit(env: NodeJS.ProcessEnv = siteEnv()): number {
+  const n = Number(env.REDDIT_DAILY_LIMIT);
+  return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 2;
+}
+
+/** Reddit posts actually sent (not dry runs) since midnight UTC. */
+export function redditPostedToday(now = new Date()): number {
+  const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  return listDrafts({ status: 'published' }).filter((d) => d.target === 'reddit' && !d.dryRun && d.updatedAt >= since).length;
+}
+
+/**
+ * Publish everything that is approved and due. Called every minute.
+ * Approved Reddit posts over the daily limit stay approved and go out on a later day — they don't fail.
+ */
+export async function publishDue(env: NodeJS.ProcessEnv = siteEnv(), now = new Date()): Promise<number> {
   if (busy) return 0;
   busy = true;
   try {
-    const due = dueDrafts();
-    for (const d of due) await publishOne(d.id, env);
-    return due.length;
+    let redditLeft = redditDailyLimit(env) - redditPostedToday(now);
+    let sent = 0;
+    for (const d of dueDrafts(now)) {
+      const live = d.target === 'reddit' && getPublisher('reddit')!.configured(env);
+      if (live && redditLeft <= 0) continue;
+      const after = await publishOne(d.id, env);
+      if (live && after.status === 'published') redditLeft--;
+      sent++;
+    }
+    return sent;
   } finally {
     busy = false;
   }

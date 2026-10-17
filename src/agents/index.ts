@@ -2,9 +2,10 @@ import { finishJob, startJob, updateJob } from '../jobs';
 import { profileComplete } from '../context/profile';
 import { seoAgent } from './seo';
 import { writerAgent } from './writer';
+import { redditAgent, socialAgent } from '../social/agents';
 import type { Agent } from './types';
 
-export const AGENTS: Agent[] = [seoAgent, writerAgent];
+export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent];
 
 export function getAgent(id: string): Agent | undefined {
   return AGENTS.find((a) => a.id === id);
@@ -16,11 +17,12 @@ export async function runAgent(id: string, limit?: number, onProgress: (m: strin
   if (!agent) throw new Error(`no agent ${id}`);
   if (!profileComplete()) throw new Error('finish the business profile first — every agent works from it');
   const opps = await agent.findOpportunities({ limit, onProgress: (m) => onProgress(`${agent.label}: ${m}`) });
+  let written = 0;
   for (const [i, opp] of opps.entries()) {
     onProgress(`${agent.label}: writing ${i + 1} of ${opps.length} — ${opp.title}`);
-    await agent.draft(opp);
+    if (await agent.draft(opp)) written++;
   }
-  return opps.length;
+  return written;
 }
 
 /** Same, in the background for the web UI; returns the job id. Setup problems are reported at once. */

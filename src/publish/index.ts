@@ -9,6 +9,7 @@ import { webflow } from './webflow';
 import { sanity } from './sanity';
 import { hubspot } from './hubspot';
 import { github } from './github';
+import { SOCIAL_PUBLISHERS } from '../social/publishers';
 
 export interface PublishResult {
   url: string | null;
@@ -51,16 +52,37 @@ export const exportFiles: Publisher = {
   },
 };
 
-export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, exportFiles];
+export const PUBLISHERS: Publisher[] = [wordpress, webflow, sanity, hubspot, github, ...SOCIAL_PUBLISHERS, exportFiles];
 
 export function getPublisher(id: string): Publisher | undefined {
   return PUBLISHERS.find((p) => p.id === id);
+}
+
+/** Which kinds of draft each destination takes. File export takes anything. */
+const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post'];
+const REDDIT_KINDS = ['reddit_reply', 'reddit_post'];
+const SOCIAL_TARGETS = ['x', 'linkedin', 'reddit'];
+export function targetsFor(kind: string): string[] {
+  if (REDDIT_KINDS.includes(kind)) return ['reddit', 'export'];
+  if (kind === 'x_post' || kind === 'x_thread') return ['x', 'export'];
+  if (kind === 'linkedin_post') return ['linkedin', 'export'];
+  if (kind === 'social_post') return ['x', 'linkedin', 'export'];
+  return PUBLISHERS.map((p) => p.id).filter((id) => !SOCIAL_TARGETS.includes(id));
+}
+
+/** Refuse a destination that can't take this kind of draft (an article on X, a reply on WordPress). */
+export function checkTarget(kind: string, targetId: string): void {
+  if (targetsFor(kind).includes(targetId)) return;
+  const label = getPublisher(targetId)?.label ?? targetId;
+  const what = SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind) ? 'a social post' : 'an article';
+  throw new Error(`${label} can't take ${what}. Pick one of: ${targetsFor(kind).map((t) => getPublisher(t)?.label ?? t).join(', ')}.`);
 }
 
 /** Publish, or — if the target has no credentials — save the files and say it was a dry run. */
 export async function publishDraft(draft: Draft, targetId: string, env: NodeJS.ProcessEnv = siteEnv()): Promise<PublishResult> {
   const pub = getPublisher(targetId);
   if (!pub) throw new Error(`unknown publishing target ${targetId}`);
+  checkTarget(draft.kind, targetId);
   const html = toHtml(stripTitle(draft.body));
   if (!pub.configured(env)) {
     const saved = await exportFiles.publish(draft, html, env);

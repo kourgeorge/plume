@@ -17,7 +17,7 @@ import { AGENTS, getAgent, startAgentRun } from '../agents';
 import { agentInstructions, setAgentInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
-import { PUBLISHERS, getPublisher } from '../publish';
+import { PUBLISHERS, getPublisher, targetsFor } from '../publish';
 import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
 import { publishOne } from '../publish/runner';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
@@ -270,7 +270,7 @@ export function buildServer(port: number): FastifyInstance {
 
   app.get<{ Params: { id: string } }>('/api/drafts/:id', async (req, reply) => {
     const d = getDraft(Number(req.params.id));
-    return d ? { ...d, events: draftEvents(d.id) } : reply.code(404).send({ error: 'no such draft' });
+    return d ? { ...d, events: draftEvents(d.id), targets: targetsFor(d.kind) } : reply.code(404).send({ error: 'no such draft' });
   });
 
   app.put<{ Params: { id: string }; Body: { title?: string; body?: string; meta?: DraftMeta } }>('/api/drafts/:id', async (req, reply) => {
