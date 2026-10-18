@@ -134,6 +134,7 @@ async function renderChrome() {
   $('site-name').textContent = state.siteName;
   if (state.site) $('site-icon').src = `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(new URL(state.site).hostname)}`;
   loadBarNumbers();
+  pollLive();
   const lang = state.language;
   $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
 
@@ -1042,15 +1043,100 @@ function placeDelta(now, before) {
 }
 const money = (x) => (x == null ? '—' : `$${Number(x).toLocaleString(undefined, { maximumFractionDigits: x < 10 && x % 1 ? 2 : 0 })}`);
 
-/** The period's numbers feed the Analytics column; the top bar no longer repeats them. */
+/** The period's numbers: Visitors and Revenue in the top bar, and the Analytics page. */
 async function loadBarNumbers() {
   try {
     summary = await api(`/api/results/summary?days=${days === 7 ? 7 : 30}`);
   } catch {
     summary = null;
   }
+  renderBarNumbers();
   if (location.hash.startsWith('#analytics')) renderDetails();
 }
+
+function renderBarNumbers() {
+  const s = summary;
+  if (!s?.from) return ($('bar-numbers').innerHTML = '');
+  // Visitors when Analytics has them, else page views, else Google clicks.
+  const [label, key] = s.now.users != null ? ['Visitors', 'users'] : s.now.views != null ? ['Views', 'views'] : ['Clicks', 'clicks'];
+  $('bar-numbers').innerHTML = `
+    <a href="#analytics/traffic" class="bar-stat" title="${label}, last ${s.days} days"><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}</a>
+    ${s.now.revenue != null ? `<a href="#analytics/traffic" class="bar-stat" title="GA4 conversion value, last ${s.days} days"><span class="lbl">Revenue</span><b>${money(s.now.revenue)}</b></a>` : ''}`;
+}
+
+// ---- people on the site right now (GA4 realtime): the chip in the top bar and its panel
+let live = null;
+let liveBy = pref.get('liveBy', 'page');
+let liveTimer = null;
+const LIVE_BY = [['page', 'Page'], ['country', 'Country'], ['device', 'Device']];
+
+async function pollLive() {
+  clearTimeout(liveTimer);
+  try {
+    live = await api(`/api/analytics/live?by=${liveBy}`);
+  } catch {
+    live = null;
+  }
+  renderLive();
+  // Once a minute is enough: the server keeps answers for 45 seconds to spare Google's realtime quota.
+  if (live && !live.missing) liveTimer = setTimeout(pollLive, document.hidden ? 300_000 : 60_000);
+}
+
+const liveBars = (vals, cls) => {
+  const max = Math.max(1, ...vals);
+  return `<span class="${cls}" aria-hidden="true">${vals.map((v) => `<i class="${v ? '' : 'zero'}" style="height:${v ? Math.max(12, (100 * v) / max) : 6}%"></i>`).join('')}</span>`;
+};
+
+function renderLive() {
+  const btn = $('live-btn');
+  // No property picked or Google not connected: the Google pill already says so, keep the bar quiet.
+  btn.hidden = !live || live.missing === 'google' || live.missing === 'property';
+  if (btn.hidden) return closeLive();
+  const failed = live.missing === 'error';
+  btn.classList.toggle('off', failed || !live.now);
+  btn.title = failed ? `Live visitors are unavailable: ${live.error}` : 'People on the site in the last 5 minutes';
+  btn.innerHTML = `<span class="live-dot"></span><b>${failed ? '—' : n(live.now)}</b><span class="lbl">active now</span>${failed ? '' : liveBars(live.perMinute.slice(-15), 'spark-bars')}`;
+  if (!$('live-panel').hidden) renderLivePanel();
+}
+
+function renderLivePanel() {
+  const l = live;
+  const host = state.site ? new URL(state.site).hostname : '';
+  if (l.missing === 'error') {
+    const apiOff = /analyticsdata\.googleapis\.com|Analytics Data API/i.test(l.error);
+    $('live-panel').innerHTML = `<p class="lp-head">Live visitors</p><p class="muted small">${apiOff
+      ? 'Google blocked the data: the <b>Google Analytics Data API</b> is switched off in your Google Cloud project. Turn it on, wait a few minutes, and this fills in by itself.'
+      : `Google didn't answer: ${esc(l.error)}`}</p>`;
+    return;
+  }
+  const max = Math.max(1, ...l.rows.map((r) => r.users));
+  $('live-panel').innerHTML = `
+    <p class="lp-head">Active users in last 5 minutes${host ? ` · ${esc(host)}` : ''}</p>
+    <p class="lp-big">${n(l.now)}</p>
+    <p class="lp-head">Active users, last 30 minutes <span class="faint">${n(l.total)}</span></p>
+    ${liveBars(l.perMinute, 'lp-bars')}
+    <div class="lp-axis"><span>-30 min</span><span>now</span></div>
+    <div class="lp-table-head"><select id="live-by" aria-label="Break down by">${LIVE_BY.map(([v, t]) => `<option value="${v}"${v === liveBy ? ' selected' : ''}>${t}</option>`).join('')}</select><span>Visitors</span></div>
+    ${l.rows.length
+      ? l.rows.map((r) => `<div class="lp-row"><span class="lp-label" title="${esc(r.label)}">${esc(r.label)}</span><b>${n(r.users)}</b><i style="width:${(100 * r.users) / max}%"></i></div>`).join('')
+      : '<p class="muted small lp-empty">Nobody in the last 30 minutes.</p>'}`;
+  $('live-by').onchange = (e) => ((liveBy = e.target.value), pref.set('liveBy', liveBy), pollLive());
+}
+
+function closeLive() {
+  $('live-panel').hidden = true;
+  $('live-btn').setAttribute('aria-expanded', 'false');
+}
+$('live-btn').onclick = () => {
+  const open = $('live-panel').hidden;
+  if (!open) return closeLive();
+  $('live-panel').hidden = false;
+  $('live-btn').setAttribute('aria-expanded', 'true');
+  renderLivePanel();
+};
+document.addEventListener('click', (e) => !e.target.closest('.live-wrap') && closeLive());
+document.addEventListener('keydown', (e) => e.key === 'Escape' && closeLive());
+document.addEventListener('visibilitychange', () => !document.hidden && live && !live.missing && pollLive());
 
 /** The Analytics page. `#analytics/seo` opens a tab directly. */
 async function loadAnalytics(tab) {

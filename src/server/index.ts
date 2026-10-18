@@ -22,6 +22,7 @@ import { describeIntegrations, getIntegration, removeIntegration, saveIntegratio
 import { publishOne } from '../publish/runner';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
+import { LIVE_BREAKDOWNS, LiveBreakdown, liveNow } from '../analytics/live';
 import { performanceNotes, publishedResults, resultsSummary, topPages, topQueries } from '../analytics/results';
 import { searchConsoleGaps } from '../agents/seo';
 import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, updateTask } from '../scheduler';
@@ -432,6 +433,11 @@ export function buildServer(port: number): FastifyInstance {
     const last = getSetting<PullStatus | null>('lastPull', null);
     return { ...resultsSummary(req.query.days === '30' ? 30 : 7), analytics: { property: getSetting<string | null>('ga4Property', null), error: last?.analytics?.error ?? null } };
   });
+
+  // People on the site right now (GA4 realtime), for the top bar.
+  app.get<{ Querystring: { by?: string } }>('/api/analytics/live', async (req) =>
+    liveNow((req.query.by && req.query.by in LIVE_BREAKDOWNS ? req.query.by : 'page') as LiveBreakdown),
+  );
 
   // ---- timetable, logs, budget, speed ----
   app.get('/api/tasks', async () => taskOverview());

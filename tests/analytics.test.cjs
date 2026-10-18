@@ -11,6 +11,7 @@ process.env.PLUME_SITE = 'test.example';
 const g = require('../src/analytics/google');
 const pull = require('../src/analytics/pull');
 const results = require('../src/analytics/results');
+const live = require('../src/analytics/live');
 const q = require('../src/queue');
 const { setSetting } = require('../src/db');
 const { agentSystem } = require('../src/context/profile');
@@ -41,6 +42,13 @@ const server = http.createServer((req, res) => {
         { keys: ['2026-10-11', 'best widgets 2026', 'https://www.acme.com/blog/best-widgets'], clicks: 1, impressions: 100, position: 18 },
       ] });
     if (req.url.startsWith('/admin/accountSummaries')) return json(200, { accountSummaries: [{ propertySummaries: [{ property: 'properties/123', displayName: 'Acme' }] }] });
+    if (req.url === '/data/properties/123:runRealtimeReport') {
+      const b = JSON.parse(body);
+      const dim = b.dimensions?.[0]?.name;
+      if (dim === 'minutesAgo') return json(200, { rows: [{ dimensionValues: [{ value: '00' }], metricValues: [{ value: '3' }] }, { dimensionValues: [{ value: '12' }], metricValues: [{ value: '5' }] }] });
+      if (dim) return json(200, { rows: [{ dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '2' }] }, { dimensionValues: [{ value: '/' }], metricValues: [{ value: '6' }] }] });
+      return json(200, { rows: [{ metricValues: [{ value: b.minuteRanges[0].startMinutesAgo === 4 ? '3' : '8' }] }] });
+    }
     if (req.url === '/data/properties/123:runReport' && body.includes('sessionDefaultChannelGroup'))
       return json(200, { rows: [
         { dimensionValues: [{ value: '20261015' }, { value: 'Organic Search' }], metricValues: [{ value: '300' }, { value: '350' }] },
@@ -191,4 +199,22 @@ test('SEO opportunities start from Search Console near-misses', async () => {
   // "best widgets" is already covered by the published draft; the next near-miss is next in line.
   assert.equal(opps[0].keyword, 'best widgets 2026');
   assert.equal(opps[0].source, 'search-console');
+});
+
+test('live visitors: last 5 minutes, per-minute bars oldest first, busiest page first', async () => {
+  setSetting('ga4Property', '123');
+  const l = await live.liveNow('page');
+  assert.equal(l.missing, undefined);
+  assert.equal(l.now, 3);
+  assert.equal(l.total, 8);
+  assert.equal(l.perMinute.length, 30);
+  assert.equal(l.perMinute[29], 3, 'this minute is last');
+  assert.equal(l.perMinute[17], 5, '12 minutes ago');
+  assert.deepEqual(l.rows.map((r) => r.label), ['/', '/pricing']);
+  const n = calls.length;
+  await live.liveNow('page');
+  assert.equal(calls.length, n, 'a second ask within the minute is answered from memory');
+  setSetting('ga4Property', null);
+  assert.equal((await live.liveNow()).missing, 'property');
+  setSetting('ga4Property', '123');
 });
