@@ -9,7 +9,8 @@ import { pipeline } from 'stream/promises';
 import { SIZES, SizeId, footage, footagePath, previews, renderPreview, videoDir } from '../video/agent';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { siteEnv } from '../integrations';
-import { getDraft } from '../queue';
+import { editDraft, getDraft } from '../queue';
+import { ARTICLE_KINDS, imageService, photoCredits, suggestPhoto } from '../social/photos';
 import { IMAGE_KINDS, IMAGE_MIME, VIDEO_MIME, addImage, addVideo, imageDir, imageFile, listImages, postVideo, removeImage, removeVideo } from '../social/images';
 
 /** Routes for outreach (creators, link prospects, email) and video previews. Registered from the main route file. */
@@ -143,6 +144,11 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
   // ---- photos on social posts ----
   const postDraft = (id: string) => {
     const d = getDraft(Number(id));
+    return d && (IMAGE_KINDS.includes(d.kind) || ARTICLE_KINDS.includes(d.kind)) ? d : null;
+  };
+  /** Social posts only: articles carry one picture, never a video. */
+  const videoDraft = (id: string) => {
+    const d = getDraft(Number(id));
     return d && IMAGE_KINDS.includes(d.kind) ? d : null;
   };
   const shown = (draftId: number) => listImages(draftId).map(({ name, type, bytes, at }) => ({ name, type, bytes, at }));
@@ -150,7 +156,10 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     const v = postVideo(draftId);
     return v ? { name: v.name, type: v.type, bytes: v.bytes, at: v.at } : null;
   };
-  const media = (draftId: number) => ({ images: shown(draftId), video: shownVideo(draftId) });
+  const media = (draftId: number) => {
+    const d = getDraft(draftId);
+    return { images: shown(draftId), video: shownVideo(draftId), credits: photoCredits(draftId), note: (d?.meta.photoNote as string | undefined) ?? null, canMake: !!imageService() };
+  };
   const locked = (status: string) => status !== 'draft' && status !== 'failed';
   /** Save an upload to a side file, then let `take` check it and give it its place. */
   const receive = async (req: any, reply: any, draftId: number, take: (part: string) => void) => {
@@ -177,18 +186,38 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     const d = postDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
     if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
-    return receive(req, reply, d.id, (part) => addImage(d.id, part));
+    return receive(req, reply, d.id, (part) => {
+      if (ARTICLE_KINDS.includes(d.kind) && listImages(d.id).length) {
+        fs.rmSync(part, { force: true });
+        throw new Error('an article has one picture — remove it first to use another');
+      }
+      addImage(d.id, part);
+    });
+  });
+
+  /** Let the photo editor find (or make) a picture for this draft. Takes up to a minute. */
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/images/suggest', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
+    if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
+    try {
+      const r = await suggestPhoto(d.id);
+      if (!r.attached) editDraft(d.id, { meta: { photoNote: r.note } });
+    } catch (err) {
+      return bad(reply, err);
+    }
+    return media(d.id);
   });
 
   app.post<{ Params: { id: string } }>('/api/drafts/:id/video', async (req, reply) => {
-    const d = postDraft(req.params.id);
+    const d = videoDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have a video' });
     if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its video' });
     return receive(req, reply, d.id, (part) => addVideo(d.id, part));
   });
 
   app.delete<{ Params: { id: string } }>('/api/drafts/:id/video', async (req, reply) => {
-    const d = postDraft(req.params.id);
+    const d = videoDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have a video' });
     if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its video' });
     removeVideo(d.id);

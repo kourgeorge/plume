@@ -873,33 +873,53 @@ function updateCount() {
 }
 
 const PHOTO_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
+/** Articles carry one picture for the top of the page, never a video. */
+const ARTICLE_PHOTO_KINDS = ['article', 'blog_post', 'landing_page'];
 const MAX_PHOTOS = 4;
 
 /** Photos or one video on a post: shown in the order they will appear; changed while the post is still a draft. */
 async function loadPhotos(d) {
   const box = $('draft-photos');
-  box.hidden = !PHOTO_KINDS.includes(d.kind);
+  const article = ARTICLE_PHOTO_KINDS.includes(d.kind);
+  box.hidden = !PHOTO_KINDS.includes(d.kind) && !article;
   if (box.hidden) return;
+  const max = article ? 1 : MAX_PHOTOS;
   const editable = d.status === 'draft' || d.status === 'failed';
   const msg = (text) => (($('photos-msg').hidden = !text), ($('photos-msg').className = 'small bad'), ($('photos-msg').textContent = text || ''));
   const busy = () => !$('video-progress').hidden;
-  const render = ({ images, video }) => {
+  const render = ({ images, video, credits = [], note, canMake }) => {
     if (currentDraft !== d.id) return;
     // A post has photos or one video, never both, so each button hides once the other kind is there.
-    $('photos-pick').hidden = !editable || busy() || !!video || images.length >= MAX_PHOTOS;
-    $('video-pick').hidden = !editable || busy() || images.length > 0;
+    $('photos-pick').hidden = !editable || busy() || !!video || images.length >= max;
+    $('photos-suggest').hidden = $('photos-pick').hidden;
+    $('photos-suggest').title = canMake ? 'Search free photos for one that fits, or make one' : 'Search free photos for one that fits';
+    $('video-pick').hidden = article || !editable || busy() || images.length > 0;
     $('video-pick').firstChild.textContent = video ? 'Replace video' : 'Add video';
     $('photos-note').textContent = video
       ? `1 video · ${video.bytes < 1048576 ? `${Math.max(1, Math.round(video.bytes / 1024))} KB` : `${(video.bytes / 1048576).toFixed(1)} MB`}${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
       : images.length
-        ? `${images.length} of ${MAX_PHOTOS} photos${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
-        : 'up to 4 photos or one video';
+        ? article
+          ? 'the picture at the top of the article'
+          : `${images.length} of ${MAX_PHOTOS} photos${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
+        : article
+          ? 'one picture for the top of the article'
+          : 'up to 4 photos or one video';
+    $('draft-photos').querySelector('strong').textContent = article ? 'Picture' : 'Photos or a video';
     const remove = (what, label) => (editable ? `<button class="photo-remove" data-remove="${esc(what)}" title="Remove this ${label}" aria-label="Remove ${label}">×</button>` : '');
     $('photos-list').innerHTML = video
       ? `<figure class="photo post-video"><video controls preload="metadata" src="${withSite(`/api/drafts/${d.id}/video`)}&t=${encodeURIComponent(video.at)}"></video>${remove('video', 'video')}</figure>`
       : images.length
-        ? images.map((im, i) => `<figure class="photo"><img src="${withSite(`/api/drafts/${d.id}/images/${im.name}`)}&t=${encodeURIComponent(im.at)}" alt="Photo ${i + 1}">${remove(im.name, `photo ${i + 1}`)}</figure>`).join('')
-        : `<p class="small muted">${editable ? 'Nothing added. Posts with a photo or video usually get noticed more.' : 'No photos or video.'}</p>`;
+        ? images
+            .map((im, i) => {
+              const c = credits.find((x) => x.name === im.name);
+              // Openly licensed photos must name who took them; the owner copies this next to the photo.
+              const cap = c ? `<figcaption class="small muted" title="${esc(c.prompt ?? c.license)}">${c.page ? `<a href="${esc(c.page)}" target="_blank" rel="noopener">${esc(c.credit)}</a>` : esc(c.credit)}${c.how === 'found' ? ` · ${esc(c.license)}` : ''}</figcaption>` : '';
+              return `<figure class="photo"><img src="${withSite(`/api/drafts/${d.id}/images/${im.name}`)}&t=${encodeURIComponent(im.at)}" alt="Photo ${i + 1}">${remove(im.name, `photo ${i + 1}`)}${cap}</figure>`;
+            })
+            .join('')
+        : `<p class="small muted">${editable ? (article ? 'No picture yet.' : 'Nothing added. Posts with a photo or video usually get noticed more.') : 'No photos or video.'}</p>`;
+    $('photos-why').hidden = !note || !editable;
+    $('photos-why').textContent = note ?? '';
     for (const b of $('photos-list').querySelectorAll('[data-remove]'))
       b.onclick = async () => {
         const what = b.dataset.remove;
@@ -913,6 +933,20 @@ async function loadPhotos(d) {
       };
   };
   const refresh = async () => render(await api(`/api/drafts/${d.id}/images`));
+  $('photos-suggest').onclick = async () => {
+    const b = $('photos-suggest');
+    b.disabled = true;
+    b.textContent = 'Looking…';
+    msg('');
+    try {
+      render(await api(`/api/drafts/${d.id}/images/suggest`, { method: 'POST' }));
+    } catch (err) {
+      msg(err.message);
+    } finally {
+      b.disabled = false;
+      b.textContent = 'Find a photo';
+    }
+  };
   $('photos-file').onchange = async () => {
     const files = [...$('photos-file').files];
     $('photos-file').value = '';
@@ -1263,7 +1297,7 @@ function renderLive() {
   if (btn.hidden) return closeLive();
   const failed = live.missing === 'error';
   btn.classList.toggle('off', failed || !live.now);
-  btn.title = failed ? `Live visitors are unavailable: ${live.error}` : 'People on the site in the last 5 minutes';
+  btn.title = failed ? `Live visitors are unavailable: ${live.error}` : 'People on the site in the last 30 minutes';
   btn.innerHTML = `<span class="live-dot"></span><b>${failed ? '—' : n(live.now)}</b><span class="lbl">active now</span>${failed ? '' : liveBars(live.perMinute.slice(-15), 'spark-bars')}`;
   if (!$('live-panel').hidden) renderLivePanel();
 }
@@ -1279,16 +1313,18 @@ function renderLivePanel() {
     return;
   }
   const max = Math.max(1, ...l.rows.map((r) => r.users));
+  // An hour when Google keeps it (GA4 360); standard properties stop at 30 minutes.
+  const span = l.minutes >= 60 ? '1 hour' : `${l.minutes} minutes`;
   $('live-panel').innerHTML = `
-    <p class="lp-head">Active users in last 5 minutes${host ? ` · ${esc(host)}` : ''}</p>
+    <p class="lp-head">Active users in last 30 minutes${host ? ` · ${esc(host)}` : ''}</p>
     <p class="lp-big">${n(l.now)}</p>
-    <p class="lp-head">Active users, last 30 minutes <span class="faint">${n(l.total)}</span></p>
+    <p class="lp-head">Active users, last ${span} <span class="faint">${n(l.total)}</span></p>
     ${liveBars(l.perMinute, 'lp-bars')}
-    <div class="lp-axis"><span>-30 min</span><span>now</span></div>
+    <div class="lp-axis"><span>-${l.minutes} min</span><span>now</span></div>
     <div class="lp-table-head"><select id="live-by" aria-label="Break down by">${LIVE_BY.map(([v, t]) => `<option value="${v}"${v === liveBy ? ' selected' : ''}>${t}</option>`).join('')}</select><span>Visitors</span></div>
     ${l.rows.length
       ? l.rows.map((r) => `<div class="lp-row"><span class="lp-label" title="${esc(r.label)}">${esc(r.label)}</span><b>${n(r.users)}</b><i style="width:${(100 * r.users) / max}%"></i></div>`).join('')
-      : '<p class="muted small lp-empty">Nobody in the last 30 minutes.</p>'}`;
+      : `<p class="muted small lp-empty">Nobody in the last ${span}.</p>`}`;
   $('live-by').onchange = (e) => ((liveBy = e.target.value), pref.set('liveBy', liveBy), pollLive());
 }
 

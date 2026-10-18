@@ -45,7 +45,18 @@ export interface AskOptions {
   maxTokens?: number;
   /** JSON schema the answer must follow (structured output). Use `askJson` to get it parsed. */
   schema?: Record<string, unknown>;
+  /** Tools Plume runs itself (find a photo, make one, ...). The model may call them before it answers. */
+  tools?: OwnTool[];
 }
+
+/** A tool the model can call, run here. What `run` returns goes back to the model; a throw goes back as an error. */
+export interface OwnTool {
+  def: Anthropic.Beta.BetaTool;
+  run: (input: any) => Promise<string>;
+}
+
+/** Calls to the caller's own tools in one answer, at most. Enough to search twice, look again and pick. */
+const OWN_TOOL_ROUNDS = 8;
 
 export interface AskResult {
   text: string;
@@ -84,29 +95,47 @@ export async function ask(opts: AskOptions): Promise<AskResult> {
   const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: prompt }];
   const sources: string[] = [];
 
-  if (mode !== 'local') {
-    const tools: Anthropic.Beta.BetaToolUnion[] = mode === 'server' ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: opts.webSearches }] : [];
-    const msg = await callOnce(opts, messages, tools, fallbackOk);
+  const own = opts.tools ?? [];
+  const collect = (msg: Anthropic.Beta.BetaMessage) => {
     for (const block of msg.content) {
       if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
         for (const r of block.content) if (!sources.includes(r.url)) sources.push(r.url);
       }
     }
+  };
+  const searchTools: Anthropic.Beta.BetaToolUnion[] = mode === 'server' ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: opts.webSearches }] : mode === 'local' ? LOCAL_TOOLS : [];
+  const tools = [...searchTools, ...own.map((t) => t.def)];
+
+  if (mode !== 'local' && !own.length) {
+    const msg = await callOnce(opts, messages, tools, fallbackOk);
+    collect(msg);
     return finish(opts, msg, sources);
   }
 
-  // Local search: run the tool loop ourselves. Searches are capped; page reads are capped at twice that.
-  const maxSearches = opts.webSearches ?? 0;
+  // Tools Plume runs: loop until the model answers. Searches are capped; page reads are capped at twice that.
+  const maxSearches = mode === 'local' ? (opts.webSearches ?? 0) : 0;
+  const maxRounds = maxSearches * 3 + (own.length ? OWN_TOOL_ROUNDS : 0) + 1;
   let searches = 0;
   let reads = 0;
   for (let round = 0; ; round++) {
-    const last = round >= maxSearches * 3 + 1;
-    const msg = await callOnce(opts, messages, LOCAL_TOOLS, fallbackOk, last);
-    if (msg.stop_reason !== 'tool_use' || last) return finish(opts, msg, sources);
+    const last = round >= maxRounds;
+    const msg = await callOnce(opts, messages, tools, fallbackOk, last);
+    collect(msg);
+    if (last || (msg.stop_reason !== 'tool_use' && msg.stop_reason !== 'pause_turn')) return finish(opts, msg, sources);
     messages.push({ role: 'assistant', content: msg.content as Anthropic.Beta.BetaContentBlockParam[] });
+    // A long server-side search paused: send the turn back as it is and let it carry on.
+    if (msg.stop_reason === 'pause_turn') continue;
     const calls = msg.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use');
     const results = await Promise.all(
       calls.map(async (c): Promise<Anthropic.Beta.BetaToolResultBlockParam> => {
+        const mine = own.find((t) => t.def.name === c.name);
+        if (mine) {
+          try {
+            return { type: 'tool_result', tool_use_id: c.id, content: await mine.run(c.input) };
+          } catch (err) {
+            return { type: 'tool_result', tool_use_id: c.id, content: String((err as any)?.message ?? err), is_error: true };
+          }
+        }
         const over = c.name === 'web_search' ? ++searches > maxSearches : c.name === 'read_page' ? ++reads > maxSearches * 2 : false;
         const r = over ? { content: `limit reached for ${c.name}; finish with what you have`, isError: true } : await runLocalTool(c.name, c.input, sources);
         return { type: 'tool_result', tool_use_id: c.id, content: r.content, is_error: r.isError };
@@ -407,6 +436,16 @@ function recordUsage(purpose: string, msg: Anthropic.Beta.BetaMessage): void {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(new Date().toISOString(), currentSiteOrNull(), purpose, msg.model, row.input, row.output, row.cacheRead, row.cacheWrite, row.searches, free ? 0 : costOf(msg.model, row), msg.stop_reason);
+}
+
+/** A call priced per item rather than per token (a made image). Counts toward the monthly budget like the rest. */
+export function recordFlatCost(purpose: string, model: string, usd: number): void {
+  getGlobalDb()
+    .prepare(
+      `INSERT INTO llm_calls (at, site, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason)
+       VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, NULL)`,
+    )
+    .run(new Date().toISOString(), currentSiteOrNull(), purpose, model, usd);
 }
 
 export interface ModelCheck {

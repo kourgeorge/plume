@@ -461,7 +461,13 @@ test('photo upload route: added, served, refused for articles and approved posts
   assert.equal(r.statusCode, 400);
   assert.match(r.json().error, /not a JPG, PNG or GIF/);
   const article = q.createDraft({ agent: 'writer', kind: 'blog_post', title: 'a', body: 'x', meta: {} });
+  // An article takes one picture for its top, and never a video.
   r = await app.inject({ method: 'POST', url: `/api/drafts/${article.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 200);
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${article.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 400);
+  assert.match(r.json().error, /one picture/);
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${article.id}/video`, headers: { ...H, 'content-type': 'video/mp4' }, payload: PNG });
   assert.equal(r.statusCode, 404);
   r = await app.inject({ method: 'DELETE', url: `/api/drafts/${d.id}/images/1.png`, headers: H });
   assert.deepEqual(r.json().images, []);
@@ -599,6 +605,8 @@ test('post video route: added, played back with byte ranges, refused next to pho
   r = await app.inject({ method: 'DELETE', url: `/api/drafts/${d.id}/video`, headers: H });
   assert.equal(r.json().video, null);
   r = await app.inject({ url: `/api/drafts/${d.id}/images`, headers: H });
-  assert.deepEqual(r.json(), { images: [], video: null });
+  const { canMake, ...rest } = r.json();
+  assert.deepEqual(rest, { images: [], video: null, credits: [], note: null });
+  assert.equal(typeof canMake, 'boolean');
   await app.close();
 });

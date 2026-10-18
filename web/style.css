@@ -773,3 +773,6 @@ label.small-btn[hidden] { display: none; }
 .photos-list .post-video video { display: block; max-height: 360px; max-width: 100%; }
 #video-progress { width: 100%; margin: 0 0 8px; }
 label.small-btn { white-space: nowrap; }
+.photos-list .photo figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.photos-list .photo figcaption a { color: inherit; }
+#photos-suggest:disabled { opacity: .6; cursor: progress; }

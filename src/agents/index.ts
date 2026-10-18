@@ -1,5 +1,6 @@
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { profileComplete } from '../context/profile';
+import { editDraft } from '../queue';
 import { seoAgent } from './seo';
 import { writerAgent } from './writer';
 import { redditAgent, socialAgent } from '../social/agents';
@@ -7,7 +8,11 @@ import { influencerAgent } from '../outreach/creators';
 import { linksAgent } from '../outreach/links';
 import { videoAgent } from '../video/agent';
 import { log } from '../log';
+import { agentPhotosOn, suggestPhoto } from '../social/photos';
 import type { Agent } from './types';
+
+/** Agents whose drafts get a photo picked for them once written. */
+const PHOTO_AGENTS = ['social', 'writer'];
 
 export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent, influencerAgent, linksAgent, videoAgent];
 
@@ -27,7 +32,14 @@ export async function runAgent(id: string, limit?: number, onProgress: (m: strin
   for (const [i, opp] of opps.entries()) {
     onProgress(`${agent.label}: writing ${i + 1} of ${opps.length} — ${opp.title}`);
     try {
-      if (await agent.draft(opp)) written++;
+      const d = await agent.draft(opp);
+      if (!d) continue;
+      written++;
+      if (PHOTO_AGENTS.includes(agent.id) && agentPhotosOn()) {
+        onProgress(`${agent.label}: finding a photo for ${d.title}`);
+        // A failed photo search never costs the draft: it is already saved.
+        await suggestPhoto(d.id).catch((err) => editDraft(d.id, { meta: { photoNote: `No photo added: ${String(err?.message ?? err)}` } }));
+      }
     } catch (err: any) {
       lastError = err;
       log('error', id, `couldn't write "${opp.title}": ${String(err?.message ?? err)}`);

@@ -257,9 +257,10 @@
         <article id="draft-preview" class="doc draft-preview" dir="auto" hidden></article>
         <p id="draft-count" class="small muted draft-count" hidden></p>
         <div id="draft-photos" class="draft-photos" hidden>
-          <div class="photos-head"><span class="small"><strong>Photos or a video</strong> <span class="muted" id="photos-note">up to 4 photos or one video</span></span><span class="photos-buttons"><label class="small-btn" id="photos-pick" title="JPG, PNG or GIF, up to 5 MB each">Add photo<input type="file" id="photos-file" accept="image/jpeg,image/png,image/gif" multiple hidden></label><label class="small-btn" id="video-pick" title="MP4 or MOV, up to 512 MB">Add video<input type="file" id="video-file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden></label></span></div>
+          <div class="photos-head"><span class="small"><strong>Photos or a video</strong> <span class="muted" id="photos-note">up to 4 photos or one video</span></span><span class="photos-buttons"><label class="small-btn" id="photos-pick" title="JPG, PNG or GIF, up to 5 MB each">Add photo<input type="file" id="photos-file" accept="image/jpeg,image/png,image/gif" multiple hidden></label><button type="button" class="small-btn" id="photos-suggest" title="Search free photos for one that fits, or make one">Find a photo</button><label class="small-btn" id="video-pick" title="MP4 or MOV, up to 512 MB">Add video<input type="file" id="video-file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden></label></span></div>
           <progress id="video-progress" max="100" value="0" hidden></progress>
           <div id="photos-list" class="photos-list"></div>
+          <p id="photos-why" class="small muted" hidden></p>
           <p id="photos-msg" class="small" hidden></p>
         </div>
         <div id="draft-status" class="draft-status" hidden></div>
