@@ -18,6 +18,7 @@ const { agentSystem } = require('../src/context/profile');
 
 const env = { GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'sec' };
 const calls = [];
+let realtimeKeeps = 30;
 let tokenCount = 0;
 
 // One fake server plays every Google endpoint.
@@ -45,9 +46,11 @@ const server = http.createServer((req, res) => {
     if (req.url === '/data/properties/123:runRealtimeReport') {
       const b = JSON.parse(body);
       const dim = b.dimensions?.[0]?.name;
+      // A standard property keeps 30 minutes; GA4 360 keeps 60.
+      if (b.minuteRanges[0].startMinutesAgo > (realtimeKeeps - 1)) return json(400, { error: { message: 'minuteRanges must be within the last 30 minutes' } });
       if (dim === 'minutesAgo') return json(200, { rows: [{ dimensionValues: [{ value: '00' }], metricValues: [{ value: '3' }] }, { dimensionValues: [{ value: '12' }], metricValues: [{ value: '5' }] }] });
       if (dim) return json(200, { rows: [{ dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '2' }] }, { dimensionValues: [{ value: '/' }], metricValues: [{ value: '6' }] }] });
-      return json(200, { rows: [{ metricValues: [{ value: b.minuteRanges[0].startMinutesAgo === 4 ? '3' : '8' }] }] });
+      return json(200, { rows: [{ metricValues: [{ value: b.minuteRanges[0].startMinutesAgo === 29 ? '3' : '8' }] }] });
     }
     if (req.url === '/data/properties/123:runReport' && body.includes('sessionDefaultChannelGroup'))
       return json(200, { rows: [
@@ -201,12 +204,13 @@ test('SEO opportunities start from Search Console near-misses', async () => {
   assert.equal(opps[0].source, 'search-console');
 });
 
-test('live visitors: last 5 minutes, per-minute bars oldest first, busiest page first', async () => {
+test('live visitors: last 30 minutes, per-minute bars oldest first, busiest page first', async () => {
   setSetting('ga4Property', '123');
   const l = await live.liveNow('page');
   assert.equal(l.missing, undefined);
   assert.equal(l.now, 3);
-  assert.equal(l.total, 8);
+  assert.equal(l.total, 3, 'a standard property only keeps 30 minutes, so the hour falls back to 30');
+  assert.equal(l.minutes, 30);
   assert.equal(l.perMinute.length, 30);
   assert.equal(l.perMinute[29], 3, 'this minute is last');
   assert.equal(l.perMinute[17], 5, '12 minutes ago');
@@ -217,4 +221,16 @@ test('live visitors: last 5 minutes, per-minute bars oldest first, busiest page 
   setSetting('ga4Property', null);
   assert.equal((await live.liveNow()).missing, 'property');
   setSetting('ga4Property', '123');
+});
+
+test('live visitors: a GA4 360 property shows the last hour', async () => {
+  realtimeKeeps = 60;
+  const l = await live.liveNow('country');
+  assert.equal(l.now, 3);
+  assert.equal(l.total, 8);
+  assert.equal(l.minutes, 60);
+  assert.equal(l.perMinute.length, 60);
+  assert.equal(l.perMinute[59], 3, 'this minute is last');
+  assert.equal(l.perMinute[47], 5, '12 minutes ago');
+  realtimeKeeps = 30;
 });

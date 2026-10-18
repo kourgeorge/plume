@@ -3,10 +3,12 @@ import { currentSite } from '../site';
 import { GOOGLE, googleApi, googleConnected } from './google';
 
 /**
- * Who is on the site right now, from GA4's realtime report. Standard properties only keep the last
- * 30 minutes, so that is the longest window shown.
+ * Who is on the site right now, from GA4's realtime report. "Now" is the last 30 minutes; the chart
+ * and table cover the last hour. Standard properties only keep 30 minutes (GA4 360 keeps 60), so when
+ * Google refuses the hour, everything falls back to 30.
  */
-export const LIVE_MINUTES = 30;
+export const LIVE_NOW_MINUTES = 30;
+export const LIVE_MINUTES = 60;
 export const LIVE_BREAKDOWNS = { page: 'unifiedScreenName', country: 'country', device: 'deviceCategory' } as const;
 export type LiveBreakdown = keyof typeof LIVE_BREAKDOWNS;
 
@@ -14,11 +16,13 @@ export interface LiveNow {
   /** Why there are no numbers: not connected, no property picked, or Google refused. */
   missing?: 'google' | 'property' | 'error';
   error?: string;
-  /** Active users in the last 5 minutes. */
-  now: number;
   /** Active users in the last 30 minutes. */
+  now: number;
+  /** Active users over `minutes` (an hour, or 30 minutes when the property only keeps that). */
   total: number;
-  /** Active users per minute, oldest first (index 0 = 29 minutes ago). */
+  /** How far back `total`, `perMinute` and `rows` go. */
+  minutes: number;
+  /** Active users per minute, oldest first (index 0 = `minutes - 1` minutes ago). */
   perMinute: number[];
   rows: { label: string; users: number }[];
   at: string;
@@ -34,30 +38,41 @@ const cache = new Map<string, { at: number; value: LiveNow }>();
 const CACHE_MS = 45_000;
 
 export async function liveNow(by: LiveBreakdown = 'page'): Promise<LiveNow> {
-  const empty = (missing: LiveNow['missing'], error?: string): LiveNow => ({ missing, error, now: 0, total: 0, perMinute: [], rows: [], at: new Date().toISOString() });
+  const empty = (missing: LiveNow['missing'], error?: string): LiveNow => ({ missing, error, now: 0, total: 0, minutes: LIVE_MINUTES, perMinute: [], rows: [], at: new Date().toISOString() });
   if (!googleConnected()) return empty('google');
   const property = getSetting<string | null>('ga4Property', null);
   if (!property) return empty('property');
   const key = `${currentSite()}|${property}|${by}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  try {
-    const last = (start: number) => ({ minuteRanges: [{ startMinutesAgo: start, endMinutesAgo: 0 }] });
-    const [five, thirty, minutes, split] = await Promise.all([
-      realtime(property, last(4)),
-      realtime(property, last(LIVE_MINUTES - 1)),
-      realtime(property, { ...last(LIVE_MINUTES - 1), dimensions: [{ name: 'minutesAgo' }], limit: 100 }),
-      realtime(property, { ...last(LIVE_MINUTES - 1), dimensions: [{ name: LIVE_BREAKDOWNS[by] }], limit: 8 }),
+  const last = (start: number) => ({ minuteRanges: [{ startMinutesAgo: start, endMinutesAgo: 0 }] });
+  const fetchWindow = (span: number) =>
+    Promise.all([
+      realtime(property, last(LIVE_NOW_MINUTES - 1)),
+      realtime(property, last(span - 1)),
+      realtime(property, { ...last(span - 1), dimensions: [{ name: 'minutesAgo' }], limit: 100 }),
+      realtime(property, { ...last(span - 1), dimensions: [{ name: LIVE_BREAKDOWNS[by] }], limit: 8 }),
     ]);
-    const perMinute = new Array(LIVE_MINUTES).fill(0);
+  try {
+    let span = LIVE_MINUTES;
+    let answers;
+    try {
+      answers = await fetchWindow(span);
+    } catch {
+      // Not a GA4 360 property: Google only keeps the last 30 minutes.
+      span = LIVE_NOW_MINUTES;
+      answers = await fetchWindow(span);
+    }
+    const [thirty, whole, minutes, split] = answers;
+    const perMinute = new Array(span).fill(0);
     for (const r of minutes.rows ?? []) {
       const ago = Number(r.dimensionValues?.[0].value);
-      if (ago >= 0 && ago < LIVE_MINUTES) perMinute[LIVE_MINUTES - 1 - ago] = Number(r.metricValues[0].value);
+      if (ago >= 0 && ago < span) perMinute[span - 1 - ago] = Number(r.metricValues[0].value);
     }
     const rows = (split.rows ?? [])
       .map((r) => ({ label: r.dimensionValues?.[0].value || '(not set)', users: Number(r.metricValues[0].value) }))
       .sort((a, b) => b.users - a.users);
-    const value: LiveNow = { now: count(five), total: count(thirty), perMinute, rows, at: new Date().toISOString() };
+    const value: LiveNow = { now: count(thirty), total: count(whole), minutes: span, perMinute, rows, at: new Date().toISOString() };
     cache.set(key, { at: Date.now(), value });
     return value;
   } catch (e: any) {
