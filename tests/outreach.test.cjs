@@ -152,3 +152,76 @@ test('filmed video: uploaded, served back, kept when the preview is redone, remo
   assert.ok(!fs.existsSync(video.footagePath(d.id)));
   await app.close();
 });
+
+test('verification: real external links count; missing, blocked, own-site and lookalike pages do not', async () => {
+  const c = store.addContact({ kind: 'link', name: 'Resource', url: 'https://resource.example/list', opportunity: 'unlinked-mention' });
+  store.saveLinkEvidence(c.id, 'Acme helps drivers.');
+  const html = link => `<html><body><p>${'Useful resources for drivers learning safely. '.repeat(12)}</p>${link}</body></html>`;
+  const fetchPage = body => async () => new Response(body, { headers: { 'content-type': 'text/html' } });
+  await links.verifyLink(c, fetchPage(html('<a href="https://www.acme.example/guide">Acme</a>')));
+  assert.equal(store.getContact(c.id).status, 'linked');
+  assert.equal(store.linkEvidence(c.id).verification, 'verified');
+  assert.equal(store.linkEvidence(c.id).verified_url, 'https://www.acme.example/guide');
+  assert.equal(store.linkEvidence(c.id).evidence, 'Acme helps drivers.');
+  await links.verifyLink(c, fetchPage(html('<a href="https://acme.example.evil.test">Acme</a>')));
+  assert.equal(store.linkEvidence(c.id).verification, 'missing');
+  await links.verifyLink(c, async () => new Response('Access denied', { status: 403 }));
+  assert.equal(store.linkEvidence(c.id).verification, 'error');
+  assert.equal(store.linkEvidence(c.id).verified_url, '');
+  const own = store.updateContact(c.id, { deliverableUrl: 'https://acme.example/about' });
+  await links.verifyLink(own, fetchPage(html('<a href="https://acme.example">Home</a>')));
+  assert.equal(store.linkEvidence(c.id).verification, 'missing');
+});
+
+test('link workspace API returns evidence, resumes drafts and separates manual outcomes from checks', async () => {
+  const { buildServer } = require('../src/server');
+  const app = buildServer(4498);
+  const headers = { host: '127.0.0.1:4498', 'x-plume-site': 'test.example' };
+  const c = store.addContact({ kind: 'link', name: 'New mention', url: 'https://mention.example/a' });
+  store.saveLinkEvidence(c.id, 'Source text');
+  const d = q.createDraft({ agent: 'links', kind: 'outreach_message', title: 'Request', body: 'Please add a link.', meta: { contactId: c.id } });
+  store.updateContact(c.id, { status: 'linked' });
+  const r = await app.inject({ url: '/api/outreach?kind=link', headers });
+  assert.equal(r.statusCode, 200, r.body);
+  const row = r.json().contacts.find(x => x.id === c.id);
+  assert.equal(row.draft, d.id);
+  assert.equal(row.evidence.evidence, 'Source text');
+  assert.equal(row.evidence.verification, null, 'manually setting linked must not create a verification');
+  const bad = await app.inject({ method: 'POST', url: '/api/outreach/999999/verify', headers });
+  assert.equal(bad.statusCode, 404);
+  await app.close();
+});
+
+test('discovery saves evidence and an inspectable result, including failures', async () => {
+  const llm = require('../src/llm/client');
+  const original = llm.askJson;
+  try {
+    llm.askJson = async () => ({ pages: [{ url: 'https://fresh.example/article', why: 'Relevant resource' }, { url: 'https://other.example/article', why: 'Candidate' }] });
+    const result = await links.discoverLinkPages(() => {}, async url => new Response(`<html><title>Resources</title><body>${'Helpful information for drivers learning the rules. '.repeat(10)}${String(url).includes('fresh') ? 'Acme' : 'Other business'}</body></html>`, { headers: { 'content-type': 'text/html' } }));
+    assert.equal(result.checked, 2);
+    assert.equal(result.added.length, 1);
+    assert.match(store.linkEvidence(result.added[0].id).evidence, /Acme/);
+    assert.equal(store.latestLinkDiscovery().result.rejected.length, 1);
+    assert.ok(store.latestLinkDiscovery().finished_at);
+    llm.askJson = async () => { throw new Error('Search unavailable'); };
+    await assert.rejects(links.discoverLinkPages(), /Search unavailable/);
+    assert.equal(store.latestLinkDiscovery().error, 'Search unavailable');
+  } finally { llm.askJson = original; }
+});
+
+test('manual send retires drafts and cannot race an already approved email', async () => {
+  const app = require('../src/server').buildServer(4498);
+  const headers = { host: '127.0.0.1:4498', 'x-plume-site': 'test.example' };
+  const c = store.addContact({ kind: 'link', name: 'Manual request', url: 'https://manual.example/page' });
+  const d = q.createDraft({ agent: 'links', kind: 'outreach_message', title: 'Request', body: 'Please add our link', meta: { contactId: c.id } });
+  const r = await app.inject({ method: 'POST', url: `/api/outreach/${c.id}/sent`, headers });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(store.getContact(c.id).status, 'contacted');
+  assert.ok(store.getContact(c.id).lastEmailedAt);
+  assert.equal(q.getDraft(d.id).status, 'rejected');
+  const queued = q.createDraft({ agent: 'links', kind: 'outreach_email', title: 'Request', body: 'Please add our link', meta: { contactId: c.id } });
+  q.moveDraft(queued.id, 'approved', { target: 'email' });
+  assert.equal((await app.inject({ method: 'POST', url: `/api/outreach/${c.id}/sent`, headers })).statusCode, 409);
+  assert.equal(q.getDraft(queued.id).status, 'approved');
+  await app.close();
+});

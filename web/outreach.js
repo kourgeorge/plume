@@ -9,7 +9,7 @@
     <div class="view-head">
       <a href="#today" class="back">← Today</a>
       <h1>Outreach</h1>
-      <span class="actions"><button id="or-find">Find creators</button></span>
+      <span class="actions"><button id="or-add-shortcut" class="secondary" hidden>Add page</button><button id="or-find">Find creators</button></span>
     </div>
     <div class="tabs" id="or-tabs"><button data-kind="creator">Creators</button><button data-kind="link">Link pages</button></div>
     <p id="or-intro" class="muted"></p>
@@ -40,6 +40,12 @@
   let kind = 'creator';
   let data = null;
   let polling = null;
+  let linkFilter = 'review';
+  let selectedLink = null;
+  let linkDraft = null;
+  let linkNotice = '';
+  const linkGroups = { review: 'To review', drafts: 'Drafts', sent: 'Sent', verified: 'Verified', closed: 'Closed' };
+  const groupFor = c => c.status === 'declined' ? 'closed' : c.evidence?.verification === 'verified' && c.status === 'linked' ? 'verified' : ['contacted', 'replied', 'linked'].includes(c.status) ? 'sent' : c.status === 'drafted' ? 'drafts' : 'review';
 
   function emailLine(e) {
     if (!e.connected) return '<span class="muted">Email isn\'t connected, so messages are saved for you to send yourself. Connect your mail account under <a href="#settings">Settings</a> to send approved emails from Plume.</span>';
@@ -88,6 +94,17 @@
       .filter((s) => data.counts[s])
       .map((s) => `<span class="pill">${esc(STEP[s] ?? s)} <b>${data.counts[s]}</b></span>`)
       .join('');
+    section.querySelector('h1').textContent = kind === 'link' ? 'Link opportunities' : 'Outreach';
+    section.classList.toggle('link-workspace', kind === 'link');
+    $('or-email').hidden = kind === 'link';
+    $('or-counts').hidden = kind === 'link';
+    $('or-status').hidden = kind === 'link';
+    $('or-add-shortcut').hidden = kind !== 'link';
+    $('or-add-shortcut').onclick = () => { $('or-add-box').hidden = false; $('or-add-box').open = true; $('or-add-name').focus(); };
+    $('or-add-box').hidden = kind === 'link' && !$('or-add-box').open;
+    if (kind === 'link') return renderLinkWorkspace();
+    $('or-add-box').querySelector('summary').textContent = 'Add someone yourself';
+    $('or-add-box').querySelector('label').firstChild.textContent = 'Name ';
     $('or-list').innerHTML = data.contacts.length
       ? data.contacts.map(contactHtml).join('')
       : `<li class="muted">Nobody here yet. Click “${esc($('or-find').textContent)}”, or add someone below.</li>`;
@@ -146,7 +163,8 @@
 
   async function load(k) {
     showView('outreach');
-    if (k === 'creator' || k === 'link') kind = k;
+    if (k?.startsWith('link')) { kind = 'link'; linkFilter = linkGroups[k.split('/')[1]] ? k.split('/')[1] : 'review'; selectedLink = null; linkDraft = null; }
+    else if (k === 'creator') kind = k;
     await refresh();
   }
 
@@ -154,10 +172,11 @@
 
   $('or-find').onclick = async () => {
     $('or-find').disabled = true;
+    linkNotice = '';
     try {
       await post('/api/outreach/discover', { kind });
     } catch (err) {
-      alert(err.message);
+      linkNotice = err.message;
     }
     await refresh();
   };
@@ -176,6 +195,88 @@
       msg.textContent = err.message;
     }
   };
+
+  function discoveryMarkup() {
+    const run = data.discovery;
+    if (data.running) return `<div class="link-run" role="status"><span class="link-pulse"></span><div><strong>Finding link opportunities</strong><p>${esc(data.running)}</p></div></div>`;
+    if (linkNotice || run?.error) return `<div class="link-run link-error" role="alert"><div><strong>Discovery couldn’t finish</strong><p>${esc(linkNotice || run.error)}</p><button class="secondary" data-find-links>Try again</button></div></div>`;
+    if (!run?.result) return '';
+    const r = run.result;
+    const already = r.rejected.filter(c => c.reason === 'it already links to you').length;
+    const unread = r.rejected.filter(c => !['it already links to you', 'it is your own site', "it is a competitor’s site", "it is a competitor's site", 'it neither names you nor links to your competitors'].includes(c.reason)).length;
+    return `<div class="link-run"><div><strong>${r.checked} pages checked · ${r.added.length} opportunities found</strong><p class="muted small">${esc(when(run.finished_at))} · ${already} already link to you · ${r.rejected.length - already - unread} weren’t relevant · ${unread} couldn’t be read</p>
+      <details><summary>View checked pages</summary>${r.added.map(c => `<p class="small"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a> · Opportunity found</p>`).join('')}${r.rejected.map(c => `<p class="small"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.url)}</a> · ${esc(c.reason)}</p>`).join('')}${r.checked === 0 ? '<p>No new pages to check.</p>' : ''}</details>
+      ${!r.added.length ? '<p class="small">Review your competitors or add a page you already know.</p><a href="#competitor/new">Review competitors / add one →</a>' : ''}</div></div>`;
+  }
+
+  function renderLinkWorkspace() {
+    if (linkDraft && $('link-body')) { linkDraft.body = $('link-body').value; linkDraft.meta.subject = $('link-subject').value; }
+    $('or-intro').textContent = 'Find pages that mention you or link to competitors, then manage your requests.';
+    $('or-status').textContent = '';
+    $('or-find').textContent = 'Find opportunities';
+    $('or-counts').innerHTML = '';
+    const rows = data.contacts.filter(c => groupFor(c) === linkFilter);
+    $('or-list').innerHTML = `<li class="link-surface">${discoveryMarkup()}
+      <div class="link-toolbar" ${data.contacts.length ? '' : 'hidden'}><div class="tabs" aria-label="Opportunity status">${Object.entries(linkGroups).map(([key, label]) => `<button data-link-filter="${key}" class="${key === linkFilter ? 'on' : ''}">${label} <small>${data.contacts.filter(c => groupFor(c) === key).length}</small></button>`).join('')}</div></div>
+      ${!data.contacts.length ? `<div class="link-empty"><h3>No opportunities yet</h3><p>Run a search to find relevant articles and resource pages for your site.</p><span class="small muted">Discovery uses AI and web search, with a small usage cost.</span></div>` : ''}
+      <div class="link-layout"><div class="link-results">${rows.map(c => `<article class="link-prospect ${selectedLink === c.id ? 'selected' : ''}"><div class="link-eyebrow">${esc(new URL(c.url).hostname)} · ${c.evidence?.checked_at ? 'Checked ' + esc(when(c.evidence.checked_at)) : 'Added manually'}</div><h3><a href="${esc(c.url)}" target="_blank" rel="noopener" dir="auto">${esc(c.name)} ↗</a></h3><span class="link-tag">${esc(c.opportunity === 'unlinked-mention' ? 'Mentions your business' : c.opportunity === 'lists-competitors' ? 'Links to competitors' : 'Needs review')}</span><p class="small muted">${c.emailVerified ? 'Public email available' : 'Use the website’s contact form'}${c.status === 'linked' && groupFor(c) !== 'verified' ? ' · Link recorded manually' : ''}</p><button class="secondary" data-review-link="${c.id}">${linkFilter === 'review' ? 'Review & draft' : 'Open opportunity'}</button></article>`).join('') || (data.contacts.length ? `<div class="link-empty"><h3>No pages in ${esc(linkGroups[linkFilter].toLowerCase())}</h3><p>Choose another stage to continue.</p></div>` : '')}</div><div id="link-detail" class="link-detail" ${selectedLink ? '' : 'hidden'}></div></div>
+      <div class="link-footer"><span>Discovered and added pages only · Not a full backlink index</span>${data.contacts.length && !data.email.connected ? '<span>Send requests manually · <a href="#settings">Connect email</a></span>' : ''}</div></li>`;
+    $('or-add-box').querySelector('summary').textContent = 'Add a page yourself';
+    $('or-add-box').querySelector('label').firstChild.textContent = 'Page title ';
+    for (const b of section.querySelectorAll('[data-find-links]')) b.onclick = () => $('or-find').click();
+    for (const b of section.querySelectorAll('[data-link-filter]')) b.onclick = () => { linkFilter = b.dataset.linkFilter; selectedLink = null; linkDraft = null; renderLinkWorkspace(); };
+    for (const b of section.querySelectorAll('[data-review-link]')) b.onclick = () => { selectedLink = Number(b.dataset.reviewLink); linkDraft = null; renderLinkDetail(); };
+    if (selectedLink) renderLinkDetail();
+  }
+
+  function renderLinkDetail() {
+    const c = data.contacts.find(c => c.id === selectedLink);
+    const panel = $('link-detail');
+    if (!c || !panel) return;
+    panel.hidden = false;
+    panel.innerHTML = `<div class="view-head"><h3>Review opportunity</h3><button class="secondary small-btn" id="link-close">Close</button></div><h2 dir="auto">${esc(c.name)}</h2><a href="${esc(c.url)}" target="_blank" rel="noopener">Open source page ↗</a>
+      <h4>Why this page qualifies</h4><blockquote dir="auto">${esc(c.evidence?.evidence || c.why || 'Added manually. Review this page before contacting the owner.')}</blockquote><p class="small muted">${c.evidence?.checked_at ? 'Page checked ' + esc(when(c.evidence.checked_at)) : 'No saved page check yet'}</p>
+      ${c.evidence?.verification ? `<div class="link-verification ${c.evidence.verification === 'verified' ? 'good' : ''}"><strong>${esc({ verified: 'Link verified', missing: 'No link found', error: 'Couldn’t check' }[c.evidence.verification])}</strong><p>${esc(c.evidence.verification_note)}</p><small>${esc(when(c.evidence.verification_at))}</small>${c.evidence.verified_url ? `<p><a href="${esc(c.evidence.verified_url)}" target="_blank" rel="noopener">${esc(c.evidence.verified_url)}</a></p>` : ''}</div>` : ''}
+      <p class="small">${c.emailVerified ? 'Contact: ' + esc(c.email) : 'No public email found. Use the website’s contact form.'}</p><div id="link-message"></div>
+      <div class="link-actions"><button id="link-draft">${c.draft ? 'Open draft' : 'Draft a request'}</button><button class="secondary" id="link-check">Check for link</button></div>
+      <details class="link-notes"><summary>Details & notes</summary><form id="link-notes-form" class="form"><label>Contact email<input name="email" type="email" value="${esc(c.email)}"></label><label>Page to verify<input name="deliverableUrl" type="url" value="${esc(c.deliverableUrl || c.url)}"></label><label>Notes<textarea name="notes">${esc(c.notes)}</textarea></label><button class="secondary">Save details</button></form><label>Dismissal reason (optional)<input id="link-dismiss-reason" placeholder="Why this page isn’t a fit"></label></details>
+      <div class="link-actions"><button class="secondary" id="link-dismiss">${c.status === 'declined' ? 'Reopen opportunity' : 'Dismiss'}</button>${['contacted', 'replied', 'linked'].includes(c.status) ? '' : '<button class="secondary" id="link-mark-sent">Mark as sent</button>'}</div><p class="small" id="link-feedback" role="status"></p>`;
+    $('link-close').onclick = () => { selectedLink = null; linkDraft = null; panel.hidden = true; };
+    const action = (id, work) => { $(id).onclick = async () => { $(id).disabled = true; try { await work(); } catch (err) { $('link-feedback').textContent = err.message; if ($(id)) $(id).disabled = false; } }; };
+    action('link-draft', async () => {
+      const id = c.draft || (await post(`/api/outreach/${c.id}/draft`)).draftId;
+      c.draft = id; c.status = 'drafted';
+      linkDraft = await api(`/api/drafts/${id}`);
+      renderLinkWorkspace();
+    });
+    action('link-check', async () => { await post(`/api/outreach/${c.id}/verify`); await refresh(); });
+    action('link-dismiss', async () => { await api(`/api/outreach/${c.id}`, { method: 'PUT', body: JSON.stringify({ status: c.status === 'declined' ? 'found' : 'declined', notes: $('link-dismiss-reason').value.trim() ? [c.notes, 'Dismissed: ' + $('link-dismiss-reason').value.trim()].filter(Boolean).join('\n') : c.notes }) }); selectedLink = null; linkDraft = null; await refresh(); });
+    if ($('link-mark-sent')) action('link-mark-sent', async () => { await post(`/api/outreach/${c.id}/sent`); selectedLink = null; linkDraft = null; linkFilter = 'sent'; await refresh(); });
+    $('link-notes-form').onsubmit = async e => { e.preventDefault(); try { const f = new FormData(e.target); await api(`/api/outreach/${c.id}`, { method: 'PUT', body: JSON.stringify(Object.fromEntries(f)) }); await refresh(); $('link-feedback').textContent = 'Details saved.'; } catch (err) { $('link-feedback').textContent = err.message; } };
+    if (c.status === 'declined') { $('link-draft').hidden = true; if ($('link-mark-sent')) $('link-mark-sent').hidden = true; }
+    if (linkDraft && c.status !== 'declined') {
+      const d = linkDraft;
+      const editable = ['draft', 'failed'].includes(d.status);
+      $('link-message').innerHTML = `<h4>Your request</h4><p class="small">${d.meta.to ? 'To: ' + esc(d.meta.to) : 'Send using the website’s contact form'}</p>${editable ? `<label>Subject<input id="link-subject" value="${esc(d.meta.subject || '')}"></label><label>Message<textarea id="link-body" rows="9" dir="auto">${esc(d.body)}</textarea></label><div class="link-actions"><button id="link-send">${d.meta.to && data.email.connected ? 'Approve & send' : 'Copy message & open website'}</button><button class="secondary" id="link-save">Save draft</button></div>` : `<p class="muted">${esc(d.status === 'approved' ? 'Request approved and waiting to send.' : 'This request is ' + d.status + '.')}</p><a href="#draft/${d.id}">View request →</a>`}`;
+      $('link-draft').hidden = true;
+      const save = async () => { linkDraft = await api(`/api/drafts/${d.id}`, { method: 'PUT', body: JSON.stringify({ body: $('link-body').value, meta: { subject: $('link-subject').value } }) }); };
+      if (editable) {
+        action('link-save', async () => { await save(); $('link-feedback').textContent = 'Draft saved.'; $('link-save').disabled = false; });
+        action('link-send', async () => {
+          if (!d.meta.to || !data.email.connected) {
+            const text = $('link-subject').value + '\n\n' + $('link-body').value;
+            await navigator.clipboard.writeText(text);
+            window.open(new URL(c.url).origin, '_blank', 'noopener');
+            await save(); $('link-feedback').textContent = 'Message copied. After sending it on their website, choose “Mark as sent”.'; $('link-send').disabled = false;
+          } else {
+            await save(); const result = await post(`/api/drafts/${d.id}/approve`, { target: 'email' });
+            if (result.status === 'failed') throw new Error(result.error || 'Sending failed. Open the request to see details.');
+            linkDraft = result; await refresh();
+          }
+        });
+      }
+    }
+  }
 
   // ---- the draft view: who an outreach message goes to, and video previews for scripts ----
   const extra = document.createElement('div');
@@ -234,7 +335,7 @@
       xhr.send(file);
     };
     $('foot-remove').onclick = async () => {
-      if (!confirm('Remove your uploaded video from this draft?')) return;
+      if (!(await confirmBox('Remove your uploaded video from this draft?', { title: 'Remove video?', ok: 'Remove', danger: true }))) return;
       try {
         await api(`/api/video/${d.id}/footage`, { method: 'DELETE' });
       } catch (err) {

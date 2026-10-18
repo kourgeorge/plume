@@ -112,7 +112,7 @@ async function route() {
     case 'results': return loadResults();
     case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
     case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
-    case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(arg) : loadToday();
+    case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(location.hash.slice('#outreach/'.length)) : loadToday();
     case 'tools': return window.plumeTools ? window.plumeTools.load(arg) : loadToday();
     case 'logs': return loadLogs();
     case 'usage': return loadUsage();
@@ -1659,25 +1659,28 @@ async function renderLinks(body) {
   const o = await api('/api/outreach?kind=link').catch(() => null);
   if (detailsTab !== 'links') return;
   if (!o) return (body.innerHTML = emptyNote('Could not load link data.'));
-  const c = o.counts;
-  const open = o.contacts.filter((x) => x.status !== 'declined' && x.status !== 'linked');
-  const unlinked = o.contacts.filter((x) => x.opportunity === 'unlinked-mention').length;
-  const toRivals = o.contacts.filter((x) => x.opportunity === 'lists-competitors').length;
+  const contacts = o.contacts;
+  const verified = contacts.filter(c => c.status === 'linked' && c.evidence?.verification === 'verified').length;
+  const manual = contacts.filter(c => c.status === 'linked' && c.evidence?.verification !== 'verified').length;
+  const ready = contacts.filter(c => c.status === 'found').length;
+  const drafts = contacts.filter(c => c.status === 'drafted').length;
+  const sent = contacts.filter(c => c.lastEmailedAt || ['contacted', 'replied'].includes(c.status)).length;
+  const pending = contacts.filter(c => ['contacted', 'replied', 'linked'].includes(c.status) && !(c.status === 'linked' && c.evidence?.verification === 'verified')).length;
+  const coverage = '<p class="small muted link-footnote">Tracks pages discovered or added in Plume. Full backlink coverage isn’t available.</p>';
+  if (!contacts.length) {
+    body.innerHTML = `<div class="link-empty link-hero"><span class="link-eyebrow">LINK OPPORTUNITIES</span><h2>Find pages that could link to your site</h2><p>Discover articles that mention you without a link, and pages that link to your competitors.</p><a class="link-primary" href="#outreach/link">Find link opportunities →</a><p class="small muted">Uses AI and web search; incurs a small usage cost.</p>${o.discovery?.error ? '<p class="bad">The last discovery didn’t finish. Open Link opportunities to retry.</p>' : o.discovery?.result ? `<p class="small">Last search: ${o.discovery.result.checked} pages checked. No saved opportunities yet.</p>` : ''}</div>${coverage}`;
+    return;
+  }
   body.innerHTML = `<div class="stat-cards an-gap">${[
-    statCard('New links won', c.linked ?? 0, '', 'pages that now link to you'),
-    statCard('Pages to ask', open.length, '', 'could link to you but don’t yet'),
-    statCard('Mention you, no link', unlinked, '', 'the easiest ones to win'),
-    statCard('Link to competitors', toRivals, '', 'but not to you'),
-  ].join('')}</div>
-    <div class="an-block"><div class="an-block-head"><h3>Where each page stands</h3><a href="#outreach">Link pages →</a></div><div class="chart-card">
-      <div class="or-counts">${o.steps.map((st) => `<span class="pill">${esc({ found: 'Found', drafted: 'Message drafted', contacted: 'Contacted', replied: 'Replied', linked: 'Linked to you', declined: 'Said no' }[st] ?? st)} · ${c[st] ?? 0}</span>`).join('')}</div>
-      <div class="vital-rows">${
-        open
-          .slice(0, 8)
-          .map((x) => `<div class="vital-row"><span class="dot-${x.opportunity === 'unlinked-mention' ? 'good' : 'mid'}"></span><a href="${esc(x.url)}" target="_blank" rel="noopener" dir="auto">${esc(x.name)}</a><span></span><span class="muted small path">${esc(x.opportunity === 'unlinked-mention' ? 'mentions you' : 'links to competitors')}</span></div>`)
-          .join('') || `<p class="muted small">No pages found yet. Plume looks for them on <a href="#outreach">Outreach → Link pages</a>.</p>`
-      }</div></div></div>
-    ${emptyNote('Plume only counts pages it has read itself. It doesn’t track every site on the web that links to you yet.')}`;
+    statCard('Ready to contact', ready, '', 'qualified pages awaiting outreach'),
+    statCard('Requests sent', sent, '', 'requests sent or recorded by you'),
+    statCard('Verified links', verified, '', 'confirmed by a page check'),
+  ].join('')}</div><div class="an-block"><div class="an-block-head"><h3>Next actions</h3><a href="#outreach/link">All opportunities →</a></div><div class="chart-card link-next">
+    <a href="#outreach/link/review"><strong>Review opportunities</strong><span>${ready} pages →</span></a>
+    <a href="#outreach/link/drafts"><strong>Finish your requests</strong><span>${drafts} drafts →</span></a>
+    <a href="#outreach/link/sent"><strong>Check requested links</strong><span>${pending} to verify →</span></a>
+    ${manual ? `<p class="small muted">${manual} links recorded manually; excluded from verified links until checked.</p>` : ''}
+    </div></div><a class="link-primary" href="#outreach/link">Find more opportunities →</a>${coverage}`;
 }
 
 async function renderGeo(body) {

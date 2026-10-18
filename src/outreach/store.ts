@@ -29,6 +29,22 @@ CREATE TABLE IF NOT EXISTS outreach_contacts (
   updated_at TEXT NOT NULL,
   UNIQUE (kind, url)
 );
+CREATE TABLE IF NOT EXISTS link_evidence (
+  contact_id INTEGER PRIMARY KEY,
+  evidence TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  verification TEXT,
+  verified_url TEXT,
+  verification_at TEXT,
+  verification_note TEXT
+);
+CREATE TABLE IF NOT EXISTS link_discovery_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  result TEXT,
+  error TEXT
+);
 CREATE INDEX IF NOT EXISTS outreach_by_status ON outreach_contacts (kind, status);
 `;
 const ready = new WeakSet<Database.Database>();
@@ -227,4 +243,23 @@ export function summary(kind: ContactKind): Record<string, number> {
   for (const s of STATUSES[kind]) out[s] = 0;
   for (const r of odb().prepare('SELECT status, COUNT(*) n FROM outreach_contacts WHERE kind = ? GROUP BY status').all(kind) as { status: string; n: number }[]) out[r.status] = r.n;
   return out;
+}
+
+export function linkEvidence(id: number): any {
+  return odb().prepare('SELECT * FROM link_evidence WHERE contact_id = ?').get(id) ?? null;
+}
+export function saveLinkEvidence(id: number, evidence: string): void {
+  odb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at) VALUES (?, ?, ?)
+    ON CONFLICT(contact_id) DO UPDATE SET evidence = excluded.evidence, checked_at = excluded.checked_at`)
+    .run(id, evidence, new Date().toISOString());
+}
+export function saveVerification(id: number, state: string, url: string, note: string): void {
+  odb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at, verification, verified_url, verification_at, verification_note)
+    VALUES (?, '', ?, ?, ?, ?, ?) ON CONFLICT(contact_id) DO UPDATE SET verification = excluded.verification,
+    verified_url = excluded.verified_url, verification_at = excluded.verification_at, verification_note = excluded.verification_note`)
+    .run(id, new Date().toISOString(), state, url, new Date().toISOString(), note);
+}
+export function latestLinkDiscovery(): any {
+  const row = odb().prepare('SELECT * FROM link_discovery_runs ORDER BY id DESC LIMIT 1').get() as any;
+  return row ? { ...row, result: row.result ? JSON.parse(row.result) : null } : null;
 }

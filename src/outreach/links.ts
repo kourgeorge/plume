@@ -8,7 +8,7 @@ import { siteUrl } from '../sites';
 import { fetchPage } from '../research/fetchPage';
 import { brandNames, textMentions } from '../geo/visibility';
 import type { Agent, Opportunity } from '../agents/types';
-import { Contact, absUrl, addContact, cleanUrl, declinedEmails, getContact, listContacts, readyToDraft, updateContact } from './store';
+import { odb, saveLinkEvidence, saveVerification, Contact, absUrl, addContact, cleanUrl, declinedEmails, getContact, listContacts, readyToDraft, updateContact } from './store';
 import { findEmail, pageText, senderName } from './creators';
 
 /**
@@ -29,6 +29,7 @@ export interface PageCheck {
   title: string;
   /** Why it doesn't qualify, in plain words. */
   reason: string;
+  evidence?: string;
 }
 
 /** Look at one page: does it name us, link to us, link to competitors? */
@@ -53,8 +54,20 @@ export function checkLinkPage(html: string, pageUrl: string, ours: string, compe
   if (sameSite(pageHost, ours)) return no('it is your own site');
   if (competitors.some((c) => sameSite(pageHost, c.host))) return no("it is a competitor's site");
   if (linksUs) return no('it already links to you');
-  if (mentionsUs) return { qualifies: true, opportunity: 'unlinked-mention', mentionsUs, linksUs, competitorsLinked, title, reason: '' };
-  if (competitorsLinked.length) return { qualifies: true, opportunity: 'lists-competitors', mentionsUs, linksUs, competitorsLinked, title, reason: '' };
+  if (mentionsUs) {
+    const name = names.find(n => text.toLowerCase().includes(n.toLowerCase()));
+    const start = Math.max(0, name ? text.toLowerCase().indexOf(name.toLowerCase()) - 100 : 0);
+    return { evidence: text.slice(start, start + 500), qualifies: true, opportunity: 'unlinked-mention', mentionsUs, linksUs, competitorsLinked, title, reason: '' };
+  }
+  if (competitorsLinked.length) {
+    const evidence = $('a[href]').toArray().flatMap(el => {
+      try {
+        const url = new URL($(el).attr('href')!, pageUrl);
+        return competitors.some(c => sameSite(url.hostname, c.host)) ? [`${$(el).text().trim()}: ${url.href}`] : [];
+      } catch { return []; }
+    }).join('\n');
+    return { evidence, qualifies: true, opportunity: 'lists-competitors', mentionsUs, linksUs, competitorsLinked, title, reason: '' };
+  }
   return no('it neither names you nor links to your competitors');
 }
 
@@ -86,7 +99,7 @@ const MESSAGE_SCHEMA = {
 };
 
 /** Ask the AI where to look, then check every page in code. Only qualifying pages are added. */
-export async function discoverLinkPages(onProgress: (m: string) => void = () => {}, fetchFn: typeof fetch = fetch): Promise<{ added: Contact[]; checked: number; rejected: { url: string; reason: string }[] }> {
+async function discoverLinkPagesInner(onProgress: (m: string) => void = () => {}, fetchFn: typeof fetch = fetch): Promise<{ added: Contact[]; checked: number; rejected: { url: string; reason: string }[] }> {
   const site = siteUrl();
   if (!site) throw new Error('this website has no address yet');
   const ours = new URL(site).hostname;
@@ -150,7 +163,7 @@ export async function discoverLinkPages(onProgress: (m: string) => void = () => 
       why: `${why} ${p.why}`.trim(),
       opportunity: c.opportunity!,
     });
-    if (row) added.push(row);
+    if (row) { saveLinkEvidence(row.id, c.evidence ?? why); added.push(row); known.add(url); }
   }
   return { added, checked, rejected };
 }
@@ -201,3 +214,36 @@ export const linksAgent: Agent = {
     return c ? draftLinkRequest(c) : null;
   },
 };
+
+/** Persist outcomes for discovery started either by the workspace or the agent. */
+export async function discoverLinkPages(onProgress: (m: string) => void = () => {}, fetchFn: typeof fetch = fetch) {
+  const id = Number(odb().prepare('INSERT INTO link_discovery_runs (started_at) VALUES (?)').run(new Date().toISOString()).lastInsertRowid);
+  try {
+    const result = await discoverLinkPagesInner(onProgress, fetchFn);
+    odb().prepare('UPDATE link_discovery_runs SET finished_at = ?, result = ? WHERE id = ?').run(new Date().toISOString(), JSON.stringify(result), id);
+    return result;
+  } catch (err: any) {
+    odb().prepare('UPDATE link_discovery_runs SET finished_at = ?, error = ? WHERE id = ?').run(new Date().toISOString(), String(err.message ?? err), id);
+    throw err;
+  }
+}
+
+export async function verifyLink(contact: Contact, fetchFn: typeof fetch = fetch) {
+  if (contact.kind !== 'link') throw new Error('this is not a link opportunity');
+  const site = siteUrl();
+  if (!site) throw new Error('this website has no address yet');
+  const url = absUrl(contact.deliverableUrl || contact.url);
+  const r = await fetchPage(url, { fetchFn, browserFn: null });
+  if (!r.ok) { saveVerification(contact.id, 'error', '', r.reason); return; }
+  const $ = cheerio.load(r.html);
+  let target = '';
+  const external = !sameSite(new URL(r.url).hostname, new URL(site).hostname);
+  if (external) $('a[href]').each((_, el) => {
+    try {
+      const u = new URL($(el).attr('href')!, r.url);
+      if (/^https?:$/.test(u.protocol) && sameSite(u.hostname, new URL(site).hostname)) target ||= u.href;
+    } catch { /* malformed link */ }
+  });
+  saveVerification(contact.id, target ? 'verified' : 'missing', target, target ? 'Link confirmed on the page.' : 'No link to your site found on this page.');
+  if (target) updateContact(contact.id, { status: 'linked' });
+}

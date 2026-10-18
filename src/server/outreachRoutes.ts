@@ -1,15 +1,16 @@
+import { getDb } from '../db';
 import fs from 'fs';
 import path from 'path';
 import type { FastifyInstance } from 'fastify';
-import { ContactKind, STATUSES, addContact, getContact, listContacts, removeContact, summary, updateContact } from '../outreach/store';
+import { ContactKind, linkEvidence, latestLinkDiscovery, markEmailed, STATUSES, addContact, getContact, listContacts, removeContact, summary, updateContact } from '../outreach/store';
 import { discoverCreators, draftCreatorMessage } from '../outreach/creators';
-import { discoverLinkPages, draftLinkRequest } from '../outreach/links';
+import { discoverLinkPages, verifyLink, draftLinkRequest } from '../outreach/links';
 import { emailDailyLimit, emailsSentToday } from '../outreach/email';
 import { pipeline } from 'stream/promises';
 import { SIZES, SizeId, footage, footagePath, previews, renderPreview, videoDir } from '../video/agent';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { siteEnv } from '../integrations';
-import { editDraft, getDraft } from '../queue';
+import { editDraft, getDraft, moveDraft } from '../queue';
 import { ARTICLE_KINDS, imageService, photoCredits, suggestPhoto } from '../social/photos';
 import { IMAGE_KINDS, IMAGE_MIME, VIDEO_MIME, addImage, addVideo, imageDir, imageFile, listImages, postVideo, removeImage, removeVideo } from '../social/images';
 
@@ -24,12 +25,13 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     const env = siteEnv();
     return {
       kind,
-      contacts: listContacts(kind),
+      contacts: listContacts(kind).map(c => ({ ...c, ...(kind === 'link' ? { evidence: linkEvidence(c.id), draft: (getDb().prepare("SELECT id FROM drafts WHERE agent = 'links' AND status IN ('draft', 'failed', 'approved') AND json_extract(meta, '$.contactId') = ? ORDER BY id DESC LIMIT 1").get(c.id) as any)?.id ?? null } : {}) })),
+      discovery: kind === 'link' ? latestLinkDiscovery() : null,
       steps: STATUSES[kind],
       counts: summary(kind),
       email: { connected: !!(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASSWORD && env.SMTP_FROM), sentToday: emailsSentToday(), dailyLimit: emailDailyLimit(env) },
       youtube: !!env.YOUTUBE_API_KEY,
-      running: runningJob(`outreach:${kind}`)?.progress ?? null,
+      running: (runningJob(`outreach:${kind}`) ?? (kind === 'link' ? runningJob('agent:links') : null))?.progress ?? null,
     };
   });
 
@@ -67,7 +69,7 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
   app.post<{ Body: { kind?: string } }>('/api/outreach/discover', async (req, reply) => {
     const kind = req.body?.kind;
     if (!isKind(kind)) return reply.code(400).send({ error: 'kind must be creator or link' });
-    if (runningJob(`outreach:${kind}`)) return reply.code(409).send({ error: 'already looking — wait for it to finish' });
+    if (runningJob(`outreach:${kind}`) || (kind === 'link' && runningJob('agent:links'))) return reply.code(409).send({ error: 'already looking — wait for it to finish' });
     const jobId = startJob(`outreach:${kind}`, 'Starting');
     const work =
       kind === 'creator'
@@ -77,6 +79,27 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
       .then((msg) => (updateJob(jobId, msg), finishJob(jobId)))
       .catch((err) => finishJob(jobId, String(err?.message ?? err)));
     return { jobId };
+  });
+
+  /** Record a request sent outside Plume and retire its unsent draft. */
+  app.post<{ Params: { id: string } }>('/api/outreach/:id/sent', async (req, reply) => {
+    const c = getContact(Number(req.params.id));
+    if (!c || c.kind !== 'link') return reply.code(404).send({ error: 'no such link opportunity' });
+    if (c.status === 'declined') return reply.code(400).send({ error: 'reopen this opportunity first' });
+    const drafts = getDb().prepare("SELECT id, status FROM drafts WHERE agent = 'links' AND json_extract(meta, '$.contactId') = ? AND status IN ('draft', 'failed', 'approved')").all(c.id) as { id: number; status: string }[];
+    if (drafts.some(d => d.status === 'approved')) return reply.code(409).send({ error: 'A request is already queued to send. Open it before recording a manual send.' });
+    getDb().transaction(() => {
+      for (const d of drafts) moveDraft(d.id, 'rejected', { note: 'Request sent outside Plume.' });
+      markEmailed(c.id);
+    })();
+    return getContact(c.id);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/outreach/:id/verify', async (req, reply) => {
+    const c = getContact(Number(req.params.id));
+    if (!c) return reply.code(404).send({ error: 'no such contact' });
+    try { await verifyLink(c); return { contact: getContact(c.id), evidence: linkEvidence(c.id) }; }
+    catch (err) { return bad(reply, err); }
   });
 
   /** Write the first message for one contact now. It lands in Today for approval. */
