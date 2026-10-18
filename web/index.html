@@ -284,10 +284,10 @@
           <h2>Today's fixes</h2>
           <div id="audit-today"></div>
           <h2>Everything else</h2>
-          <table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Site audit problems" tabindex="0"><table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table></div>
           <h2>Fixed</h2>
           <p class="muted">Fixes you marked done, whether the next check still finds them, and the page's Google numbers before and after.</p>
-          <table><thead><tr><th>Done</th><th>Problem</th><th>Page</th><th>Gone?</th><th>Clicks</th><th>Position</th></tr></thead><tbody id="audit-fixed"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Completed fixes" tabindex="0"><table class="metrics-fixes"><thead><tr><th>Done</th><th>Problem</th><th>Page</th><th>Gone?</th><th>Clicks</th><th>Position</th></tr></thead><tbody id="audit-fixed"></tbody></table></div>
         </div>
       </section>
 
@@ -341,14 +341,14 @@
         <p id="google-pick" class="muted small" hidden></p>
         <div id="results-body" hidden>
           <h2>Plume's published work</h2>
-          <table><thead><tr><th>Title</th><th>Clicks</th><th>Shown</th><th>Position</th><th>Views</th><th>Best search</th></tr></thead><tbody id="r-mine"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Published work results" tabindex="0"><table class="metrics-posts"><thead><tr><th>Title</th><th>Clicks</th><th>Shown</th><th>Position</th><th>Views</th><th>Best search</th></tr></thead><tbody id="r-mine"></tbody></table></div>
           <h2>What we did and what happened</h2>
           <p class="muted">Fixes, published pages and document edits, with the page's numbers before and after (up to 28 days each side). The agents see this too.</p>
-          <table><thead><tr><th>Date</th><th>What</th><th>Page</th><th>Problem gone?</th><th>Clicks</th><th>Position</th><th>Views</th></tr></thead><tbody id="r-actions"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Action results" tabindex="0"><table class="metrics-actions"><thead><tr><th>Date</th><th>What</th><th>Page</th><th>Problem gone?</th><th>Clicks</th><th>Position</th><th>Views</th></tr></thead><tbody id="r-actions"></tbody></table></div>
           <h2>Top searches</h2>
-          <table><thead><tr><th>Search</th><th>Clicks</th><th>Shown</th><th>Click rate</th><th>Position</th></tr></thead><tbody id="r-queries"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Top searches" tabindex="0"><table class="metrics-queries"><thead><tr><th>Search</th><th>Clicks</th><th>Shown</th><th>Click rate</th><th>Position</th></tr></thead><tbody id="r-queries"></tbody></table></div>
           <h2>Top pages</h2>
-          <table><thead><tr><th>Page</th><th>Views</th><th>Engaged</th><th>Clicks from search</th></tr></thead><tbody id="r-pages"></tbody></table>
+          <div class="table-wrap" role="region" aria-label="Top pages" tabindex="0"><table class="metrics-pages"><thead><tr><th>Page</th><th>Views</th><th>Engaged</th><th>Clicks from search</th></tr></thead><tbody id="r-pages"></tbody></table></div>
           <details><summary>What the agents are told</summary><pre id="r-notes" class="notes"></pre></details>
         </div>
       </section>
@@ -356,10 +356,10 @@
       <section id="view-logs" class="view" hidden>
         <div class="view-head"><a href="#today" class="back">← Today</a><h1>Timetable and logs</h1></div>
         <p class="muted">What Plume does on its own, and when. Tasks marked $ use AI and start switched off.</p>
-        <table><thead><tr><th>On</th><th>Task</th><th>When</th><th>Next</th><th>Last result</th><th></th></tr></thead><tbody id="task-rows"></tbody></table>
+        <div class="table-wrap" role="region" aria-label="Scheduled tasks" tabindex="0"><table class="schedule-table"><thead><tr><th>On</th><th>Task</th><th>When</th><th>Next</th><th>Last result</th><th></th></tr></thead><tbody id="task-rows"></tbody></table></div>
         <div class="view-head small-head"><h2>Activity on this website</h2><span class="actions"><a href="/#syslog" class="small">System log for all websites →</a></span></div>
         <p class="muted small">What Plume did for this website: research, agents, checks, publishing. Plume's own start-up and connection messages are in the system log.</p>
-        <table><thead><tr><th>Time</th><th>From</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table>
+        <div class="table-wrap" role="region" aria-label="Website activity" tabindex="0"><table><thead><tr><th>Time</th><th>From</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table></div>
       </section>
 
       <section id="view-usage" class="view" hidden>
@@ -371,7 +371,7 @@
         </div>
         <p id="usage-total"></p>
         <p id="usage-llm" class="muted"></p>
-        <table><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table>
+        <div class="table-wrap" role="region" aria-label="AI usage costs" tabindex="0"><table class="metrics-usage"><thead><tr><th>Task</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>Cost</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
       </section>
     </main>
 

@@ -1465,9 +1465,9 @@ function renderTraffic(body, s) {
   // Acquisition channels, referring sites and landing pages.
   const bars = (rows, head, val, label, total) => {
     const max = Math.max(1, ...rows.map(val));
-    return `<table class="bars-table"><thead><tr><th>${head[0]}</th><th></th><th>${head[1]}</th></tr></thead><tbody>${rows
+    return `<div class="table-wrap" role="region" aria-label="Analytics data" tabindex="0"><table class="bars-table"><thead><tr><th>${head[0]}</th><th></th><th>${head[1]}</th></tr></thead><tbody>${rows
       .map((r) => `<tr><td dir="auto" class="cut" title="${esc(String(r.label ?? ''))}">${label(r)}</td><td class="bar-cell"><span style="width:${(100 * val(r)) / max}%"></span></td><td>${total ? pct(val(r) / total) : n(val(r))}</td></tr>`)
-      .join('')}</tbody></table>`;
+      .join('')}</tbody></table></div>`;
   };
   const chTotal = s.channels.reduce((a, r) => a + r.users, 0);
   const channels = s.channels.length ? bars(s.channels, ['Channel', 'Share'], (r) => r.users, (r) => esc(r.label), chTotal) : emptyNote(gaMissing(s, 'where visitors come from'));
@@ -1554,7 +1554,7 @@ function seoSearch(main, s, res, again) {
     return `<span class="flag" aria-hidden="true">${flag(r.code)}</span> ${esc(name)}`;
   };
   const cTotal = s.countries.reduce((a, r) => a + r.clicks, 0);
-  const world = s.countries.length ? `<table class="bars-table"><thead><tr><th>Country</th><th>Clicks</th><th>Share</th></tr></thead><tbody>${s.countries.map((r) => `<tr><td>${country(r)}</td><td>${n(r.clicks)}</td><td>${cTotal ? (100 * r.clicks / cTotal).toFixed(1) : '0.0'}%</td></tr>`).join('')}</tbody></table>` : emptyNote('Press <b>Get latest data</b> on <a href="#results">Results</a> to see searchers’ countries.');
+  const world = s.countries.length ? `<div class="table-wrap" role="region" aria-label="Analytics data" tabindex="0"><table class="bars-table"><thead><tr><th>Country</th><th>Clicks</th><th>Share</th></tr></thead><tbody>${s.countries.map((r) => `<tr><td>${country(r)}</td><td>${n(r.clicks)}</td><td>${cTotal ? (100 * r.clicks / cTotal).toFixed(1) : '0.0'}%</td></tr>`).join('')}</tbody></table></div>` : emptyNote('Press <b>Get latest data</b> on <a href="#results">Results</a> to see searchers’ countries.');
 
   // Brand searches are people who already know you: the site's own name, split into its parts.
   const host = state.site ? new URL(state.site).hostname.replace(/^www\./, '') : '';
@@ -1577,15 +1577,15 @@ function seoSearch(main, s, res, again) {
   ${block('Search clicks over time', null, `<div class="chart-card"><div id="search-chart"></div></div>`)}
   <div class="an-row">
     ${block('Top searches', ['#rankings', 'Rankings'], `<div class="chart-card"><div class="chart-head">${seg('search-kind', [['all', 'All'], ['other', 'Not your name'], ['brand', 'Your name']], searchKind)}</div>${q.length
-      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Clicks</th><th>Click rate</th></tr></thead><tbody>${q
+      ? `<div class="table-wrap" role="region" aria-label="Analytics data" tabindex="0"><table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Clicks</th><th>Click rate</th></tr></thead><tbody>${q
           .map((x) => `<tr><td dir="auto" class="cut">${esc(x.query)}</td><td></td><td>#${x.position.toFixed(0)}</td><td>${n(x.clicks)}</td><td>${x.ctr == null ? '—' : `${(100 * x.ctr).toFixed(1)}%`}</td></tr>`)
-          .join('')}</tbody></table>`
+          .join('')}</tbody></table></div>`
       : emptyNote('No searches here yet.')}</div>`)}
     ${block('Nearly on page one', null, `<div class="chart-card"><p class="muted small card-note">Google shows you for these on page 2–3. The SEO agent writes for these first.</p>${near.length
-      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Shown</th></tr></thead><tbody>${near
+      ? `<div class="table-wrap" role="region" aria-label="Analytics data" tabindex="0"><table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Shown</th></tr></thead><tbody>${near
           .slice(0, 10)
           .map((o) => `<tr><td dir="auto" class="cut">${esc(o.keyword)}</td><td></td><td>#${pos(o.position)}</td><td>${n(o.impressions)}</td></tr>`)
-          .join('')}</tbody></table>`
+          .join('')}</tbody></table></div>`
       : emptyNote('None right now.')}</div>`)}
   </div>
   ${block('Searchers by country', null, `<div class="chart-card"><p class="muted small card-note">Google search clicks by country.</p>${world}</div>`)}
@@ -1696,7 +1696,7 @@ async function renderGeo(body) {
     <div class="an-row an-top"><div class="an-block"><div class="an-block-head"><h3>By assistant</h3><span class="muted small">checked ${esc(when(s.at))}</span></div><div class="chart-card">
       <div class="vital-rows">${s.perEngine.map((e) => { const p = pct(e.mentioned, e.answered); return `<div class="vital-row"><span class="dot-${p >= 50 ? 'good' : p >= 20 ? 'mid' : 'bad'}"></span><span>${esc(e.label)}</span><b>${p}%</b><span class="muted small">${e.mentioned}/${e.answered}${e.avgPosition ? ` · avg #${e.avgPosition}` : ''}</span></div>`; }).join('')}</div></div></div>
     <div class="an-block"><div class="an-block-head"><h3>Who gets recommended</h3><a href="#ai">Every answer →</a></div><div class="chart-card">
-      <table class="bars-table"><tbody>${voice.map((x) => `<tr class="${x.you ? 'you' : ''}"><td dir="auto">${x.you ? '<b>' : ''}${esc(x.name)}${x.you ? '</b>' : ''}</td><td class="bar-cell"><span style="width:${(100 * x.answers) / maxVoice}%"></span></td><td>${x.answers}</td></tr>`).join('')}</tbody></table></div></div></div>`;
+      <div class="table-wrap" role="region" aria-label="Analytics data" tabindex="0"><table class="bars-table"><tbody>${voice.map((x) => `<tr class="${x.you ? 'you' : ''}"><td dir="auto">${x.you ? '<b>' : ''}${esc(x.name)}${x.you ? '</b>' : ''}</td><td class="bar-cell"><span style="width:${(100 * x.answers) / maxVoice}%"></span></td><td>${x.answers}</td></tr>`).join('')}</tbody></table></div></div></div></div>`;
 }
 
 /**
