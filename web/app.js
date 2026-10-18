@@ -1007,22 +1007,13 @@ async function loadResults() {
   $('google-actions').innerHTML = !g.configured
     ? ''
     : g.connected
-      ? '<button id="g-pull">Get latest data</button> <button id="g-off" class="secondary">Disconnect</button>'
+      ? '<button id="g-pull">Get latest data</button>'
       : `<a href="${withSite('/api/google/connect')}"><button>Connect Google</button></a>`;
   $('google-pick').hidden = !g.connected;
+  $('google-pick').innerHTML = `Search Console: ${g.site ? esc(g.site) : 'none picked'} · Analytics: ${g.property ? esc(g.property) : 'none picked'} · <a href="#settings">Change in Settings</a>`;
   $('results-body').hidden = !g.connected;
   if (!g.connected) return;
   $('g-pull').onclick = pullGoogle;
-  $('g-off').onclick = async () => confirm('Disconnect Google? Saved data stays.') && (await post('/api/google/disconnect'), loadResults());
-  try {
-    const opts = await api('/api/google/options');
-    $('gsc-site').innerHTML = '<option value="">— none —</option>' + opts.sites.map((s) => `<option ${s === g.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
-    $('ga-prop').innerHTML = '<option value="">— none —</option>' + opts.properties.map((p) => `<option value="${esc(p.id)}" ${p.id === g.property ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  } catch (err) {
-    $('google-msg').textContent = `Couldn't list your Google sites: ${err.message}`;
-  }
-  $('gsc-site').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ site: $('gsc-site').value }) });
-  $('ga-prop').onchange = () => api('/api/google/selection', { method: 'PUT', body: JSON.stringify({ property: $('ga-prop').value }) });
   renderResults(await api(`/api/results?days=${days}`));
 }
 
@@ -1045,7 +1036,6 @@ function pullLine(p) {
 
 function renderResults(r) {
   const empty = (cols) => `<tr><td colspan="${cols}" class="muted">No data yet.</td></tr>`;
-  $('r-near').innerHTML = r.nearlyThere.map((o) => `<tr><td dir="auto">${esc(o.keyword)}</td><td>${n(o.impressions)}</td><td>${pos(o.position)}</td></tr>`).join('') || empty(3);
   $('r-mine').innerHTML =
     r.published.map((m) => `<tr><td><a href="${esc(m.url)}" target="_blank" rel="noopener" dir="auto">${esc(m.title)}</a> <small class="muted">${m.publishedDaysAgo}d ago</small></td><td>${n(m.clicks)}</td><td>${n(m.impressions)}</td><td>${pos(m.position)}</td><td>${n(m.views)}</td><td dir="auto">${esc(m.topQuery ?? '—')}</td></tr>`).join('') || empty(6);
   $('r-queries').innerHTML = r.queries.map((q) => `<tr><td dir="auto">${esc(q.query)}</td><td>${n(q.clicks)}</td><td>${n(q.impressions)}</td><td>${(q.ctr * 100).toFixed(1)}%</td><td>${pos(q.position)}</td></tr>`).join('') || empty(5);
@@ -1114,7 +1104,6 @@ async function loadUsage() {
 
 let summary = null;
 let detailsTab = pref.get('analyticsTab', 'traffic');
-let trafficView = pref.get('trafficView', 'visitors');
 
 /** Percent change, or null when there's nothing to compare against. */
 const change = (now, before) => (now == null || !before ? null : ((now - before) / before) * 100);
@@ -1283,50 +1272,39 @@ async function renderDetails() {
   return renderGeo(body);
 }
 
-/** Traffic first shows the whole path: seen in Google, clicked, visited. */
-function funnel(s) {
-  const step = (label, v, before) => `<div class="fn-step"><span class="lbl">${label}</span><b>${v == null ? '—' : n(v)}</b>${delta(change(v, before))}</div>`;
-  const visits = s.now.users ?? s.now.sessions ?? s.now.views;
-  const ctr = s.now.impressions ? (100 * s.now.clicks) / s.now.impressions : null;
-  return `<div class="chart-card funnel-card">
-    <div class="funnel">${step('Saw you in Google', s.now.impressions, s.before.impressions)}<i aria-hidden="true">→</i>${step('Clicked', s.now.clicks, s.before.clicks)}<i aria-hidden="true">→</i>${step(s.now.users != null ? 'Visitors' : 'Visits', visits, s.before.users ?? s.before.sessions ?? s.before.views)}</div>
-    ${ctr != null ? `<p class="muted small fn-foot"><b>${ctr.toFixed(1)}%</b> of people who saw you clicked${visits == null ? (s.analytics?.error ? ' · visits are missing, see below' : s.analytics?.property ? ' · <a href="#results">get latest data</a> to see visits' : ' · <a href="#settings">connect Analytics</a> to see visits') : ''}</p>` : ''}</div>`;
-}
-
+/** Traffic: who came, day by day, from where, and to which pages. Google search numbers live under SEO → Search. */
 function renderTraffic(body, s) {
   if (!s?.from) return (body.innerHTML = emptyNote(NO_GOOGLE));
   const key = s.now.users != null ? 'users' : s.now.views != null ? 'views' : 'clicks';
   const perDay = { users: 'Visitors per day', views: 'Views per day', clicks: 'Clicks from Google per day' }[key];
-  const extra = [
-    s.now.users != null && s.now.sessions != null && statCard('Sessions', n(s.now.sessions), delta(change(s.now.sessions, s.before.sessions)), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
-    s.now.revenue != null && statCard('Revenue', money(s.now.revenue), delta(change(s.now.revenue, s.before.revenue)), 'GA4 conversion value'),
+  const cards = [
+    s.now.users != null && statCard('Visitors', n(s.now.users), delta(change(s.now.users, s.before.users)), `was ${n(s.before.users ?? 0)}`),
+    s.now.sessions != null && statCard('Sessions', n(s.now.sessions), delta(change(s.now.sessions, s.before.sessions)), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
+    s.now.views != null && statCard('Page views', n(s.now.views), delta(change(s.now.views, s.before.views)), s.now.sessions ? `${(s.now.views / s.now.sessions).toFixed(1)} per session` : ''),
+    s.now.revenue && statCard('Revenue', money(s.now.revenue), delta(change(s.now.revenue, s.before.revenue)), 'GA4 conversion value'),
   ].filter(Boolean);
-  if (trafficView === 'visitors') trafficView = 'sources';
-  body.innerHTML = `${extra.length ? `<div class="stat-cards an-gap">${extra.join('')}</div>` : ''}
-    <div class="an-row">${block('How people found you', null, funnel(s))}
-    ${block(perDay, null, '<div class="chart-card"><div id="traffic-chart"></div></div>')}</div>
-    ${block('Where they came from', null, `<div class="chart-card"><div class="chart-head">${seg('traffic-view', [['sources', 'Sources'], ['pages', 'Top pages']], trafficView)}</div><div id="traffic-main"></div></div>`)}`;
+  const total = s.sources.reduce((a, r) => a + r.users, 0);
+  const sources = s.sources.length
+    ? `<table class="bars-table"><thead><tr><th>Source</th><th></th><th>Visitors</th></tr></thead><tbody>${s.sources
+        .map((r) => `<tr><td>${esc(r.channel)}</td><td class="bar-cell"><span style="width:${total ? (100 * r.users) / total : 0}%"></span></td><td>${n(r.users)}</td></tr>`)
+        .join('')}</tbody></table>`
+    : emptyNote(gaMissing(s, 'where visitors come from'));
+  const max = Math.max(1, ...s.pages.map((p) => p.views));
+  const pages = s.pages.length
+    ? `<table class="bars-table"><thead><tr><th>Page</th><th></th><th>Views</th></tr></thead><tbody>${s.pages
+        .map((p) => `<tr><td dir="auto" class="cut" title="${esc(p.page)}">${esc(p.page)}</td><td class="bar-cell"><span style="width:${(100 * p.views) / max}%"></span></td><td>${n(p.views)}</td></tr>`)
+        .join('')}</tbody></table>`
+    : emptyNote(gaMissing(s, 'page views'));
+  body.innerHTML = `${cards.length ? `<div class="stat-cards an-gap">${cards.join('')}</div>` : ''}
+    ${block(perDay, null, '<div class="chart-card"><div id="traffic-chart"></div></div>')}
+    <div class="an-row">${block('Where they came from', null, `<div class="chart-card">${sources}</div>`)}${block('Top pages', null, `<div class="chart-card">${pages}</div>`)}</div>`;
   drawChart($('traffic-chart'), perDay, (key === 'clicks' ? s.daily : s.visits).map((d) => ({ x: d.date, y: d[key] ?? 0 })), s.before[key] ? s.before[key] / s.days : null);
-  onSeg('traffic-view', (v) => ((trafficView = v), pref.set('trafficView', v), renderTraffic(body, s)));
-  const main = $('traffic-main');
-  if (trafficView === 'pages') {
-    const max = Math.max(1, ...s.pages.map((p) => p.views));
-    main.innerHTML = s.pages.length
-      ? `<table class="bars-table"><thead><tr><th>Page</th><th></th><th>Views</th></tr></thead><tbody>${s.pages
-          .map((p) => `<tr><td dir="auto" class="cut">${esc(p.page)}</td><td class="bar-cell"><span style="width:${(100 * p.views) / max}%"></span></td><td>${n(p.views)}</td></tr>`)
-          .join('')}</tbody></table>`
-      : emptyNote(gaMissing(s, 'page views'));
-  } else {
-    const total = s.sources.reduce((a, r) => a + r.users, 0);
-    main.innerHTML = s.sources.length
-      ? `<table class="bars-table"><thead><tr><th>Source</th><th></th><th>Visitors</th></tr></thead><tbody>${s.sources
-          .map((r) => `<tr><td>${esc(r.channel)}</td><td class="bar-cell"><span style="width:${total ? (100 * r.users) / total : 0}%"></span></td><td>${n(r.users)} ${delta(change(r.users, r.before))}</td></tr>`)
-          .join('')}</tbody></table>`
-      : emptyNote(gaMissing(s, 'where visitors come from'));
-  }
 }
 
-/** SEO, top to bottom: the one thing to fix, Google search, speed, then the on-page check. No tabs inside tabs. */
+/** SEO has three parts, one at a time: how Google search is going, how fast pages load, and what the on-page check found. */
+let seoView = pref.get('seoView', 'search');
+let searchKind = pref.get('searchKind', 'all');
+
 async function renderSeo(body, s) {
   const [speed, check, res] = await Promise.all([
     api('/api/speed').catch(() => ({})),
@@ -1334,63 +1312,111 @@ async function renderSeo(body, s) {
     s?.from ? api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null) : null,
   ]);
   if (detailsTab !== 'seo') return;
-  const r = speed[speedDevice] ?? speed.mobile ?? speed.desktop;
   const audit = check.audit;
+  const slow = ['mobile', 'desktop'].some((d) => speed[d]?.headline);
+  const views = [
+    ['search', 'Search'],
+    ['speed', `Speed${slow ? ' <span class="dot-bad"></span>' : ''}`],
+    ['onpage', `On-page${audit ? ` · ${audit.score}` : ''}`],
+  ];
+  body.innerHTML = `<div class="sub-tabs">${seg('seo-view', views, seoView)}</div><div id="seo-main"></div>`;
+  onSeg('seo-view', (v) => ((seoView = v), pref.set('seoView', v), renderSeo(body, s)));
+  const main = $('seo-main');
+  if (seoView === 'speed') return seoSpeed(main, speed, () => renderSeo(body, s));
+  if (seoView === 'onpage') return seoOnPage(main, audit);
+  seoSearch(main, s, res, () => renderSeo(body, s));
+}
 
-  // The single worst problem, phones first: that's what Google ranks by. The Page speed page shows it itself.
-  const worst = speed.mobile?.headline ? speed.mobile : speed.desktop?.headline ? speed.desktop : null;
-  const banner = worst
-    ? `<div class="headline an-alert"><div><small class="muted">Fix first</small><div>${esc(worst.headline)}</div></div><button class="secondary" id="seo-send">Send to SEO agent</button></div>`
-    : '';
-
-  let search = emptyNote(NO_GOOGLE);
-  if (s?.from) {
-    const ctr = (t) => (t.impressions ? (100 * t.clicks) / t.impressions : null);
-    const c = ctr(s.now), cb = ctr(s.before);
-    const q = (res?.queries ?? []).slice(0, 8);
-    search = `<div class="stat-cards">${[
-      statCard('Average position', s.now.position ? s.now.position.toFixed(1) : '—', placeDelta(s.now.position, s.before.position), 'in Google · lower is better'),
-      statCard('Click rate', c == null ? '—' : `${c.toFixed(1)}%`, delta(change(c, cb)), `${n(s.now.clicks)} ${s.now.clicks === 1 ? 'click' : 'clicks'} of ${n(s.now.impressions)} shown`),
-    ].join('')}</div>
-    <div class="chart-card">${q.length
-      ? `<table class="bars-table"><thead><tr><th>Top searches</th><th></th><th>Clicks</th><th>Position</th></tr></thead><tbody>${q
-          .map((x) => `<tr><td dir="auto" class="cut">${esc(x.query)}</td><td></td><td>${n(x.clicks)}</td><td>${x.position.toFixed(1)}</td></tr>`)
+function seoSearch(main, s, res, again) {
+  if (!s?.from) return (main.innerHTML = emptyNote(NO_GOOGLE));
+  const ctr = (t) => (t.impressions ? (100 * t.clicks) / t.impressions : null);
+  const c = ctr(s.now);
+  // Brand searches are people who already know you: the site's own name, split into its parts.
+  const host = state.site ? new URL(state.site).hostname.replace(/^www\./, '') : '';
+  // "test4u" also yields "test" and "4u", so "teoria 4 u" counts as a brand search.
+  const words = [host.split('.')[0], state.siteName]
+    .filter(Boolean)
+    .flatMap((x) => [x, ...x.split(/[\s.\-]+/), ...x.split(/(?<=\p{L})(?=\d)/u)])
+    .map((x) => x.toLowerCase().replace(/\s+/g, ''))
+    .filter((x) => x.length >= 3 || (x.length === 2 && /\d/.test(x)));
+  const brand = (q) => words.some((w) => q.toLowerCase().replace(/\s+/g, '').includes(w));
+  const all = res?.queries ?? [];
+  const q = all.filter((x) => searchKind === 'all' || (searchKind === 'brand') === brand(x.query)).sort((a, b) => b.clicks - a.clicks).slice(0, 10);
+  const near = res?.nearlyThere ?? [];
+  main.innerHTML = `<div class="stat-cards an-gap">${[
+    statCard('Seen in Google', n(s.now.impressions), delta(change(s.now.impressions, s.before.impressions)), 'times you showed up in results'),
+    statCard('Clicks', n(s.now.clicks), delta(change(s.now.clicks, s.before.clicks)), c == null ? '' : `${c.toFixed(1)}% click rate`),
+    statCard('Average position', s.now.position ? `#${s.now.position.toFixed(1)}` : '—', placeDelta(s.now.position, s.before.position), 'lower is better'),
+  ].join('')}</div>
+  <div class="an-row">
+    ${block('Top searches', ['#rankings', 'Rankings'], `<div class="chart-card"><div class="chart-head">${seg('search-kind', [['all', 'All'], ['other', 'Not your name'], ['brand', 'Your name']], searchKind)}</div>${q.length
+      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Clicks</th></tr></thead><tbody>${q
+          .map((x) => `<tr><td dir="auto" class="cut">${esc(x.query)}</td><td></td><td>#${x.position.toFixed(0)}</td><td>${n(x.clicks)}</td></tr>`)
           .join('')}</tbody></table>`
-      : emptyNote('No searches yet.')}</div>`;
-  }
+      : emptyNote('No searches here yet.')}</div>`)}
+    ${block('Nearly on page one', null, `<div class="chart-card"><p class="muted small card-note">Google shows you for these on page 2–3. The SEO agent writes for these first.</p>${near.length
+      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Shown</th></tr></thead><tbody>${near
+          .slice(0, 10)
+          .map((o) => `<tr><td dir="auto" class="cut">${esc(o.keyword)}</td><td></td><td>#${pos(o.position)}</td><td>${n(o.impressions)}</td></tr>`)
+          .join('')}</tbody></table>`
+      : emptyNote('None right now.')}</div>`)}
+  </div>`;
+  onSeg('search-kind', (v) => ((searchKind = v), pref.set('searchKind', v), again()));
+}
 
+function seoSpeed(main, speed, again) {
+  const r = speed[speedDevice] ?? speed.mobile ?? speed.desktop;
+  if (!r) return (main.innerHTML = emptyNote('No speed check yet. <a href="#speed">Check speed</a>.'));
+  const device = speed[speedDevice] ? speedDevice : r.strategy;
   const labels = { performance: 'Speed', accessibility: 'Access', bestPractices: 'Practices', seo: 'SEO' };
-  const speedHtml = r
-    ? `<div class="chart-card"><div class="chart-head"><span class="muted small">Google Lighthouse · ${speedDevice === 'desktop' ? 'computer' : 'phone'} · ${shortDay(r.at)}</span>${seg('seo-device', [['mobile', 'Phone'], ['desktop', 'Computer']], speedDevice)}</div>
-        <div class="gauges-row">${Object.entries(labels).map(([k, l]) => gauge(r.scores[k], l)).join('')}</div></div>`
-    : emptyNote('No speed check yet. <a href="#speed">Check speed</a>.');
-
-  const auditHtml = audit
-    ? `<div class="chart-card"><div class="chart-head"><span class="muted small">${audit.pagesChecked} pages checked · ${shortDay(audit.at)}</span><span class="small"><b class="bad">${audit.counts.critical}</b> critical · <b class="mid">${audit.counts.warnings}</b> warnings · <b class="good">${audit.counts.passed}</b> passed</span></div>
-        <div class="vital-rows">${audit.issues.slice(0, 5).map((i) => `<div class="vital-row"><span class="dot-${i.severity === 'critical' ? 'bad' : i.severity === 'high' ? 'mid' : 'muted'}"></span><span>${esc(i.title)}</span><span></span><span class="muted small path">${esc(new URL(i.url).pathname)}</span></div>`).join('') || '<p class="muted small">No problems found.</p>'}</div></div>`
-    : emptyNote('No site check yet. <a href="#check">Run a site check</a>.');
-
-  body.innerHTML = `${banner}
-    <div class="an-row">${block('Google search', ['#rankings', 'Rankings'], search)}
-    <div>${block(`Page speed${r ? ` · ${r.scores.performance}` : ''}`, ['#speed', 'Details'], speedHtml)}
-    ${block(`Site check${audit ? ` · ${audit.score}/100` : ''}`, ['#check', 'All fixes'], auditHtml)}</div></div>`;
-  if (banner)
+  main.innerHTML = `${r.headline
+      ? `<div class="headline an-alert"><div><small class="muted">Fix first</small><div>${esc(r.headline)}</div></div><button class="secondary" id="seo-send">Send to SEO agent</button></div>`
+      : `<div class="headline ok an-alert"><div>Every loading measurement passes on ${device === 'desktop' ? 'computers' : 'phones'}.</div></div>`}
+    <div class="chart-card"><div class="chart-head"><span class="muted small">Google Lighthouse · ${shortDay(r.at)}</span>${seg('seo-device', [['mobile', 'Phone'], ['desktop', 'Computer']], device)}</div>
+      <div class="gauges-row">${Object.entries(labels).map(([k, l]) => gauge(r.scores[k], l)).join('')}</div>
+      <div class="vital-rows">${(r.vitals ?? []).map((v) => `<div class="vital-row"><span class="dot-${v.rating === 'good' ? 'good' : v.rating === 'poor' ? 'bad' : 'mid'}"></span><span>${esc(v.label)}</span><b class="${v.rating === 'good' ? 'good' : v.rating === 'poor' ? 'bad' : 'mid'}">${esc(v.display)}</b><span class="muted small">${esc(v.target)}</span></div>`).join('')}</div>
+      <p class="small card-foot"><a href="#speed">What would help most →</a></p></div>`;
+  if (r.headline)
     $('seo-send').onclick = async () => {
       try {
-        await post('/api/speed/send', { strategy: worst.strategy });
+        await post('/api/speed/send', { strategy: device });
         $('seo-send').textContent = 'Added to today’s fixes';
         $('seo-send').disabled = true;
       } catch (err) {
         alert(err.message);
       }
     };
-  if (r)
-    onSeg('seo-device', (v) => {
-      if (!speed[v]) return alert(`No ${v === 'desktop' ? 'computer' : 'phone'} speed check yet.`);
-      speedDevice = v;
-      pref.set('speedDevice', v);
-      renderSeo(body, s);
-    });
+  onSeg('seo-device', (v) => {
+    if (!speed[v]) return alert(`No ${v === 'desktop' ? 'computer' : 'phone'} speed check yet.`);
+    speedDevice = v;
+    pref.set('speedDevice', v);
+    again();
+  });
+}
+
+/** Problems grouped by kind, so 21 pages missing a description is one line, not 21. */
+function seoOnPage(main, audit) {
+  if (!audit) return (main.innerHTML = emptyNote('No site check yet. <a href="#check">Run a site check</a>.'));
+  const LABEL = { critical: 'Critical', high: 'Important', medium: 'Warning', low: 'Minor' };
+  const RANK = { critical: 0, high: 1, medium: 2, low: 3 };
+  const groups = new Map();
+  for (const i of audit.issues) {
+    const g = groups.get(i.check) ?? { title: i.title, severity: i.severity, pages: new Set() };
+    if (RANK[i.severity] < RANK[g.severity]) g.severity = i.severity;
+    g.pages.add(i.url);
+    groups.set(i.check, g);
+  }
+  // A grouped title can't name one page's count ("8 images without alt text"), so use the check's general name.
+  const NAME = { 'images-missing-alt': 'Images without alt text', 'title-length': 'Title too short or too long', 'stale-page': 'Pages not updated in a long time', 'broken-page': 'Pages that return an error', 'duplicate-title': 'Same title on several pages', 'thin-content': 'Very little text on the page', 'meta-description-length': 'Description too short or too long' };
+  const rows = [...groups.entries()].sort((a, b) => RANK[a[1].severity] - RANK[b[1].severity] || b[1].pages.size - a[1].pages.size);
+  const count = (label, v, cls) => `<div class="op-row"><span>${label}</span><span class="chip ${cls}">${v}</span></div>`;
+  main.innerHTML = `<div class="chart-card op-card">
+    <div class="op-score"><b class="${band(audit.score)}">${audit.score}</b><span class="muted">On-page health · checked ${shortDay(audit.at)} · ${audit.pagesChecked} pages</span></div>
+    <p class="muted small">Checks titles, descriptions, headings, images and links on your pages. Speed is under Speed.</p>
+    ${count('Critical', audit.counts.critical, 'bad')}${count('Warnings', audit.counts.warnings, 'mid')}${count('Passed', audit.counts.passed, 'good')}
+    <h4 class="op-sub">Top issues</h4>
+    ${rows.map(([check, g]) => `<div class="op-row"><span>${esc(NAME[check] ?? g.title)} <span class="muted small">· ${g.pages.size} ${g.pages.size === 1 ? 'page' : 'pages'}</span></span><span class="chip ${g.severity === 'critical' ? 'bad' : g.severity === 'low' ? 'muted' : 'mid'}">${LABEL[g.severity]}</span></div>`).join('') || '<p class="muted small">No problems found.</p>'}
+    <p class="small card-foot"><a href="#check">See every page and how to fix it →</a></p></div>`;
 }
 
 /** A score ring out of 100, coloured by Lighthouse's bands. */
@@ -1668,19 +1694,24 @@ async function loadSettings() {
   $('set-analytics').innerHTML = `<div class="int-card" id="g-signin"><div class="int-head"><strong>Google Analytics and Search Console</strong>
     <span class="${g.connected ? 'good' : 'muted'} small">${g.connected ? 'Connected' : 'Not connected'}</span></div>
     <p class="muted small">${g.connected
-      ? `Search Console: ${g.site ? esc(g.site) : 'no site picked'} · Analytics: ${g.property ? esc(g.property) : 'no property picked'}`
+      ? 'Pick which Search Console site and Analytics property belong to this website.'
       : 'See which searches bring people to your site and what they do there. Plume only reads your data, it never changes anything.'}</p>
     <p class="actions-row">${!g.configured
       ? '<span class="warn small">Google sign-in isn\'t set up in this copy of Plume yet. Whoever runs it adds GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the .env file once.</span>'
       : g.connected
-        ? '<a href="#results"><button class="secondary">Choose site and property</button></a> <button id="g-check" class="secondary">Test connection</button> <button id="g-out" class="secondary">Disconnect</button>'
+        ? '<button id="g-check" class="secondary">Test connection</button> <button id="g-out" class="secondary">Disconnect</button>'
         : `<a href="${withSite('/api/google/connect')}"><button>Connect with Google</button></a>`}
       <span id="g-msg" class="small"></span></p>
+    ${g.connected ? `<div class="seo-fields">
+      <label>Search Console site <select id="gsc-site"><option value="">${g.site ? esc(g.site) : '— none —'}</option></select></label>
+      <label>Analytics property <select id="ga-prop"><option value="">${g.property ? esc(g.property) : '— none —'}</option></select></label>
+    </div>` : ''}
     <ul id="g-checks" class="item-list"></ul></div>
     <details class="small g-advanced"><summary>Advanced: use a different Google app for this website</summary>
       <p class="muted small">Only for testing. Leave empty to use Plume's own.</p>${integrationCard(gInt)}</details>`;
   for (const card of document.querySelectorAll('.int-card[data-int]')) wireIntegration(card);
   if (window.plumePhone) window.plumePhone.settings(ints);
+  if (g.connected) pickGoogle(g);
   if ($('g-check')) $('g-check').onclick = async () => {
     $('g-msg').textContent = 'Checking…';
     try {
@@ -1692,6 +1723,24 @@ async function loadSettings() {
     }
   };
   if ($('g-out')) $('g-out').onclick = async () => confirm('Sign out of Google for this website? Saved data stays.') && (await post('/api/google/disconnect'), goTo('#settings'));
+}
+
+// Which Search Console site and Analytics property this website reads from.
+async function pickGoogle(g) {
+  try {
+    const opts = await api('/api/google/options');
+    $('gsc-site').innerHTML = '<option value="">— none —</option>' + opts.sites.map((s) => `<option ${s === g.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
+    $('ga-prop').innerHTML = '<option value="">— none —</option>' + opts.properties.map((p) => `<option value="${esc(p.id)}" ${p.id === g.property ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('');
+  } catch (err) {
+    $('g-msg').textContent = `Couldn't list your Google sites: ${err.message}`;
+    return;
+  }
+  const save = async (body) => {
+    await api('/api/google/selection', { method: 'PUT', body: JSON.stringify(body) });
+    $('g-msg').textContent = 'Saved. Press Get latest data on Results to fetch it.';
+  };
+  $('gsc-site').onchange = () => save({ site: $('gsc-site').value });
+  $('ga-prop').onchange = () => save({ property: $('ga-prop').value });
 }
 
 function integrationCard(i) {

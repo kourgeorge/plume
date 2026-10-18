@@ -14,7 +14,7 @@
       </span>
     </div>
     <p class="muted">Where your site shows up in Google for the searches you care about, week by week. Positions come from Search Console (free); lower is better, 1–10 is page one.</p>
-    <p id="rk-nodata" class="warn" hidden>No Search Console data yet. Connect Google for this website under <a href="#settings">Settings</a>, pick its Search Console site under <a href="#results">Results</a>, then get the data. History builds up from there.</p>
+    <p id="rk-nodata" class="warn" hidden>No Search Console data yet. Connect Google for this website under <a href="#settings">Settings</a>, pick its Search Console site there, then get the data. History builds up from there.</p>
     <form id="rk-form" class="rk-form">
       <input id="rk-input" placeholder="Add a search to track, e.g. driving theory test online" dir="auto" autocomplete="off">
       <button type="submit">Track</button>
