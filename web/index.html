@@ -383,9 +383,11 @@
 
     <!-- Right: the chat assistant -->
     <aside class="col right chat-col" id="col-right">
+      <div class="chat-resize" id="chat-resize" role="separator" aria-orientation="vertical" aria-label="Drag to resize the chat" title="Drag to resize · double-click to reset"></div>
       <div class="chat-head">
         <h2 class="col-title" id="chat-title" dir="auto">Ask Plume</h2>
         <span class="chat-head-actions">
+          <button id="chat-wide" class="icon-btn plain chat-icon" title="Enlarge the chat" aria-label="Enlarge the chat" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button id="chat-new" class="icon-btn plain chat-icon" title="Start a new chat" aria-label="Start a new chat"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
           <label class="icon-btn plain chat-icon chat-history" title="Earlier chats"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><select id="chat-threads" aria-label="Earlier chats"></select></label>
         </span>

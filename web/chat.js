@@ -215,6 +215,41 @@
   input.addEventListener('blur', () => setTimeout(() => ($('mention-box').hidden = true), 150));
 
   $('chat-form').onsubmit = (e) => (e.preventDefault(), send());
+  // Enlarging the panel: drag its left edge, or flip between normal and wide with the header button.
+  const NORMAL_W = 340;
+  const MIN_W = 300;
+  const maxW = () => Math.max(MIN_W, window.innerWidth - 280 - 420); // always leave room for the sidebar and the main page
+  const clampW = (w) => Math.round(Math.min(maxW(), Math.max(MIN_W, w)));
+  const wideBtn = $('chat-wide');
+  let chatW = pref.get('chatWidth', NORMAL_W);
+  function setChatW(w, save = true) {
+    chatW = clampW(w);
+    $('workspace').style.setProperty('--chat-w', `${chatW}px`);
+    const wide = chatW > NORMAL_W + 40;
+    wideBtn.setAttribute('aria-pressed', String(wide));
+    wideBtn.title = wideBtn.ariaLabel = wide ? 'Make the chat smaller' : 'Enlarge the chat';
+    if (save) pref.set('chatWidth', chatW);
+  }
+  setChatW(chatW, false);
+  wideBtn.onclick = () => setChatW(chatW > NORMAL_W + 40 ? NORMAL_W : Math.max(720, window.innerWidth * 0.45));
+  window.addEventListener('resize', () => setChatW(pref.get('chatWidth', NORMAL_W), false));
+  const grip = $('chat-resize');
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    document.body.classList.add('chat-resizing');
+    const move = (ev) => setChatW(window.innerWidth - ev.clientX, false);
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      document.body.classList.remove('chat-resizing');
+      pref.set('chatWidth', chatW);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up, { once: true });
+    grip.addEventListener('pointercancel', up, { once: true });
+  });
+  grip.ondblclick = () => setChatW(NORMAL_W);
+
   $('chat-new').onclick = () => {
     threadId = null;
     clearTimeout(polling);
