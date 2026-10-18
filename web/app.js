@@ -1439,33 +1439,99 @@ async function renderDetails() {
   return renderGeo(body);
 }
 
-/** Traffic: who came, day by day, from where, and to which pages. Google search numbers live under SEO → Search. */
-function renderTraffic(body, s) {
+/** Traffic: from a Google result to a visit, how you rank, what visitors did, where they came from, and which pages they landed on. */
+async function renderTraffic(body, s) {
   if (!s?.from) return (body.innerHTML = emptyNote(NO_GOOGLE));
-  const key = s.now.users != null ? 'users' : s.now.views != null ? 'views' : 'clicks';
-  const perDay = { users: 'Visitors per day', views: 'Views per day', clicks: 'Clicks from Google per day' }[key];
-  const cards = [
-    s.now.users != null && statCard('Visitors', n(s.now.users), delta(change(s.now.users, s.before.users)), `was ${n(s.before.users ?? 0)}`),
-    s.now.sessions != null && statCard('Sessions', n(s.now.sessions), delta(change(s.now.sessions, s.before.sessions)), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
-    s.now.views != null && statCard('Page views', n(s.now.views), delta(change(s.now.views, s.before.views)), s.now.sessions ? `${(s.now.views / s.now.sessions).toFixed(1)} per session` : ''),
-    s.now.revenue && statCard('Revenue', money(s.now.revenue), delta(change(s.now.revenue, s.before.revenue)), 'GA4 conversion value'),
+  const res = await api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null);
+  if (detailsTab !== 'traffic' || summary !== s) return;
+  // No change shown when the period before isn't fully collected yet: "↑ 2,000%" against half-empty days misleads.
+  const SEARCH = ['impressions', 'clicks', 'position'];
+  const fair = (k) => (SEARCH.includes(k) ? s.compare?.search : s.compare?.visits) !== false;
+  const vs = (k, lowerIsBetter) => (fair(k) ? delta(change(s.now[k], s.before[k]), lowerIsBetter) : '');
+  const was = (k, show = n) => (fair(k) ? `was ${show(s.before[k] ?? 0)}` : 'no earlier period to compare yet');
+  const pct = (x, digits = 1) => (x == null ? '—' : `${(100 * x).toFixed(digits)}%`);
+  const ctr = (t) => (t.impressions ? t.clicks / t.impressions : null);
+  const bounce = (t) => (t.engagement == null ? null : 1 - t.engagement);
+  const ratioDelta = (k, now, before, lowerIsBetter) => (fair(k) ? delta(change(now, before), lowerIsBetter) : '');
+
+  // 1. Seen in Google → clicked → visited.
+  const step = (label, value, d) => `<div class="funnel-step"><span class="lbl">${label}</span><span class="val"><b>${value}</b>${d}</span></div>`;
+  const others = s.now.users && s.now.searchUsers ? s.now.users / s.now.searchUsers : null;
+  const funnel = `<div class="chart-card"><div class="funnel">
+      ${step('Saw you in Google', n(s.now.impressions), vs('impressions'))}<span class="funnel-arrow" aria-hidden="true">→</span>
+      ${step('Clicked through', n(s.now.clicks), vs('clicks'))}<span class="funnel-arrow" aria-hidden="true">→</span>
+      ${step('Visited your site', s.now.searchUsers == null ? '—' : n(s.now.searchUsers), s.now.searchUsers == null ? '' : vs('searchUsers'))}
+    </div>
+    <p class="muted small card-foot">${ctr(s.now) == null ? '' : `${pct(ctr(s.now))} click rate`}${others ? ` · ${n(s.now.users)} visitors in all, ${others.toFixed(1)}× the ones from search` : s.now.searchUsers == null ? ` · ${gaMissing(s, 'visits from search')}` : ''}</p></div>`;
+
+  // 3. Ranking, plus the searches that bring people.
+  const queries = (res?.queries ?? []).filter((q) => q.clicks > 0).sort((a, b) => b.clicks - a.clicks).slice(0, 8);
+  const ranking = `<div class="stat-cards an-gap">${[
+    statCard('Average position', s.now.position ? `#${s.now.position.toFixed(0)}` : '—', fair('position') ? placeDelta(s.now.position, s.before.position) : '', 'lower is better'),
+    statCard('Click rate', pct(ctr(s.now), 2), ratioDelta('clicks', ctr(s.now), ctr(s.before)), 'clicks out of times seen'),
+    statCard('Total clicks', n(s.now.clicks), vs('clicks'), was('clicks')),
+  ].join('')}</div>
+  <div class="chart-card"><div class="chart-head"><span>Top searches</span><span class="muted small">last ${s.days} days</span></div>${queries.length
+    ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Clicks</th><th>Click rate</th></tr></thead><tbody>${queries
+        .map((q) => `<tr><td dir="auto" class="cut" title="${esc(q.query)}">${esc(q.query)}</td><td></td><td>${n(q.clicks)}</td><td>${pct(q.ctr)}</td></tr>`)
+        .join('')}</tbody></table>`
+    : emptyNote('No searches with clicks yet.')}</div>`;
+
+  // 4. What visitors did.
+  const mins = (sec) => (sec == null ? '—' : `${Math.floor(sec / 60)}m ${String(Math.round(sec % 60)).padStart(2, '0')}s`);
+  const did = [
+    s.now.users != null && statCard('Visitors', n(s.now.users), vs('users'), was('users')),
+    s.now.sessions != null && statCard('Sessions', n(s.now.sessions), vs('sessions'), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
+    statCard('Returning visitors', n(s.now.returning), vs('returning'), 'had been here before'),
+    statCard('Key events', n(s.now.keyEvents), vs('keyEvents'), 'sign-ups, purchases and other goals'),
+    statCard('Avg. session', mins(s.now.avgSeconds), vs('avgSeconds'), 'time spent per visit'),
+    statCard('Engagement rate', pct(s.now.engagement), ratioDelta('engagement', s.now.engagement, s.before.engagement), 'visits that stayed 10s+, saw 2+ pages or hit a goal'),
+    statCard('Bounce rate', pct(bounce(s.now)), ratioDelta('engagement', bounce(s.now), bounce(s.before), true), 'visits that left without engaging'),
+    s.now.views != null && statCard('Page views', n(s.now.views), vs('views'), s.now.sessions ? `${(s.now.views / s.now.sessions).toFixed(1)} per session` : ''),
+    s.now.revenue ? statCard('Revenue', money(s.now.revenue), vs('revenue'), 'GA4 conversion value') : '',
   ].filter(Boolean);
-  const total = s.sources.reduce((a, r) => a + r.users, 0);
-  const sources = s.sources.length
-    ? `<table class="bars-table"><thead><tr><th>Source</th><th></th><th>Visitors</th></tr></thead><tbody>${s.sources
-        .map((r) => `<tr><td>${esc(r.channel)}</td><td class="bar-cell"><span style="width:${total ? (100 * r.users) / total : 0}%"></span></td><td>${n(r.users)}</td></tr>`)
-        .join('')}</tbody></table>`
-    : emptyNote(gaMissing(s, 'where visitors come from'));
-  const max = Math.max(1, ...s.pages.map((p) => p.views));
-  const pages = s.pages.length
-    ? `<table class="bars-table"><thead><tr><th>Page</th><th></th><th>Views</th></tr></thead><tbody>${s.pages
-        .map((p) => `<tr><td dir="auto" class="cut" title="${esc(p.page)}">${esc(p.page)}</td><td class="bar-cell"><span style="width:${(100 * p.views) / max}%"></span></td><td>${n(p.views)}</td></tr>`)
-        .join('')}</tbody></table>`
-    : emptyNote(gaMissing(s, 'page views'));
-  body.innerHTML = `${cards.length ? `<div class="stat-cards an-gap">${cards.join('')}</div>` : ''}
-    ${block(perDay, null, '<div class="chart-card"><div id="traffic-chart"></div></div>')}
-    <div class="an-row">${block('Where they came from', null, `<div class="chart-card">${sources}</div>`)}${block('Top pages', null, `<div class="chart-card">${pages}</div>`)}</div>`;
-  drawChart($('traffic-chart'), perDay, (key === 'clicks' ? s.daily : s.visits).map((d) => ({ x: d.date, y: d[key] ?? 0 })), s.before[key] ? s.before[key] / s.days : null);
+  const noNew = s.now.engagement == null && s.now.users != null;
+
+  // 5–7. Bars tables: channels, sites, landing pages, countries.
+  const bars = (rows, head, val, label, total) => {
+    const max = Math.max(1, ...rows.map(val));
+    return `<table class="bars-table"><thead><tr><th>${head[0]}</th><th></th><th>${head[1]}</th></tr></thead><tbody>${rows
+      .map((r) => `<tr><td dir="auto" class="cut" title="${esc(String(r.label ?? ''))}">${label(r)}</td><td class="bar-cell"><span style="width:${(100 * val(r)) / max}%"></span></td><td>${total ? pct(val(r) / total) : n(val(r))}</td></tr>`)
+      .join('')}</tbody></table>`;
+  };
+  const chTotal = s.channels.reduce((a, r) => a + r.users, 0);
+  const channels = s.channels.length ? bars(s.channels, ['Channel', 'Share'], (r) => r.users, (r) => esc(r.label), chTotal) : emptyNote(gaMissing(s, 'where visitors come from'));
+  const sites = s.topSources.length ? bars(s.topSources, ['Site', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.channels.length ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see which sites sent them.' : gaMissing(s, 'which sites send visitors'));
+  const landing = s.landing.length ? bars(s.landing, ['Page', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.now.users != null ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see where visits start.' : gaMissing(s, 'where visits start'));
+  const names = new Intl.DisplayNames(undefined, { type: 'region' });
+  const flag = (code) => (code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '🌐');
+  const country = (r) => {
+    let name = r.country.toUpperCase();
+    try { if (r.code) name = names.of(r.code) ?? name; } catch {}
+    return `<span class="flag" aria-hidden="true">${flag(r.code)}</span> ${esc(name)}`;
+  };
+  const cTotal = s.countries.reduce((a, r) => a + r.clicks, 0);
+  const world = s.countries.length ? bars(s.countries.map((r) => ({ ...r, label: r.country })), ['Country', 'Share'], (r) => r.clicks, country, cTotal) : emptyNote('Press <b>Get latest data</b> on <a href="#results">Results</a> to see searchers’ countries.');
+
+  body.innerHTML = `${block('How people found you', null, `<p class="muted small card-note">From a Google result to a visit on your site.</p>${funnel}`)}
+    ${block('Traffic over time', null, `<div class="chart-card"><div id="traffic-chart"></div></div>`)}
+    ${block('How well you’re ranking', ['#rankings', 'Rankings'], ranking)}
+    ${block('What they did on your site', null, `${noNew ? `<p class="muted small card-note">Press <b>Get latest data</b> on <a href="#results">Results</a> to fill in returning visitors, key events and engagement.</p>` : ''}<div class="stat-cards">${did.join('')}</div>`)}
+    <div class="an-row">${block('Where they came from', null, `<div class="chart-card">${channels}</div>`)}${block('Top sources', null, `<div class="chart-card">${sites}</div>`)}</div>
+    <div class="an-row">${block('Top landing pages', null, `<div class="chart-card">${landing}</div>`)}${block('Where in the world', null, `<div class="chart-card"><p class="muted small card-note">Google search clicks by country.</p>${world}</div>`)}</div>
+    <p class="muted small">Google Analytics + Search Console · ${s.compare?.search === false || s.compare?.visits === false ? `changes show once Plume has collected the ${s.days} days before this period` : `changes compare with the ${s.days} days before`}</p>`;
+
+  // Visits and search clicks share a chart; Search Console runs a day or two behind, so both are keyed by date.
+  const clicksBy = new Map(s.daily.map((d) => [d.date, d.clicks]));
+  const visitKey = s.now.users != null ? 'users' : s.now.views != null ? 'views' : null;
+  const dates = [...new Set([...(visitKey ? s.visits.map((d) => d.date) : []), ...s.daily.map((d) => d.date)])].sort().slice(-s.days);
+  const visitBy = new Map(s.visits.map((d) => [d.date, d[visitKey]]));
+  if (visitKey)
+    drawChart($('traffic-chart'), 'Visits and search clicks', dates.map((d) => ({ x: d, y: visitBy.get(d) ?? 0 })), null, {
+      label: visitKey === 'users' ? 'Visits' : 'Page views',
+      other: { label: 'Search clicks', points: dates.map((d) => ({ x: d, y: clicksBy.get(d) ?? null })) },
+    });
+  else drawChart($('traffic-chart'), 'Search clicks', dates.map((d) => ({ x: d, y: clicksBy.get(d) ?? 0 })), null, { label: 'Search clicks' });
 }
 
 /** SEO has three parts, one at a time: how Google search is going, how fast pages load, and what the on-page check found. */
@@ -1636,20 +1702,29 @@ async function renderGeo(body) {
       <table class="bars-table"><tbody>${voice.map((x) => `<tr class="${x.you ? 'you' : ''}"><td dir="auto">${x.you ? '<b>' : ''}${esc(x.name)}${x.you ? '</b>' : ''}</td><td class="bar-cell"><span style="width:${(100 * x.answers) / maxVoice}%"></span></td><td>${x.answers}</td></tr>`).join('')}</tbody></table></div></div></div>`;
 }
 
-/** A plain SVG line chart: this period as a line, last period's daily average as a dashed line. */
-function drawChart(box, title, points, avg) {
+/**
+ * A plain SVG line chart: this period as a line, last period's daily average as a dashed line.
+ * `opts.other` adds a second line (search clicks next to visits); days it has no number for are skipped.
+ */
+function drawChart(box, title, points, avg, opts = {}) {
   const W = Math.max(320, box.clientWidth || 1000), H = 220, L = 36, B = 22, T = 18;
-  const max = Math.max(1, avg ?? 0, ...points.map((p) => p.y));
+  const second = opts.other?.points ?? [];
+  const max = Math.max(1, avg ?? 0, ...points.map((p) => p.y), ...second.map((p) => p.y ?? 0));
   // Round the top up to a tidy number so the line fills the chart instead of hugging the floor.
   const mag = 10 ** Math.floor(Math.log10(max));
   const top = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((t) => t >= max) ?? 10 * mag;
   const x = (i) => L + (i * (W - L - 8)) / Math.max(1, points.length - 1);
+  let path2 = '';
+  second.forEach((p, i) => {
+    if (p.y != null) path2 += `${path2 && second[i - 1]?.y != null ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`;
+  });
   const y = (v) => T + (1 - v / top) * (H - T - B);
   const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join('');
   const area = `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z`;
   const step = Math.ceil(points.length / 8);
   const last = points[points.length - 1];
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="line-chart" role="img" aria-label="${esc(title)}">
+    ${path2 ? `<path d="${path2}" class="line second"/>` : ''}
     ${(top < 2 ? [0, 1] : [0, 0.5, 1]).map((f) => `<line x1="${L}" x2="${W}" y1="${y(top * f)}" y2="${y(top * f)}" class="grid"/><text x="${L - 6}" y="${y(top * f) + 4}" class="axis" text-anchor="end">${Math.round(top * f).toLocaleString()}</text>`).join('')}
     ${avg != null ? `<line x1="${L}" x2="${W - 8}" y1="${y(avg)}" y2="${y(avg)}" class="avg"/>` : ''}
     <path d="${area}" class="area"/><path d="${path}" class="line"/>
@@ -1657,7 +1732,7 @@ function drawChart(box, title, points, avg) {
     <text x="${x(points.length - 1)}" y="${y(last.y) - 9}" class="axis strong" text-anchor="end">${fmtDay(last.x)} · ${n(last.y)}</text>
     ${points.map((p, i) => ((i % step === 0 && points.length - 1 - i >= step / 2) || i === points.length - 1 ? `<text x="${x(i)}" y="${H - 4}" class="axis" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${p.x.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/')}</text>` : '')).join('')}
   </svg>
-  <div class="chart-legend muted small"><span><span class="lg-line"></span>This period</span>${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>`;
+  <div class="chart-legend muted small"><span><span class="lg-line"></span>${esc(opts.label ?? 'This period')}</span>${opts.other ? `<span><span class="lg-line second"></span>${esc(opts.other.label)}</span>` : ''}${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>`;
 }
 
 for (const b of $('details-tabs').querySelectorAll('button')) b.onclick = () => ((detailsTab = b.dataset.tab), pref.set('analyticsTab', detailsTab), renderDetails());

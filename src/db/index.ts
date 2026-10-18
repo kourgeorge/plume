@@ -73,13 +73,41 @@ CREATE TABLE IF NOT EXISTS ga_daily (
 -- Whole-site numbers per day. Visitors can't be added up from pages (one visitor sees many), so they come separately.
 CREATE TABLE IF NOT EXISTS ga_site_daily (
   date TEXT PRIMARY KEY,
-  users INTEGER, sessions INTEGER, revenue REAL
+  users INTEGER, sessions INTEGER, revenue REAL,
+  key_events INTEGER, engaged_sessions INTEGER, avg_seconds REAL, new_users INTEGER
 );
 CREATE TABLE IF NOT EXISTS ga_sources (
   date TEXT NOT NULL,
   channel TEXT NOT NULL,          -- GA4 default channel group: Organic Search, Direct, ...
   users INTEGER, sessions INTEGER,
   PRIMARY KEY (date, channel)
+);
+-- Where visits came from in detail: the channel plus the site that sent them (google, chatgpt.com, ...).
+CREATE TABLE IF NOT EXISTS ga_source_detail (
+  date TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  source TEXT NOT NULL,
+  users INTEGER, sessions INTEGER,
+  PRIMARY KEY (date, channel, source)
+);
+-- The first page of each visit.
+CREATE TABLE IF NOT EXISTS ga_landing (
+  date TEXT NOT NULL,
+  page TEXT NOT NULL,
+  users INTEGER, sessions INTEGER,
+  PRIMARY KEY (date, page)
+);
+-- Whole-site search numbers per day. Adding up gsc_daily falls short: Google leaves rare searches out of the by-search report.
+CREATE TABLE IF NOT EXISTS gsc_site_daily (
+  date TEXT PRIMARY KEY,
+  clicks INTEGER, impressions INTEGER, position REAL
+);
+-- Google search clicks by the searcher's country (three-letter codes, e.g. isr).
+CREATE TABLE IF NOT EXISTS gsc_country (
+  date TEXT NOT NULL,
+  country TEXT NOT NULL,
+  clicks INTEGER, impressions INTEGER,
+  PRIMARY KEY (date, country)
 );
 CREATE TABLE IF NOT EXISTS task_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,6 +307,10 @@ const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'pages', column: 'schema_types', type: "TEXT NOT NULL DEFAULT '[]'" },
   { table: 'pages', column: 'page_date', type: 'TEXT' },
   { table: 'competitors', column: 'socials', type: "TEXT NOT NULL DEFAULT '{}'" },
+  { table: 'ga_site_daily', column: 'key_events', type: 'INTEGER' },
+  { table: 'ga_site_daily', column: 'engaged_sessions', type: 'INTEGER' },
+  { table: 'ga_site_daily', column: 'avg_seconds', type: 'REAL' },
+  { table: 'ga_site_daily', column: 'new_users', type: 'INTEGER' },
 ];
 
 function open(file: string, schema: string): Database.Database {

@@ -52,6 +52,19 @@ export async function pullSearchConsole(site: string, today = new Date()): Promi
     db.prepare('DELETE FROM gsc_daily WHERE date BETWEEN ? AND ?').run(startDate, endDate);
     for (const r of rows) ins.run(r.keys[0], r.keys[1], r.keys[2], r.clicks, r.impressions, r.position);
   })();
+  // Whole-site totals and countries come from their own reports: Google leaves rare searches out of the
+  // by-search report above, so adding it up undercounts.
+  type Small = { rows?: { keys: string[]; clicks: number; impressions: number; position: number }[] };
+  const report = (dimensions: string[]) =>
+    googleApi<Small>(`${GOOGLE.gsc}/sites/${encodeURIComponent(site)}/searchAnalytics/query`, { startDate, endDate, dimensions, rowLimit: 25000 });
+  const [totals, countries] = [await report(['date']), await report(['date', 'country'])];
+  const insTotal = db.prepare('INSERT OR REPLACE INTO gsc_site_daily VALUES (?, ?, ?, ?)');
+  const insCountry = db.prepare('INSERT OR REPLACE INTO gsc_country VALUES (?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const t of ['gsc_site_daily', 'gsc_country']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(startDate, endDate);
+    for (const r of totals.rows ?? []) insTotal.run(r.keys[0], r.clicks, r.impressions, r.position);
+    for (const r of countries.rows ?? []) insCountry.run(r.keys[0], r.keys[1], r.clicks, r.impressions);
+  })();
   return rows.length;
 }
 
@@ -80,19 +93,25 @@ async function gaReport(property: string, dimensions: string[], metrics: string[
 
 export async function pullAnalytics(property: string, today = new Date()): Promise<number> {
   const pages = await gaReport(property, ['date', 'pagePath'], ['screenPageViews', 'sessions', 'engagementRate', 'averageSessionDuration']);
-  const site = await gaReport(property, ['date'], ['totalUsers', 'sessions', 'totalRevenue']);
+  const site = await gaReport(property, ['date'], ['totalUsers', 'sessions', 'totalRevenue', 'keyEvents', 'engagedSessions', 'averageSessionDuration', 'newUsers']);
   const sources = await gaReport(property, ['date', 'sessionDefaultChannelGroup'], ['totalUsers', 'sessions']);
+  const detail = await gaReport(property, ['date', 'sessionDefaultChannelGroup', 'sessionSource'], ['totalUsers', 'sessions']);
+  const landing = await gaReport(property, ['date', 'landingPage'], ['activeUsers', 'sessions']);
   const db = getDb();
   const from = daysAgo(PULL_DAYS, today), to = daysAgo(1, today);
   const nums = (row: GaRow) => row.metricValues.map((m) => Number(m.value));
   db.transaction(() => {
-    for (const t of ['ga_daily', 'ga_site_daily', 'ga_sources']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(from, to);
+    for (const t of ['ga_daily', 'ga_site_daily', 'ga_sources', 'ga_source_detail', 'ga_landing']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(from, to);
     const insPage = db.prepare('INSERT OR REPLACE INTO ga_daily VALUES (?, ?, ?, ?, ?, ?)');
     for (const row of pages) insPage.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value, ...nums(row));
-    const insSite = db.prepare('INSERT OR REPLACE INTO ga_site_daily VALUES (?, ?, ?, ?)');
+    const insSite = db.prepare('INSERT OR REPLACE INTO ga_site_daily (date, users, sessions, revenue, key_events, engaged_sessions, avg_seconds, new_users) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const row of site) insSite.run(gaDate(row.dimensionValues[0].value), ...nums(row));
     const insSource = db.prepare('INSERT OR REPLACE INTO ga_sources VALUES (?, ?, ?, ?)');
     for (const row of sources) insSource.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || 'Unassigned', ...nums(row));
+    const insDetail = db.prepare('INSERT OR REPLACE INTO ga_source_detail VALUES (?, ?, ?, ?, ?)');
+    for (const row of detail) insDetail.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || 'Unassigned', row.dimensionValues[2].value || '(not set)', ...nums(row));
+    const insLanding = db.prepare('INSERT OR REPLACE INTO ga_landing VALUES (?, ?, ?, ?)');
+    for (const row of landing) insLanding.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || '(not set)', ...nums(row));
   })();
   return pages.length;
 }

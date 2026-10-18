@@ -1,5 +1,6 @@
 import { getDb } from '../db';
 import { listDrafts } from '../queue';
+import { countryCode } from './countries';
 
 export interface QueryRow { query: string; clicks: number; impressions: number; ctr: number; position: number }
 export interface PageRow { page: string; clicks: number; impressions: number; position: number; views: number | null; engagement: number | null }
@@ -164,34 +165,95 @@ export function performanceNotes(now = new Date()): string | null {
   return lines.join('\n');
 }
 
-export interface Totals { clicks: number; impressions: number; position: number | null; views: number | null; sessions: number | null; users: number | null; revenue: number | null }
+export interface Totals {
+  clicks: number; impressions: number; position: number | null; views: number | null; sessions: number | null; users: number | null; revenue: number | null;
+  /** Visitors who had been before (all visitors minus first-time ones). */
+  returning: number | null;
+  keyEvents: number | null;
+  /** Share of sessions that were engaged (0–1); the bounce rate is the rest. */
+  engagement: number | null;
+  /** Average session length in seconds. */
+  avgSeconds: number | null;
+  /** Visitors who arrived from a search engine. */
+  searchUsers: number | null;
+}
 export interface DayPoint { date: string; clicks: number; impressions: number; views: number | null }
 export interface VisitDay { date: string; users: number | null; views: number | null }
 export interface SourceRow { channel: string; users: number; sessions: number; before: number }
+export interface NamedCount { label: string; users: number }
+export interface CountryRow { country: string; code: string | null; clicks: number }
 export interface Summary {
   days: number; from: string | null; to: string | null; now: Totals; before: Totals; daily: DayPoint[];
   /** Analytics per day, on Analytics' own dates (Search Console runs a day or two behind). */
   visits: VisitDay[];
   sources: SourceRow[]; pages: { page: string; views: number; sessions: number }[];
+  /** Plain-word channels (Search, Direct, Social, AI Assistant, ...) by visitors. */
+  channels: NamedCount[];
+  /** The sites that sent visitors (google, chatgpt.com, ...). */
+  topSources: NamedCount[];
+  /**
+   * Whether the period before has a full set of days to compare with. Plume only starts collecting
+   * when Google is connected, so early on the previous period is partly empty and changes would mislead.
+   */
+  compare: { search: boolean; visits: boolean };
+  /** First page of each visit, by visitors. */
+  landing: NamedCount[];
+  /** Search clicks by the searcher's country. */
+  countries: CountryRow[];
+}
+
+// AI chat sites, so they show as their own channel even where GA4 files them under Referral.
+const AI_SOURCE = /chatgpt|openai|perplexity|gemini\.google|bard\.google|claude\.ai|copilot|deepseek|grok|you\.com|phind|meta\.ai|mistral/i;
+
+/** GA4's channel groups, folded into fewer, plainer names. */
+export function channelName(channel: string, source: string): string {
+  if (AI_SOURCE.test(source) || /ai assistant/i.test(channel)) return 'AI Assistant';
+  if (/search|shopping/i.test(channel)) return 'Search';
+  if (/social/i.test(channel)) return 'Social';
+  if (/video/i.test(channel)) return 'Video';
+  if (/direct/i.test(channel)) return 'Direct';
+  if (/referral/i.test(channel)) return 'Other sites';
+  if (/email/i.test(channel)) return 'Email';
+  if (/display|paid other|cross-network|affiliate/i.test(channel)) return 'Ads';
+  return 'Other';
 }
 
 const shift = (date: string, days: number) => new Date(new Date(`${date}T00:00:00Z`).getTime() + days * 86400e3).toISOString().slice(0, 10);
 
 function totals(gscFrom: string | null, gscTo: string | null, gaFrom: string | null, gaTo: string | null): Totals {
   const db = getDb();
+  // The whole-site table counts searches Google leaves out of the by-search one; older pulls only have the latter.
+  const gscSql = (table: string) => `SELECT SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / NULLIF(SUM(impressions), 0) position, COUNT(*) n FROM ${table} WHERE date BETWEEN ? AND ?`;
+  type G = { clicks: number | null; impressions: number | null; position: number | null; n: number };
+  const whole = gscFrom && gscTo ? (db.prepare(gscSql('gsc_site_daily')).get(gscFrom, gscTo) as G) : null;
   const s = gscFrom && gscTo
-    ? (db.prepare(`SELECT SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / NULLIF(SUM(impressions), 0) position FROM gsc_daily WHERE date BETWEEN ? AND ?`).get(gscFrom, gscTo) as { clicks: number | null; impressions: number | null; position: number | null })
+    ? whole?.n ? whole : (db.prepare(gscSql('gsc_daily')).get(gscFrom, gscTo) as G)
     : { clicks: 0, impressions: 0, position: null };
   const a = gaFrom && gaTo
     ? (db.prepare(`SELECT SUM(views) views, SUM(sessions) sessions FROM ga_daily WHERE date BETWEEN ? AND ?`).get(gaFrom, gaTo) as { views: number | null; sessions: number | null })
     : { views: null, sessions: null };
   // Whole-site table: only filled by pulls made since it was added, so fall back to page sessions until then.
   const w = gaFrom && gaTo
-    ? (db.prepare(`SELECT SUM(users) users, SUM(sessions) sessions, SUM(revenue) revenue, COUNT(*) n FROM ga_site_daily WHERE date BETWEEN ? AND ?`).get(gaFrom, gaTo) as { users: number | null; sessions: number | null; revenue: number | null; n: number })
-    : { users: null, sessions: null, revenue: null, n: 0 };
+    ? (db.prepare(`SELECT SUM(users) users, SUM(sessions) sessions, SUM(revenue) revenue, COUNT(*) n,
+          SUM(key_events) key_events, SUM(engaged_sessions) engaged, SUM(avg_seconds * sessions) / NULLIF(SUM(CASE WHEN avg_seconds IS NULL THEN 0 ELSE sessions END), 0) avg_seconds,
+          SUM(new_users) new_users, COUNT(key_events) has_new
+        FROM ga_site_daily WHERE date BETWEEN ? AND ?`).get(gaFrom, gaTo) as { users: number | null; sessions: number | null; revenue: number | null; n: number; key_events: number | null; engaged: number | null; avg_seconds: number | null; new_users: number | null; has_new: number })
+    : { users: null, sessions: null, revenue: null, n: 0, key_events: null, engaged: null, avg_seconds: null, new_users: null, has_new: 0 };
+  // Search visitors: only the "Organic/Paid Search" channels.
+  const sv = gaFrom && gaTo
+    ? (db.prepare(`SELECT SUM(users) users, COUNT(*) n FROM ga_sources WHERE date BETWEEN ? AND ? AND (channel LIKE '%Search%' OR channel LIKE '%Shopping%')`).get(gaFrom, gaTo) as { users: number | null; n: number })
+    : { users: null, n: 0 };
+  const anySources = gaFrom && gaTo ? (db.prepare('SELECT 1 FROM ga_sources WHERE date BETWEEN ? AND ? LIMIT 1').get(gaFrom, gaTo) as unknown) != null : false;
+  // The newer columns stay empty on days pulled before they were added.
+  const fresh = w.has_new > 0;
   return {
     clicks: s.clicks ?? 0, impressions: s.impressions ?? 0, position: s.position, views: a.views,
     sessions: w.n ? w.sessions : a.sessions, users: w.n ? w.users : null, revenue: w.n ? w.revenue ?? 0 : null,
+    returning: fresh && w.users != null && w.new_users != null ? Math.max(0, w.users - w.new_users) : null,
+    keyEvents: fresh ? w.key_events ?? 0 : null,
+    engagement: fresh && w.sessions ? (w.engaged ?? 0) / w.sessions : null,
+    avgSeconds: fresh ? w.avg_seconds : null,
+    searchUsers: anySources ? sv.users ?? 0 : null,
   };
 }
 
@@ -207,7 +269,8 @@ export function resultsSummary(days = 7): Summary {
   const from = gscFrom ?? gaFrom;
   const daily: DayPoint[] = [];
   if (from) {
-    const gsc = new Map((db.prepare(`SELECT date, SUM(clicks) clicks, SUM(impressions) impressions FROM gsc_daily WHERE date >= ? GROUP BY date`).all(from) as { date: string; clicks: number; impressions: number }[]).map((r) => [r.date, r]));
+    const hasWhole = (db.prepare('SELECT 1 FROM gsc_site_daily WHERE date >= ? LIMIT 1').get(from) as unknown) != null;
+    const gsc = new Map((db.prepare(hasWhole ? 'SELECT date, clicks, impressions FROM gsc_site_daily WHERE date >= ?' : 'SELECT date, SUM(clicks) clicks, SUM(impressions) impressions FROM gsc_daily WHERE date >= ? GROUP BY date').all(from) as { date: string; clicks: number; impressions: number }[]).map((r) => [r.date, r]));
     const ga = new Map((db.prepare(`SELECT date, SUM(views) views FROM ga_daily WHERE date >= ? GROUP BY date`).all(from) as { date: string; views: number }[]).map((r) => [r.date, r.views]));
     for (let i = 0; i < days; i++) {
       const d = shift(from, i);
@@ -216,7 +279,15 @@ export function resultsSummary(days = 7): Summary {
   }
   let sources: SourceRow[] = [];
   let pages: Summary['pages'] = [];
+  let channels: NamedCount[] = [];
+  let topSources: NamedCount[] = [];
+  let landing: NamedCount[] = [];
+  let countries: CountryRow[] = [];
   const visits: VisitDay[] = [];
+  if (gscFrom && gscTo) {
+    countries = (db.prepare(`SELECT country, SUM(clicks) clicks FROM gsc_country WHERE date BETWEEN ? AND ? GROUP BY country HAVING SUM(clicks) > 0 ORDER BY clicks DESC LIMIT 8`).all(gscFrom, gscTo) as { country: string; clicks: number }[])
+      .map((r) => ({ ...r, code: countryCode(r.country) }));
+  }
   if (gaFrom && gaTo) {
     const users = new Map((db.prepare(`SELECT date, users FROM ga_site_daily WHERE date >= ?`).all(gaFrom) as { date: string; users: number }[]).map((r) => [r.date, r.users]));
     const views = new Map((db.prepare(`SELECT date, SUM(views) views FROM ga_daily WHERE date >= ? GROUP BY date`).all(gaFrom) as { date: string; views: number }[]).map((r) => [r.date, r.views]));
@@ -228,6 +299,19 @@ export function resultsSummary(days = 7): Summary {
     sources = (db.prepare(`SELECT channel, SUM(users) users, SUM(sessions) sessions FROM ga_sources WHERE date BETWEEN ? AND ? GROUP BY channel ORDER BY users DESC`).all(gaFrom, gaTo) as { channel: string; users: number; sessions: number }[])
       .map((r) => ({ ...r, before: was.get(r.channel) ?? 0 }));
     pages = db.prepare(`SELECT path page, SUM(views) views, SUM(sessions) sessions FROM ga_daily WHERE date BETWEEN ? AND ? GROUP BY path ORDER BY views DESC LIMIT 10`).all(gaFrom, gaTo) as Summary['pages'];
+    const detail = db.prepare(`SELECT channel, source, SUM(users) users FROM ga_source_detail WHERE date BETWEEN ? AND ? GROUP BY channel, source`).all(gaFrom, gaTo) as { channel: string; source: string; users: number }[];
+    const grouped = new Map<string, number>();
+    // Older pulls have no per-site detail yet: fall back to the channel groups alone.
+    for (const r of detail.length ? detail : sources.map((x) => ({ channel: x.channel, source: '', users: x.users }))) {
+      const name = channelName(r.channel, r.source);
+      grouped.set(name, (grouped.get(name) ?? 0) + r.users);
+    }
+    channels = [...grouped].map(([label, users]) => ({ label, users })).filter((r) => r.users > 0).sort((a, b) => b.users - a.users);
+    topSources = (db.prepare(`SELECT source label, SUM(users) users FROM ga_source_detail WHERE date BETWEEN ? AND ? GROUP BY source ORDER BY users DESC LIMIT 8`).all(gaFrom, gaTo) as NamedCount[]);
+    landing = (db.prepare(`SELECT page label, SUM(users) users FROM ga_landing WHERE date BETWEEN ? AND ? GROUP BY page ORDER BY users DESC LIMIT 8`).all(gaFrom, gaTo) as NamedCount[]);
   }
-  return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, sources, pages };
+  const covered = (table: string, start: string | null) =>
+    start != null && (db.prepare(`SELECT COUNT(DISTINCT date) n FROM ${table} WHERE date BETWEEN ? AND ?`).get(shift(start, -days), shift(start, -1)) as { n: number }).n >= days;
+  const compare = { search: covered('gsc_daily', gscFrom), visits: covered('ga_daily', gaFrom) };
+  return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, sources, pages, compare, channels, topSources, landing, countries };
 }

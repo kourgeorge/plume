@@ -35,6 +35,20 @@ const server = http.createServer((req, res) => {
       return json(200, { access_token: `a${tokenCount}`, expires_in: 3600 });
     }
     if (req.url === '/gsc/sites') return json(200, { siteEntry: [{ siteUrl: 'sc-domain:acme.com', permissionLevel: 'siteOwner' }, { siteUrl: 'https://x.com/', permissionLevel: 'siteUnverifiedUser' }] });
+    if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query') && JSON.parse(body).dimensions.length === 1)
+      // Includes searches Google keeps out of the by-search report.
+      return json(200, { rows: [
+        { keys: ['2026-10-13'], clicks: 30, impressions: 900, position: 5 },
+        { keys: ['2026-10-12'], clicks: 3, impressions: 400, position: 14 },
+        { keys: ['2026-09-20'], clicks: 10, impressions: 200, position: 4 },
+      ] });
+    if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query') && body.includes('country'))
+      return json(200, { rows: [
+        { keys: ['2026-10-13', 'isr'], clicks: 18, impressions: 700 },
+        { keys: ['2026-10-12', 'pse'], clicks: 3, impressions: 100 },
+        { keys: ['2026-10-12', 'zzz'], clicks: 2, impressions: 100 },
+        { keys: ['2026-09-20', 'isr'], clicks: 10, impressions: 200 },
+      ] });
     if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query'))
       return json(200, { rows: [
         { keys: ['2026-10-13', 'widget pricing', 'https://acme.com/pricing'], clicks: 20, impressions: 400, position: 4 },
@@ -52,6 +66,17 @@ const server = http.createServer((req, res) => {
       if (dim) return json(200, { rows: [{ dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '2' }] }, { dimensionValues: [{ value: '/' }], metricValues: [{ value: '6' }] }] });
       return json(200, { rows: [{ metricValues: [{ value: b.minuteRanges[0].startMinutesAgo === 29 ? '3' : '8' }] }] });
     }
+    if (req.url === '/data/properties/123:runReport' && body.includes('sessionSource'))
+      return json(200, { rows: [
+        { dimensionValues: [{ value: '20261015' }, { value: 'Organic Search' }, { value: 'google' }], metricValues: [{ value: '280' }, { value: '330' }] },
+        { dimensionValues: [{ value: '20261015' }, { value: 'Referral' }, { value: 'chatgpt.com' }], metricValues: [{ value: '20' }, { value: '20' }] },
+        { dimensionValues: [{ value: '20261014' }, { value: 'Direct' }, { value: '(direct)' }], metricValues: [{ value: '100' }, { value: '120' }] },
+      ] });
+    if (req.url === '/data/properties/123:runReport' && body.includes('landingPage'))
+      return json(200, { rows: [
+        { dimensionValues: [{ value: '20261015' }, { value: '/' }], metricValues: [{ value: '250' }, { value: '300' }] },
+        { dimensionValues: [{ value: '20261014' }, { value: '/pricing' }], metricValues: [{ value: '90' }, { value: '100' }] },
+      ] });
     if (req.url === '/data/properties/123:runReport' && body.includes('sessionDefaultChannelGroup'))
       return json(200, { rows: [
         { dimensionValues: [{ value: '20261015' }, { value: 'Organic Search' }], metricValues: [{ value: '300' }, { value: '350' }] },
@@ -60,8 +85,8 @@ const server = http.createServer((req, res) => {
       ] });
     if (req.url === '/data/properties/123:runReport' && body.includes('totalUsers'))
       return json(200, { rows: [
-        { dimensionValues: [{ value: '20261015' }], metricValues: [{ value: '300' }, { value: '500' }, { value: '90' }] },
-        { dimensionValues: [{ value: '20261014' }], metricValues: [{ value: '100' }, { value: '100' }, { value: '10' }] },
+        { dimensionValues: [{ value: '20261015' }], metricValues: [{ value: '300' }, { value: '500' }, { value: '90' }, { value: '4' }, { value: '300' }, { value: '100' }, { value: '260' }] },
+        { dimensionValues: [{ value: '20261014' }], metricValues: [{ value: '100' }, { value: '100' }, { value: '10' }, { value: '1' }, { value: '30' }, { value: '200' }, { value: '100' }] },
       ] });
     if (req.url === '/data/properties/123:runReport')
       return json(200, { rows: [
@@ -162,6 +187,30 @@ test('summary: visitors and revenue come from the whole-site report; sources com
   assert.deepEqual(s.sources.map((r) => [r.channel, r.users, r.before]), [['Organic Search', 300, 0], ['Direct', 100, 50]]);
   assert.equal(s.pages[0].page, '/pricing');
   assert.equal(s.pages[0].views, 600);
+});
+
+test('summary: returning visitors, key events, engagement, channels, sites, landing pages and countries', () => {
+  const s = results.resultsSummary(7);
+  assert.equal(s.now.returning, 40, '400 visitors minus 360 first-timers');
+  assert.equal(s.now.keyEvents, 5);
+  assert.ok(Math.abs(s.now.engagement - 330 / 600) < 1e-9, `engagement ${s.now.engagement}`);
+  assert.ok(Math.abs(s.now.avgSeconds - (100 * 500 + 200 * 100) / 600) < 1e-9, 'session length is averaged by sessions');
+  assert.equal(s.now.searchUsers, 300, 'only search channels count as visits from search');
+  assert.equal(s.now.clicks, 33, 'search totals include the searches Google leaves out of the by-search report');
+  assert.equal(s.now.impressions, 1300);
+  assert.equal(s.daily.find((d) => d.date === '2026-10-13').clicks, 30);
+  assert.deepEqual(s.channels.map((r) => [r.label, r.users]), [['Search', 280], ['Direct', 100], ['AI Assistant', 20]]);
+  assert.deepEqual(s.topSources.map((r) => r.label), ['google', '(direct)', 'chatgpt.com']);
+  assert.deepEqual(s.landing.map((r) => [r.label, r.users]), [['/', 250], ['/pricing', 90]]);
+  assert.deepEqual(s.countries.map((r) => [r.country, r.code, r.clicks]), [['isr', 'IL', 18], ['pse', 'PS', 3], ['zzz', null, 2]], 'the 2026-09-20 row is outside the window');
+});
+
+test('channel names are plain and AI chat sites are their own channel', () => {
+  assert.equal(results.channelName('Organic Search', 'google'), 'Search');
+  assert.equal(results.channelName('Referral', 'perplexity.ai'), 'AI Assistant');
+  assert.equal(results.channelName('Organic Social', 'm.facebook.com'), 'Social');
+  assert.equal(results.channelName('Organic Video', 'youtube.com'), 'Video');
+  assert.equal(results.channelName('Referral', 'example.org'), 'Other sites');
 });
 
 test('GA dates convert from YYYYMMDD', () => {
