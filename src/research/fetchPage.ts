@@ -44,7 +44,9 @@ export function visibleWords(html: string): number {
 export function looksLikeChallenge(status: number, headers: Headers | Record<string, string>, html: string): string | null {
   const h = (k: string) => (headers instanceof Headers ? headers.get(k) : headers[k]) ?? '';
   const body = html.slice(0, 20000).toLowerCase();
-  if (h('cf-mitigated') === 'challenge' || /just a moment\.\.\.|cf-chl-|challenge-platform/.test(body)) return 'Cloudflare bot protection';
+  if (h('cf-mitigated') === 'challenge' || /just a moment\.\.\.|cf-chl-/.test(body)) return 'Cloudflare bot protection';
+  // Cloudflare also adds a background challenge-platform script to normal pages; only a near-empty page is a real challenge.
+  if (/challenge-platform/.test(body) && visibleWords(html) < MIN_WORDS) return 'Cloudflare bot protection';
   if (/captcha|are you a robot|access denied|request unsuccessful\. incapsula|_incapsula_|perimeterx|px-captcha|datadome/.test(body) && visibleWords(html) < 200)
     return 'bot protection (captcha / firewall)';
   if ((status === 403 || status === 429 || status === 503) && /cloudflare|akamai|sucuri|imperva|incapsula/i.test(`${h('server')} ${h('x-cdn')} ${h('x-sucuri-id') ? 'sucuri' : ''}`))

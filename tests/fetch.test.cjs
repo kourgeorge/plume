@@ -34,6 +34,12 @@ test('a JavaScript-only page is opened in the browser', async () => {
   assert.equal(r.via, 'browser');
 });
 
+test("Cloudflare's background script on a normal page is not a challenge", () => {
+  const html = real().replace('</body>', "<script>a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js'</script></body>");
+  assert.equal(looksLikeChallenge(200, new Headers(), html), null);
+  assert.equal(looksLikeChallenge(200, new Headers(), "<html><body><script src='/cdn-cgi/challenge-platform/x.js'></script></body></html>"), 'Cloudflare bot protection');
+});
+
 test('a firewall challenge is recognised and the browser is tried', async () => {
   assert.equal(looksLikeChallenge(403, new Headers({ 'cf-mitigated': 'challenge' }), ''), 'Cloudflare bot protection');
   const blocked = await fetchHttp('https://a.test/', respond(challenge, 403, { server: 'cloudflare' }));

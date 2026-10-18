@@ -193,9 +193,6 @@ async function renderChrome() {
 
   // These don't block the page: each fills in when it arrives.
   api('/api/profile/product').then((d) => ($('summary').textContent = summaryOf(d.body) || 'The business summary appears here once research is done.'), () => {});
-  api('/api/google').then((g) => {
-    $('google-pill').innerHTML = !g.configured ? '' : g.connected ? '<span title="Search Console and Analytics are connected">Google ✓</span>' : `<a href="${withSite('/api/google/connect')}">Connect Google</a>`;
-  }, () => {});
   api('/api/budget').then((b) => {
     $('cost-link').textContent = b.limit ? `AI $${b.spent.toFixed(2)} / $${b.limit}` : `AI $${b.spent.toFixed(2)}`;
   }, () => {});
@@ -1333,7 +1330,7 @@ const liveBars = (vals, cls) => {
 
 function renderLive() {
   const btn = $('live-btn');
-  // No property picked or Google not connected: the Google pill already says so, keep the bar quiet.
+  // No property picked or Google not connected: Settings says so, keep the bar quiet.
   btn.hidden = !live || live.missing === 'google' || live.missing === 'property';
   if (btn.hidden) return closeLive();
   const failed = live.missing === 'error';
@@ -1933,23 +1930,35 @@ $('company-url').onclick = async () => ($('company').close(), await goTo('#setti
 
 // ---------------------------------------------------------------- settings (this website)
 
-async function loadSettings() {
-  showView('settings');
-  $('settings-site').textContent = state.siteName;
-  $('set-name').value = state.siteName;
-  $('set-url').value = state.site || '';
-  $('set-general-status').textContent = '';
-  const [ints, g] = await Promise.all([api('/api/integrations'), api('/api/google')]);
-  $('set-publish').innerHTML = ints.filter((i) => i.group === 'publishing').map(integrationCard).join('');
-  $('set-social').innerHTML = ints.filter((i) => i.group === 'social').map(integrationCard).join('');
-  $('set-outreach').innerHTML = ints.filter((i) => i.group === 'outreach').map(integrationCard).join('');
-  const gInt = ints.find((i) => i.id === 'google');
-  // One Google app for all of Plume (set up once in .env), so people only press Connect. A website's own app is for testing only.
-  $('set-analytics').innerHTML = `<div class="int-card" id="g-signin"><div class="int-head"><strong>Google Analytics and Search Console</strong>
-    <span class="${g.connected ? 'good' : 'muted'} small">${g.connected ? 'Connected' : 'Not connected'}</span></div>
-    <p class="muted small">${g.connected
+const INT_GROUPS = [['analytics', 'Analytics'], ['publishing', 'Article publishing'], ['social', 'Social posting'], ['outreach', 'Outreach'], ['phone', 'Phone approvals']];
+const INT_GROUP_LABEL = Object.fromEntries(INT_GROUPS);
+
+/** One collapsible integration card: avatar, name, what it is for, and a clear Connected / Not connected badge. */
+function intShell({ attrs = '', label, group, connected, about, body }) {
+  return `<details class="int-card ${connected ? 'is-on' : ''}" ${attrs}>
+    <summary class="int-head">
+      <span class="int-ico" aria-hidden="true">${esc(label[0] ?? '?')}</span>
+      <span class="int-title"><strong>${esc(label)}</strong><span class="muted small">${esc(about || INT_GROUP_LABEL[group] || '')}</span></span>
+      <span class="int-badge ${connected ? 'on' : 'off'}">${connected ? 'Connected' : 'Not connected'}</span>
+      <svg class="int-chev" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </summary>
+    <div class="int-body">${body}</div>
+  </details>`;
+}
+
+/** First sentence of a blurb, as the one-line "what is this for" under the name. */
+const aboutOf = (blurb) => {
+  const first = (blurb || '').split(/(?<=[.!?])\s/)[0];
+  return first.length > 110 ? `${first.slice(0, 107).replace(/\s\S*$/, '')}…` : first;
+};
+
+/** Google sign-in: one app for all of Plume, so people only press Connect. A website's own app is for testing only. */
+function googleEntry(g, gInt) {
+  const needsPick = g.connected && (!g.site || !g.property);
+  const body = `<p class="muted small">${g.connected
       ? 'Pick which Search Console site and Analytics property belong to this website.'
       : 'See which searches bring people to your site and what they do there. Plume only reads your data, it never changes anything.'}</p>
+    ${needsPick ? '<p class="int-note warn small">Signed in, but no ' + [!g.site && 'Search Console site', !g.property && 'Analytics property'].filter(Boolean).join(' or ') + ' is picked yet, so some numbers stay empty.</p>' : ''}
     <p class="actions-row">${!g.configured
       ? '<span class="warn small">Google sign-in isn\'t set up in this copy of Plume yet. Whoever runs it adds GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the .env file once.</span>'
       : g.connected
@@ -1960,9 +1969,38 @@ async function loadSettings() {
       <label>Search Console site <select id="gsc-site"><option value="">${g.site ? esc(g.site) : '— none —'}</option></select></label>
       <label>Analytics property <select id="ga-prop"><option value="">${g.property ? esc(g.property) : '— none —'}</option></select></label>
     </div>` : ''}
-    <ul id="g-checks" class="item-list"></ul></div>
+    <ul id="g-checks" class="item-list"></ul>
     <details class="small g-advanced"><summary>Advanced: use a different Google app for this website</summary>
       <p class="muted small">Only for testing. Leave empty to use Plume's own.</p>${integrationCard(gInt)}</details>`;
+  return {
+    group: 'analytics',
+    connected: g.connected,
+    html: intShell({ attrs: 'id="g-signin"', label: 'Google Analytics and Search Console', group: 'analytics', connected: g.connected, about: 'Which searches bring people to your site, and what they do there.', body }),
+  };
+}
+
+async function loadSettings() {
+  showView('settings');
+  $('settings-site').textContent = state.siteName;
+  $('set-name').value = state.siteName;
+  $('set-url').value = state.site || '';
+  $('set-general-status').textContent = '';
+  const [ints, g] = await Promise.all([api('/api/integrations'), api('/api/google')]);
+  const gInt = ints.find((i) => i.id === 'google');
+  const entries = [googleEntry(g, gInt), ...ints.filter((i) => i.id !== 'google').map((i) => ({ group: i.group, connected: i.connected, html: integrationCard(i, i.id === 'telegram' ? '<div class="tg-link" id="tg-link"><span class="muted small">Checking the bot…</span></div>' : '') }))];
+  const rank = (e) => INT_GROUPS.findIndex(([id]) => id === e.group);
+  const on = entries.filter((e) => e.connected).sort((x, y) => rank(x) - rank(y));
+  $('set-connected-count').textContent = on.length || '';
+  $('set-connected').innerHTML = on.length
+    ? on.map((e) => e.html).join('')
+    : '<div class="set-empty">Nothing connected yet. Until you connect something, approved drafts are saved as files and the numbers stay empty.</div>';
+  const off = entries.filter((e) => !e.connected);
+  $('set-available').innerHTML = off.length
+    ? INT_GROUPS.map(([id, label]) => [label, off.filter((e) => e.group === id)])
+        .filter(([, list]) => list.length)
+        .map(([label, list]) => `<h3 class="set-sub">${esc(label)}</h3><div class="int-list">${list.map((e) => e.html).join('')}</div>`)
+        .join('')
+    : '<div class="set-empty">Everything is connected.</div>';
   for (const card of document.querySelectorAll('.int-card[data-int]')) wireIntegration(card);
   if (window.plumePhone) window.plumePhone.settings(ints);
   if (g.connected) pickGoogle(g);
@@ -1997,21 +2035,21 @@ async function pickGoogle(g) {
   $('ga-prop').onchange = () => save({ property: $('ga-prop').value });
 }
 
-function integrationCard(i) {
+/** `extra` is markup placed under the form (Telegram's "link your chat" step). */
+function integrationCard(i, extra = '') {
   const fields = i.fields
     .map((f) => `<label>${esc(f.label)}${f.optional ? ' <span class="muted">(optional)</span>' : ''}
       <input data-key="${f.key}" type="${f.secret ? 'password' : 'text'}" autocomplete="off" spellcheck="false" value="${esc(f.value)}"
         placeholder="${esc(f.secret && f.hint ? `saved (ends ${f.hint}) — leave empty to keep` : f.placeholder)}">
       ${f.help ? `<span class="muted small">${esc(f.help)}</span>` : ''}</label>`)
     .join('');
-  return `<details class="int-card" data-int="${i.id}">
-    <summary class="int-head"><strong>${esc(i.label)}</strong><span class="small ${i.connected ? 'good' : 'muted'}">${i.connected ? 'Connected' : 'Not connected'}</span></summary>
-    <p class="muted small">${esc(i.blurb)}</p>
+  const body = `<p class="muted small">${esc(i.blurb)}</p>
     ${i.link ? `<p><a href="${esc(i.link.url)}" target="_blank" rel="noopener"><button type="button" class="secondary">${esc(i.link.label)}</button></a></p>` : ''}
     <div class="form">${fields}</div>
-    <p class="actions-row"><button data-act="save">Save</button> <button data-act="test" class="secondary" ${i.testable ?? i.connected ? '' : 'disabled'}>Test</button>
+    <p class="actions-row"><button data-act="save">${i.connected ? 'Save changes' : 'Connect'}</button> <button data-act="test" class="secondary" ${i.testable ?? i.connected ? '' : 'disabled'}>Test</button>
       ${i.connected ? '<button data-act="remove" class="secondary">Disconnect</button>' : ''} <span class="int-msg small"></span></p>
-  </details>`;
+    ${extra}`;
+  return intShell({ attrs: `data-int="${i.id}"`, label: i.label, group: i.group, connected: i.connected, about: aboutOf(i.blurb), body });
 }
 
 function wireIntegration(card) {

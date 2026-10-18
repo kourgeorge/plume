@@ -14,7 +14,6 @@
   <header class="topbar">
     <a href="/" class="logo" title="All your websites">Plume</a>
     <a href="/" class="site-name" title="Switch website"><img id="site-icon" alt="" width="16" height="16"><span id="site-name"></span><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></a>
-    <span id="google-pill" class="pill-btn"></span>
     <span class="bar-stats">
       <span class="live-wrap"><button type="button" id="live-btn" class="bar-stat live-btn" hidden aria-expanded="false" aria-controls="live-panel"></button>
         <div id="live-panel" class="live-panel" hidden></div></span>
@@ -178,30 +177,25 @@
         <div class="view-head"><a href="#today" class="back">← Today</a><h1>Settings <span class="muted small" id="settings-site"></span></h1></div>
         <p class="muted">These settings belong to this website only. The AI connection and monthly limit are shared, and live on the <a href="/">website list</a>.</p>
 
-        <h2>General</h2>
-        <div class="form">
-          <label>Name <input id="set-name"></label>
-          <label>Address <input id="set-url" spellcheck="false"><span class="muted small">Where research and Sync website read your company from.</span></label>
+        <h2 class="set-h">General</h2>
+        <div class="set-card">
+          <div class="form">
+            <label>Name <input id="set-name"></label>
+            <label>Address <input id="set-url" spellcheck="false"><span class="muted small">Where research and Sync website read your company from.</span></label>
+          </div>
+          <p class="actions-row"><button id="set-name-save">Save</button> <button id="set-remove" class="secondary">Remove this website…</button> <span id="set-general-status" class="muted small"></span></p>
         </div>
-        <p class="actions-row"><button id="set-name-save">Save</button> <button id="set-remove" class="secondary">Remove this website…</button> <span id="set-general-status" class="muted small"></span></p>
 
-        <h2>Article publishing</h2>
-        <p class="muted small">Where approved articles go. Pick the default on the Today card; every connected place appears there. Until one is connected, approving saves files instead.</p>
-        <div id="set-publish" class="int-list"></div>
+        <h2 class="set-h">Connected <span class="set-count" id="set-connected-count"></span></h2>
+        <p class="muted small">Everything Plume can use right now for this website. Open one to test it, change it or disconnect it.</p>
+        <div id="set-connected" class="int-list"></div>
 
-        <h2>Analytics</h2>
-        <div id="set-analytics" class="int-list"></div>
+        <h2 class="set-h">Available to connect</h2>
+        <p class="muted small">Not set up yet. Open one, fill in the details and press <b>Connect</b>. It moves up to <b>Connected</b> once it works.</p>
+        <div id="set-available"></div>
 
-        <h2>Social posting</h2>
-        <p class="muted small">Where approved social posts go. Until an account is connected, approving a post saves it as files instead.</p>
-        <div id="set-social" class="int-list"></div>
-
-        <h2>Outreach</h2>
-        <p class="muted small">Sending the outreach emails you approve, and finding creators.</p>
-        <div id="set-outreach" class="int-list"></div>
-
-        <h2>Not available yet</h2>
-        <p class="muted small" id="set-later">Instagram, and Facebook personal profiles (Facebook only lets apps post to Pages). WhatsApp needs a public web address for its buttons and message templates approved by Meta, which a private app on your computer can't offer, so use Telegram for now. Framer has no write API, so use <em>Save as files</em> for it.</p>
+        <h2 class="set-h">Not available yet</h2>
+        <p class="muted small set-later" id="set-later">Instagram, and Facebook personal profiles (Facebook only lets apps post to Pages). WhatsApp needs a public web address for its buttons and message templates approved by Meta, which a private app on your computer can't offer, so use Telegram for now. Framer has no write API, so use <em>Save as files</em> for it.</p>
       </section>
 
       <section id="view-notes" class="view" hidden>

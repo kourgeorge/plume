@@ -1,20 +1,9 @@
-// Phone approvals (Telegram) on the Settings page. Uses $, esc, api, post, when, integrationCard and
-// wireIntegration from app.js (loaded first). app.js calls window.plumePhone.settings(ints) from loadSettings.
+// Phone approvals (Telegram) on the Settings page. Uses $, esc, api, post and when from app.js (loaded first).
+// app.js calls window.plumePhone.settings() from loadSettings once the Telegram card is on the page.
 (() => {
-  const box = document.createElement('div');
-  box.id = 'set-phone-box';
-  box.innerHTML = `
-    <h2>Phone approvals</h2>
-    <p class="muted small">Approve or turn down drafts from your phone. Plume checks the bot for messages while it's running on this computer, so nothing has to be reachable from the internet.</p>
-    <div id="set-phone" class="int-list"></div>`;
-  $('set-analytics').after(box);
-
-  async function settings(ints) {
-    const tgInt = ints.find((i) => i.id === 'telegram');
-    if (!tgInt) return;
-    $('set-phone').innerHTML = integrationCard(tgInt) + '<div class="int-card" id="tg-link"><span class="muted small">Checking the bot…</span></div>';
-    wireIntegration(document.querySelector('.int-card[data-int="telegram"]'));
-    await linkCard();
+  // The Telegram card itself is built by app.js (integrationCard); this fills its #tg-link step.
+  async function settings() {
+    if ($('tg-link')) await linkCard();
   }
 
   async function linkCard() {
@@ -23,15 +12,15 @@
     const t = await api('/api/telegram').catch((err) => ({ error: err.message }));
     if (t.error) return (card.innerHTML = `<span class="warn small">${esc(t.error)}</span>`);
     if (!t.connected) {
-      card.innerHTML = '<div class="int-head"><strong>Link your chat</strong><span class="muted small">Save a bot token first</span></div>';
+      card.innerHTML = '<div class="sub-head"><strong>Link your chat</strong><span class="muted small">Save a bot token first</span></div>';
       return;
     }
     if (t.problem) {
-      card.innerHTML = `<div class="int-head"><strong>Link your chat</strong><span class="warn small">${esc(t.problem)}</span></div>`;
+      card.innerHTML = `<div class="sub-head"><strong>Link your chat</strong><span class="warn small">${esc(t.problem)}</span></div>`;
       return;
     }
     if (t.linked) {
-      card.innerHTML = `<div class="int-head"><strong>Linked</strong><span class="good small">${esc(t.name ?? 'your chat')} · since ${esc(when(t.linkedAt))}</span></div>
+      card.innerHTML = `<div class="sub-head"><strong>Linked</strong><span class="good small">${esc(t.name ?? 'your chat')} · since ${esc(when(t.linkedAt))}</span></div>
         <p class="muted small">New drafts go to @${esc(t.bot)} as they're written. Tap Approve or Not useful, or reply to a draft with new text. Send /report for the last 7 days; a report also arrives on Monday mornings.</p>
         <p class="actions-row"><button id="tg-test" class="secondary">Send a report now</button> <button id="tg-unlink" class="secondary">Unlink</button> <span id="tg-msg" class="small"></span></p>`;
       $('tg-test').onclick = async () => {
@@ -54,7 +43,7 @@
       return;
     }
     const cmd = `/start ${t.code}`;
-    card.innerHTML = `<div class="int-head"><strong>Link your chat</strong><span class="muted small">Not linked yet</span></div>
+    card.innerHTML = `<div class="sub-head"><strong>Link your chat</strong><span class="muted small">Not linked yet</span></div>
       <ol class="small">
         <li>Open <a href="https://t.me/${encodeURIComponent(t.bot)}?start=${encodeURIComponent(t.code)}" target="_blank" rel="noopener">@${esc(t.bot)}</a> in Telegram${' '}(the link fills in the code), or send it this message:</li>
         <li><code id="tg-code">${esc(cmd)}</code> <button id="tg-copy" class="secondary">Copy</button></li>
