@@ -181,6 +181,24 @@ export function videoDir(draftId: number): string {
   return path.join(siteDir(), 'videos', String(draftId));
 }
 
+/** The owner's own filmed video for a script — what gets posted as a Reel. The slide preview never is. */
+export function footagePath(draftId: number): string {
+  return path.join(videoDir(draftId), 'footage.mp4');
+}
+
+export function footage(draftId: number): { file: string; bytes: number; at: string } | null {
+  const f = footagePath(draftId);
+  if (!fs.existsSync(f)) return null;
+  const st = fs.statSync(f);
+  return { file: 'footage.mp4', bytes: st.size, at: st.mtime.toISOString() };
+}
+
+/** The text under "## Caption" (hashtags included), as the owner last edited it. */
+export function captionFromMarkdown(md: string): string {
+  const m = /^## Caption[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(md);
+  return (m?.[1] ?? '').trim();
+}
+
 /** Draw each scene's on-screen text as an image, then join them into MP4s (one per size). Returns file names. */
 export async function renderPreview(draftId: number, sizes: SizeId[] = ['vertical', 'square', 'wide']): Promise<string[]> {
   const d = getDraft(draftId);
@@ -191,8 +209,9 @@ export async function renderPreview(draftId: number, sizes: SizeId[] = ['vertica
   const site = siteUrl();
   const footer = site ? new URL(site).hostname.replace(/^www\./, '') : '';
   const dir = videoDir(draftId);
-  fs.rmSync(dir, { recursive: true, force: true });
+  // Clear old previews, but keep the owner's uploaded video.
   fs.mkdirSync(dir, { recursive: true });
+  for (const f of fs.readdirSync(dir)) if (f !== 'footage.mp4') fs.rmSync(path.join(dir, f), { recursive: true, force: true });
   const { chromium } = await import('playwright-core');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const out: string[] = [];

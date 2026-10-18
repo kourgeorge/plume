@@ -753,13 +753,22 @@ async function loadDraft(id) {
   const d = await api(`/api/drafts/${id}`);
   $('draft-back').href = draftBack;
   $('draft-back').textContent = draftBack === '#today' ? '← Today' : `← ${agentLabel(d.agent)}`;
-  $('draft-agent').textContent = `${agentLabel(d.agent)} · ${kindLabel(d.kind)}`;
+  // The back link already names the agent, so the header only says what this is.
+  $('draft-agent').textContent = draftBack === '#today' ? `${agentLabel(d.agent)} · ${kindLabel(d.kind)}` : kindLabel(d.kind);
   $('draft-title').value = d.title;
-  $('draft-reason').textContent = d.meta.reason ? `Why: ${d.meta.reason}` : '';
+  $('draft-reason').hidden = !d.meta.reason;
+  $('draft-reason-text').textContent = d.meta.reason ?? '';
+  // Posts, messages and scripts are not web pages: no address or search snippet, and plain (not code) text.
+  const short = SHORT_KINDS.includes(d.kind);
+  $('view-draft').classList.toggle('short-draft', short);
+  $('draft-seo').hidden = short;
   $('draft-slug').value = d.meta.slug ?? '';
   $('draft-meta').value = d.meta.metaDescription ?? '';
   updateMetaLen();
   $('draft-body').value = d.body;
+  currentKind = d.kind;
+  updateCount();
+  loadPhotos(d);
   $('draft-target').innerHTML = fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`).join('');
   if (d.target && fitting(d).some((p) => p.id === d.target)) $('draft-target').value = d.target;
   else {
@@ -785,6 +794,87 @@ function statusLine(d) {
   if (d.status === 'approved') return `Scheduled for ${esc(when(d.scheduledFor))} on ${esc(d.target)}.`;
   if (d.status === 'rejected') return 'Turned down.';
   return '';
+}
+
+const SHORT_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post', 'reddit_reply', 'reddit_post', 'outreach_email', 'outreach_message', 'video_script'];
+/** Hard limits, the same as the server checks (X counts links as 23 there, so this is a close guide). Facebook has none worth showing. */
+const POST_LIMIT = { x_post: 280, linkedin_post: 3000, reddit_reply: 10000, reddit_post: 10000 };
+let currentKind = null;
+
+/** Grow the box with the text, so a short post isn't lost in a page of empty space. */
+function fitBody() {
+  const el = $('draft-body');
+  if (!$('view-draft').classList.contains('short-draft')) return (el.style.height = '');
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight + 4}px`;
+}
+
+function updateCount() {
+  fitBody();
+  const show = ['social_post', 'x_post', 'linkedin_post', 'facebook_post', 'reddit_reply', 'reddit_post'].includes(currentKind);
+  $('draft-count').hidden = !show;
+  if (!show) return;
+  const len = [...$('draft-body').value.trim()].length;
+  const max = POST_LIMIT[currentKind];
+  $('draft-count').className = `small draft-count ${max && len > max ? 'bad' : 'muted'}`;
+  $('draft-count').textContent = max ? `${len.toLocaleString()} / ${max.toLocaleString()} characters${len > max ? ' — too long to post' : ''}` : `${len.toLocaleString()} characters${currentKind === 'facebook_post' && len > 500 ? ' — shorter posts usually get read more' : ''}`;
+}
+
+const PHOTO_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
+const MAX_PHOTOS = 4;
+
+/** Photos on a post: shown in the order they will appear; added and removed while the post is still a draft. */
+async function loadPhotos(d) {
+  const box = $('draft-photos');
+  box.hidden = !PHOTO_KINDS.includes(d.kind);
+  if (box.hidden) return;
+  const editable = d.status === 'draft' || d.status === 'failed';
+  const msg = (text) => (($('photos-msg').hidden = !text), ($('photos-msg').className = 'small bad'), ($('photos-msg').textContent = text || ''));
+  const render = (images) => {
+    if (currentDraft !== d.id) return;
+    $('photos-pick').hidden = !editable || images.length >= MAX_PHOTOS;
+    $('photos-note').textContent = images.length
+      ? `${images.length} of ${MAX_PHOTOS}${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
+      : 'up to 4 · JPG, PNG or GIF, 5 MB each';
+    $('photos-list').innerHTML = images.length
+      ? images
+          .map((im, i) => `<figure class="photo"><img src="${withSite(`/api/drafts/${d.id}/images/${im.name}`)}&t=${encodeURIComponent(im.at)}" alt="Photo ${i + 1}">${editable ? `<button class="photo-remove" data-photo="${esc(im.name)}" title="Remove this photo" aria-label="Remove photo ${i + 1}">×</button>` : ''}</figure>`)
+          .join('')
+      : `<p class="small muted">${editable ? 'No photos. Posts with a photo usually get noticed more.' : 'No photos.'}</p>`;
+    for (const b of $('photos-list').querySelectorAll('[data-photo]'))
+      b.onclick = async () => {
+        try {
+          render((await api(`/api/drafts/${d.id}/images/${encodeURIComponent(b.dataset.photo)}`, { method: 'DELETE' })).images);
+          msg('');
+        } catch (err) {
+          msg(err.message);
+        }
+      };
+  };
+  $('photos-file').onchange = async () => {
+    const files = [...$('photos-file').files];
+    $('photos-file').value = '';
+    msg('');
+    let images = null;
+    for (const file of files) {
+      try {
+        const res = await fetch(`/api/drafts/${d.id}/images`, { method: 'POST', headers: { 'x-plume-site': SITE, 'content-type': file.type || 'application/octet-stream' }, body: file });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        images = data.images;
+      } catch (err) {
+        msg(`${file.name}: ${err.message}`);
+        break;
+      }
+    }
+    render(images ?? (await api(`/api/drafts/${d.id}/images`)).images);
+  };
+  $('photos-list').innerHTML = '';
+  try {
+    render((await api(`/api/drafts/${d.id}/images`)).images);
+  } catch (err) {
+    msg(err.message);
+  }
 }
 
 function updateMetaLen() {
@@ -1466,6 +1556,7 @@ $('notes-save').onclick = async () => {
 };
 $('llms-copy').onclick = () => navigator.clipboard.writeText($('llms-body').textContent).then(() => ($('llms-copy').textContent = 'Copied'));
 $('draft-meta').oninput = updateMetaLen;
+$('draft-body').addEventListener('input', updateCount);
 $('draft-save').onclick = async () => (await saveDraft(), ($('draft-status').textContent = 'Saved.'));
 $('draft-approve').onclick = async () => {
   try {

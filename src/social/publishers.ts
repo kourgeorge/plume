@@ -1,6 +1,9 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import type { Publisher, PublishResult } from '../publish';
 import type { Draft } from '../queue';
+import { captionFromMarkdown, footagePath } from '../video/agent';
+import { IMAGE_MIME, PostImage, listImages } from './images';
 import { describeProblems, lengthProblems, linkedinEscape, plainText, splitThread } from './text';
 
 /** Overridable so tests can point at a fake server. */
@@ -8,6 +11,8 @@ export const SOCIAL_API = {
   x: 'https://api.x.com',
   linkedin: 'https://api.linkedin.com',
   facebook: 'https://graph.facebook.com',
+  /** Where Meta takes video bytes for Reels (both Facebook and Instagram). */
+  rupload: 'https://rupload.facebook.com',
   redditAuth: 'https://www.reddit.com',
   reddit: 'https://oauth.reddit.com',
 };
@@ -16,6 +21,12 @@ const tooLong = (channel: 'x' | 'linkedin' | 'facebook' | 'reddit', body: string
   const p = lengthProblems(channel, body);
   if (p.length) throw new Error(`too long to publish: ${describeProblems(channel, p)}. Edit it shorter, then approve again.`);
 };
+
+/** A photo as a file part for a multipart upload. */
+const photoBlob = (img: PostImage) => new Blob([fs.readFileSync(img.file)], { type: IMAGE_MIME[img.type] });
+
+/** The draft's photos, in order. Only post drafts have any. */
+const photosOf = (draft: Draft) => (draft.id ? listImages(draft.id) : []);
 
 // ---------------------------------------------------------------- X
 
@@ -73,6 +84,24 @@ async function xCall(env: NodeJS.ProcessEnv, method: string, path: string, body?
   return data;
 }
 
+/** Upload one photo to X; returns its media id. The multipart body is not part of the OAuth signature. */
+async function xUpload(env: NodeJS.ProcessEnv, img: PostImage): Promise<string> {
+  const url = `${SOCIAL_API.x}/2/media/upload`;
+  const form = new FormData();
+  form.append('media', photoBlob(img), img.name);
+  form.append('media_category', img.type === 'gif' ? 'tweet_gif' : 'tweet_image');
+  const res = await fetch(url, { method: 'POST', headers: { authorization: oauth1Header('POST', url, xKeys(env)) }, body: form, signal: AbortSignal.timeout(60_000) });
+  const data: any = await res.json().catch(() => ({}));
+  const id = data.data?.id ?? data.media_id_string;
+  if (!res.ok || !id) {
+    const why = data.detail ?? data.title ?? data.errors?.[0]?.message ?? res.statusText;
+    if (res.status === 403) throw new Error(`X refused the photo: ${why}. Check the app has "Read and write" permission.`);
+    if (res.status === 429) throw new Error('X rate limit reached — it will be retried later');
+    throw new Error(`X did not take photo ${img.name} (${res.status}: ${why})`);
+  }
+  return String(id);
+}
+
 export const xPublisher: Publisher = {
   id: 'x',
   label: 'X (Twitter)',
@@ -82,10 +111,14 @@ export const xPublisher: Publisher = {
     const posts = splitThread(plainText(draft.body));
     tooLong('x', posts.join('\n\n---\n\n'));
     // A thread is a chain of replies. If a later post fails, the earlier ones stay up and the error says how far it got.
+    // Photos go on the first post, which is the one people see in their feed.
+    const mediaIds: string[] = [];
+    for (const img of photosOf(draft)) mediaIds.push(await xUpload(env, img));
     const ids: string[] = [];
     for (const [i, text] of posts.entries()) {
       try {
-        const r = await xCall(env, 'POST', '/2/tweets', { text, ...(ids.length ? { reply: { in_reply_to_tweet_id: ids[ids.length - 1] } } : {}) });
+        const media = i === 0 && mediaIds.length ? { media: { media_ids: mediaIds } } : {};
+        const r = await xCall(env, 'POST', '/2/tweets', { text, ...media, ...(ids.length ? { reply: { in_reply_to_tweet_id: ids[ids.length - 1] } } : {}) });
         ids.push(r.data.id);
       } catch (err: any) {
         if (!ids.length) throw err;
@@ -118,6 +151,29 @@ async function linkedinAuthor(env: NodeJS.ProcessEnv): Promise<string> {
   return `urn:li:person:${data.sub}`;
 }
 
+const linkedinHeaders = (env: NodeJS.ProcessEnv) => ({
+  authorization: `Bearer ${env.LINKEDIN_TOKEN}`,
+  'linkedin-version': linkedinVersion(env),
+  'x-restli-protocol-version': '2.0.0',
+});
+
+/** LinkedIn photos: ask for an upload address, send the bytes there, then use the image's id in the post. */
+async function linkedinUpload(env: NodeJS.ProcessEnv, author: string, img: PostImage): Promise<string> {
+  const res = await fetch(`${SOCIAL_API.linkedin}/rest/images?action=initializeUpload`, {
+    method: 'POST',
+    headers: { ...linkedinHeaders(env), 'content-type': 'application/json' },
+    body: JSON.stringify({ initializeUploadRequest: { owner: author } }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  const { uploadUrl, image } = data.value ?? {};
+  if (res.status === 401) throw new Error('LinkedIn refused the token — it may have expired. Make a new one and save it in Settings.');
+  if (!res.ok || !uploadUrl || !image) throw new Error(`LinkedIn would not take photo ${img.name} (${res.status}: ${data.message ?? res.statusText})`);
+  const put = await fetch(uploadUrl, { method: 'PUT', headers: { authorization: `Bearer ${env.LINKEDIN_TOKEN}`, 'content-type': IMAGE_MIME[img.type] }, body: fs.readFileSync(img.file), signal: AbortSignal.timeout(60_000) });
+  if (!put.ok) throw new Error(`LinkedIn did not accept photo ${img.name} (${put.status})`);
+  return image;
+}
+
 export const linkedinPublisher: Publisher = {
   id: 'linkedin',
   label: 'LinkedIn',
@@ -127,6 +183,9 @@ export const linkedinPublisher: Publisher = {
     const text = plainText(draft.body);
     tooLong('linkedin', text);
     const author = await linkedinAuthor(env);
+    const images: string[] = [];
+    for (const img of photosOf(draft)) images.push(await linkedinUpload(env, author, img));
+    const content = images.length === 1 ? { content: { media: { id: images[0] } } } : images.length ? { content: { multiImage: { images: images.map((id) => ({ id })) } } } : {};
     const res = await fetch(`${SOCIAL_API.linkedin}/rest/posts`, {
       method: 'POST',
       headers: {
@@ -140,6 +199,7 @@ export const linkedinPublisher: Publisher = {
         commentary: linkedinEscape(text),
         visibility: 'PUBLIC',
         distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+        ...content,
         lifecycleState: 'PUBLISHED',
         isReshareDisabledByAuthor: false,
       }),
@@ -162,13 +222,15 @@ export const linkedinPublisher: Publisher = {
 /** Meta retires each Graph API version about two years after release; FACEBOOK_GRAPH_VERSION moves to a newer one. */
 export const facebookVersion = (env = process.env) => env.FACEBOOK_GRAPH_VERSION || 'v23.0';
 
-async function facebookCall(env: NodeJS.ProcessEnv, method: 'GET' | 'POST', path: string, form?: Record<string, string>): Promise<any> {
+async function facebookCall(env: NodeJS.ProcessEnv, method: 'GET' | 'POST', path: string, form?: Record<string, string> | FormData): Promise<any> {
   const url = `${SOCIAL_API.facebook}/${facebookVersion(env)}${path}`;
+  // A FormData body (a photo) sets its own multipart content type.
+  const multipart = form instanceof FormData;
   const res = await fetch(url, {
     method,
-    headers: { authorization: `Bearer ${env.FACEBOOK_PAGE_TOKEN}`, ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
-    body: form ? new URLSearchParams(form) : undefined,
-    signal: AbortSignal.timeout(30_000),
+    headers: { authorization: `Bearer ${env.FACEBOOK_PAGE_TOKEN}`, ...(form && !multipart ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
+    body: form ? (multipart ? form : new URLSearchParams(form)) : undefined,
+    signal: AbortSignal.timeout(multipart ? 60_000 : 30_000),
   });
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
@@ -197,9 +259,131 @@ export const facebookPublisher: Publisher = {
   async publish(draft: Draft, _html: string, env = process.env): Promise<PublishResult> {
     const text = plainText(draft.body);
     tooLong('facebook', text);
-    const r = await facebookCall(env, 'POST', `/${pageId(env)}/feed`, { message: text });
+    const page = pageId(env);
+    // Photos are uploaded unpublished first, then attached to one post, so several show together with the text.
+    const attached: Record<string, string> = {};
+    for (const [i, img] of photosOf(draft).entries()) {
+      const form = new FormData();
+      form.append('source', photoBlob(img), img.name);
+      form.append('published', 'false');
+      const p = await facebookCall(env, 'POST', `/${page}/photos`, form);
+      if (!p.id) throw new Error(`Facebook did not take photo ${img.name}`);
+      attached[`attached_media[${i}]`] = JSON.stringify({ media_fbid: String(p.id) });
+    }
+    const r = await facebookCall(env, 'POST', `/${page}/feed`, { message: text, ...attached });
     // The id is "<page>_<post>"; facebook.com/<id> opens the post.
     return { url: r.id ? `https://www.facebook.com/${r.id}` : null, externalId: r.id ?? null, dryRun: false };
+  },
+};
+
+// ---------------------------------------------------------------- Reels (Facebook and Instagram)
+
+/** The owner's filmed video for a script draft, or a plain message saying to upload it. */
+function reelFile(draft: Draft): string {
+  if (draft.kind !== 'video_script') throw new Error('only a video script can be posted as a Reel');
+  const f = footagePath(draft.id);
+  if (!fs.existsSync(f) || !fs.statSync(f).size) throw new Error('Upload your filmed video to this draft first. The slide preview is not posted.');
+  return f;
+}
+
+/** Send a whole video file to Meta's upload server in one go. Used by both kinds of Reel. */
+async function ruploadFile(env: NodeJS.ProcessEnv, url: string, file: string): Promise<void> {
+  const bytes = fs.readFileSync(file);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `OAuth ${env.FACEBOOK_PAGE_TOKEN}`, offset: '0', file_size: String(bytes.length), 'content-type': 'application/octet-stream' },
+    body: bytes,
+    signal: AbortSignal.timeout(10 * 60_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok || data.error || data.success === false) {
+    const why = data.error?.message ?? data.debug_info?.message ?? res.statusText;
+    throw new Error(`Meta did not accept the video upload (${res.status}: ${why})`);
+  }
+}
+
+export const facebookReelPublisher: Publisher = {
+  id: 'facebook_reel',
+  label: 'Facebook Page — Reel',
+  needs: ['FACEBOOK_PAGE_ID', 'FACEBOOK_PAGE_TOKEN'],
+  configured: (env = process.env) => !!(env.FACEBOOK_PAGE_ID && env.FACEBOOK_PAGE_TOKEN),
+  async publish(draft: Draft, _html: string, env = process.env): Promise<PublishResult> {
+    const file = reelFile(draft);
+    const caption = plainText(captionFromMarkdown(draft.body));
+    const page = pageId(env);
+    const start = await facebookCall(env, 'POST', `/${page}/video_reels`, { upload_phase: 'start' });
+    if (!start.video_id) throw new Error('Facebook did not start the Reel upload');
+    await ruploadFile(env, `${SOCIAL_API.rupload}/video-upload/${facebookVersion(env)}/${start.video_id}`, file);
+    await facebookCall(env, 'POST', `/${page}/video_reels`, { upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description: caption });
+    // Facebook keeps processing for a minute or two after this; the link works once it is done.
+    return { url: `https://www.facebook.com/reel/${start.video_id}`, externalId: String(start.video_id), dryRun: false };
+  },
+};
+
+/** Instagram allows 2,200 characters and 30 hashtags in a caption. */
+export function instagramCaptionProblems(caption: string): string[] {
+  const out: string[] = [];
+  const n = [...caption].length;
+  if (n > 2200) out.push(`the caption is ${n} characters; Instagram allows 2,200`);
+  const tags = (caption.match(/(^|\s)#[^\s#]+/g) ?? []).length;
+  if (tags > 30) out.push(`the caption has ${tags} hashtags; Instagram allows 30`);
+  return out;
+}
+
+const igAccounts = new Map<string, string>();
+
+/** The Instagram account linked to the Facebook Page: typed in Settings, or asked from Facebook once. */
+export async function instagramAccount(env: NodeJS.ProcessEnv): Promise<string> {
+  const typed = (env.INSTAGRAM_ACCOUNT_ID ?? '').trim();
+  if (typed) {
+    if (!/^\d{5,25}$/.test(typed)) throw new Error(`"${typed}" is not an Instagram account ID — it is a long number. Leave it empty and Plume finds it from the Facebook Page.`);
+    return typed;
+  }
+  const page = pageId(env);
+  const key = `${page}|${env.FACEBOOK_PAGE_TOKEN}`;
+  const known = igAccounts.get(key);
+  if (known) return known;
+  const r = await facebookCall(env, 'GET', `/${page}?fields=instagram_business_account`);
+  const id = r.instagram_business_account?.id;
+  if (!id) throw new Error('No Instagram account is linked to this Facebook Page. In Instagram, switch to a Business or Creator account and link it to the Page (Instagram settings → Accounts Centre, or the Page settings → Linked accounts).');
+  igAccounts.set(key, String(id));
+  return String(id);
+}
+
+export function resetInstagramForTests(): void {
+  igAccounts.clear();
+}
+
+/** How long to wait between checks while Instagram processes a video. Overridable so tests run fast. */
+export const INSTAGRAM_WAIT = { everyMs: 5000, maxMs: 5 * 60_000 };
+
+export const instagramReelPublisher: Publisher = {
+  id: 'instagram',
+  label: 'Instagram — Reel',
+  needs: ['FACEBOOK_PAGE_ID', 'FACEBOOK_PAGE_TOKEN'],
+  configured: (env = process.env) => !!(env.FACEBOOK_PAGE_ID && env.FACEBOOK_PAGE_TOKEN),
+  async publish(draft: Draft, _html: string, env = process.env): Promise<PublishResult> {
+    const file = reelFile(draft);
+    const caption = plainText(captionFromMarkdown(draft.body));
+    const problems = instagramCaptionProblems(caption);
+    if (problems.length) throw new Error(`too long to publish: ${problems.join('; ')}. Edit the caption, then approve again.`);
+    const ig = await instagramAccount(env);
+    const box = await facebookCall(env, 'POST', `/${ig}/media`, { media_type: 'REELS', upload_type: 'resumable', caption });
+    if (!box.id) throw new Error('Instagram did not start the Reel upload');
+    await ruploadFile(env, `${SOCIAL_API.rupload}/ig-api-upload/${facebookVersion(env)}/${box.id}`, file);
+    // Instagram has to process the video before it can be published.
+    const until = Date.now() + INSTAGRAM_WAIT.maxMs;
+    for (;;) {
+      const st = await facebookCall(env, 'GET', `/${box.id}?fields=status_code,status`);
+      if (st.status_code === 'FINISHED') break;
+      if (st.status_code === 'ERROR') throw new Error(`Instagram could not use this video (${st.status ?? 'no reason given'}). Reels must be MP4 or MOV, 3 seconds to 15 minutes, ideally 9:16.`);
+      if (st.status_code === 'EXPIRED') throw new Error('Instagram gave up on this upload because it took too long. Approve again to retry.');
+      if (Date.now() > until) throw new Error('Instagram is still processing the video — it will be retried later');
+      await new Promise((r) => setTimeout(r, INSTAGRAM_WAIT.everyMs));
+    }
+    const done = await facebookCall(env, 'POST', `/${ig}/media_publish`, { creation_id: String(box.id) });
+    const link = done.id ? await facebookCall(env, 'GET', `/${done.id}?fields=permalink`).catch(() => ({})) : {};
+    return { url: link.permalink ?? null, externalId: done.id ?? null, dryRun: false };
   },
 };
 
@@ -284,7 +468,7 @@ export const redditPublisher: Publisher = {
   },
 };
 
-export const SOCIAL_PUBLISHERS = [xPublisher, linkedinPublisher, facebookPublisher, redditPublisher];
+export const SOCIAL_PUBLISHERS = [xPublisher, linkedinPublisher, facebookPublisher, facebookReelPublisher, instagramReelPublisher, redditPublisher];
 
 /** The Settings "Test" button: one harmless read that proves the keys work. */
 export async function testSocial(id: string, env: NodeJS.ProcessEnv): Promise<{ ok: boolean; message: string }> {
@@ -300,6 +484,11 @@ export async function testSocial(id: string, env: NodeJS.ProcessEnv): Promise<{ 
     if (id === 'facebook') {
       const p = await facebookCall(env, 'GET', `/${pageId(env)}?fields=name`);
       return { ok: true, message: `Will post to the page "${p.name}". Posting permission is only checked on the first post.` };
+    }
+    if (id === 'instagram') {
+      const ig = await instagramAccount(env);
+      const a = await facebookCall(env, 'GET', `/${ig}?fields=username`);
+      return { ok: true, message: `Will post Reels to @${a.username}. Posting permission ("instagram_content_publish") is only checked on the first post.` };
     }
     if (id === 'reddit') {
       const me = await redditCall(env, 'GET', '/api/v1/me');

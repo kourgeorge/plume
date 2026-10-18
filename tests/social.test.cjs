@@ -49,7 +49,7 @@ test.before(() => new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
   for (const k of Object.keys(process.env)) if (/^(X_|LINKEDIN_|FACEBOOK_|REDDIT_)/.test(k)) delete process.env[k];
   text = require('../src/social/text');
   pub = require('../src/social/publishers');
-  Object.assign(pub.SOCIAL_API, { x: `${base}/x`, linkedin: `${base}/li`, facebook: `${base}/fb`, redditAuth: `${base}/ra`, reddit: `${base}/ro` });
+  Object.assign(pub.SOCIAL_API, { x: `${base}/x`, linkedin: `${base}/li`, facebook: `${base}/fb`, rupload: `${base}/ru`, redditAuth: `${base}/ra`, reddit: `${base}/ro` });
   publish = require('../src/publish');
   runner = require('../src/publish/runner');
   q = require('../src/queue');
@@ -259,4 +259,214 @@ test('X signature matches the worked example in X’s documentation', () => {
     { nonce: 'kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg', timestamp: '1318622958', form: { status: 'Hello Ladies + Gentlemen, a signed OAuth request!' } },
   );
   assert.equal(decodeURIComponent(h.match(/oauth_signature="([^"]+)"/)[1]), 'hCtSmYh+iHYCEqBWrE7C7hYmtUk=');
+});
+
+// ---- Reels: the owner's filmed video goes to Facebook and Instagram
+
+function reelDraft(caption = 'Pass first time.\n\n#theorytest') {
+  const d = q.createDraft({ agent: 'video', kind: 'video_script', title: 'Reel', body: `# Reel\n\n## Scene 1 — 3s\n- **On screen:** Hi\n\n## Caption\n${caption}\n`, meta: {} });
+  return d;
+}
+const video = () => require('../src/video/agent');
+function addFootage(d, bytes = 'fake-mp4-bytes') {
+  fs.mkdirSync(video().videoDir(d.id), { recursive: true });
+  fs.writeFileSync(video().footagePath(d.id), bytes);
+}
+
+test('Reels need the uploaded video, never the preview', async () => {
+  const d = reelDraft();
+  const before = seen.length;
+  await assert.rejects(pub.facebookReelPublisher.publish(d, '', FB_ENV), /Upload your filmed video/);
+  await assert.rejects(pub.instagramReelPublisher.publish(d, '', FB_ENV), /Upload your filmed video/);
+  await assert.rejects(pub.facebookReelPublisher.publish(draft({ kind: 'facebook_post' }), '', FB_ENV), /only a video script/);
+  assert.equal(seen.length, before, 'nothing should be sent without a video');
+});
+
+test('Facebook Reel: start, upload the bytes, finish with the caption', async () => {
+  const d = reelDraft('Pass **first** time.\n\n#theorytest');
+  addFootage(d);
+  routes['POST /fb/v23.0/1234567890/video_reels'] = (body) => (new URLSearchParams(body).get('upload_phase') === 'start' ? [200, { video_id: '777', upload_url: 'x' }] : [200, { success: true }]);
+  routes['POST /ru/video-upload/v23.0/777'] = () => [200, { success: true }];
+  const from = seen.length;
+  const r = await pub.facebookReelPublisher.publish(d, '', FB_ENV);
+  assert.deepEqual(r, { url: 'https://www.facebook.com/reel/777', externalId: '777', dryRun: false });
+  const calls = seen.slice(from);
+  assert.deepEqual(calls.map((c) => c.path), ['/fb/v23.0/1234567890/video_reels', '/ru/video-upload/v23.0/777', '/fb/v23.0/1234567890/video_reels']);
+  assert.equal(calls[1].body, 'fake-mp4-bytes');
+  assert.equal(calls[1].headers.authorization, 'OAuth fb-token');
+  assert.equal(calls[1].headers.file_size, String('fake-mp4-bytes'.length));
+  const fin = new URLSearchParams(calls[2].body);
+  assert.equal(fin.get('upload_phase'), 'finish');
+  assert.equal(fin.get('video_state'), 'PUBLISHED');
+  assert.equal(fin.get('description'), 'Pass first time.\n\n#theorytest');
+  routes['POST /ru/video-upload/v23.0/777'] = () => [400, { debug_info: { message: 'bad file' } }];
+  await assert.rejects(pub.facebookReelPublisher.publish(d, '', FB_ENV), /did not accept the video upload[\s\S]*bad file/);
+});
+
+test('Instagram Reel: finds the account, uploads, waits until processed, publishes and links it', async () => {
+  pub.resetInstagramForTests();
+  Object.assign(pub.INSTAGRAM_WAIT, { everyMs: 5, maxMs: 2000 });
+  const d = reelDraft();
+  addFootage(d);
+  routes['GET /fb/v23.0/1234567890'] = (_b, req) => (req.url.includes('instagram_business_account') ? [200, { instagram_business_account: { id: '17841400000' } }] : [200, { name: 'Acme Desks' }]);
+  routes['POST /fb/v23.0/17841400000/media'] = () => [200, { id: '9001' }];
+  routes['POST /ru/ig-api-upload/v23.0/9001'] = () => [200, { success: true }];
+  const states = ['IN_PROGRESS', 'FINISHED'];
+  routes['GET /fb/v23.0/9001'] = () => [200, { status_code: states.shift() ?? 'FINISHED' }];
+  routes['POST /fb/v23.0/17841400000/media_publish'] = () => [200, { id: '1800' }];
+  routes['GET /fb/v23.0/1800'] = () => [200, { permalink: 'https://www.instagram.com/reel/abc/' }];
+  const from = seen.length;
+  const r = await pub.instagramReelPublisher.publish(d, '', FB_ENV);
+  assert.deepEqual(r, { url: 'https://www.instagram.com/reel/abc/', externalId: '1800', dryRun: false });
+  const calls = seen.slice(from);
+  const box = new URLSearchParams(calls.find((c) => c.path.endsWith('/media')).body);
+  assert.deepEqual([box.get('media_type'), box.get('upload_type'), box.get('caption')], ['REELS', 'resumable', 'Pass first time.\n\n#theorytest']);
+  assert.equal(calls.filter((c) => c.path === '/fb/v23.0/9001').length, 2, 'checked until it was ready');
+  assert.equal(new URLSearchParams(calls.find((c) => c.path.endsWith('/media_publish')).body).get('creation_id'), '9001');
+
+  // The account is remembered; a typed ID skips the lookup.
+  const n = seen.length;
+  routes['GET /fb/v23.0/17841400000'] = () => [200, { username: 'acmedesks' }];
+  assert.match((await pub.testSocial('instagram', FB_ENV)).message, /@acmedesks/);
+  assert.ok(!seen.slice(n).some((c) => c.query.includes('instagram_business_account')));
+  assert.equal(await pub.instagramAccount({ ...FB_ENV, INSTAGRAM_ACCOUNT_ID: '17841499999' }), '17841499999');
+  await assert.rejects(pub.instagramAccount({ ...FB_ENV, INSTAGRAM_ACCOUNT_ID: '@acme' }), /not an Instagram account ID/);
+
+  routes['GET /fb/v23.0/9001'] = () => [200, { status_code: 'ERROR', status: 'Unsupported format' }];
+  await assert.rejects(pub.instagramReelPublisher.publish(d, '', FB_ENV), /could not use this video \(Unsupported format\)/);
+
+  pub.resetInstagramForTests();
+  routes['GET /fb/v23.0/1234567890'] = () => [200, { id: '1234567890' }];
+  await assert.rejects(pub.instagramReelPublisher.publish(d, '', FB_ENV), /No Instagram account is linked/);
+});
+
+test('Instagram captions: 2,200 characters and 30 hashtags at most, checked before uploading', async () => {
+  assert.deepEqual(pub.instagramCaptionProblems('fine #a #b'), []);
+  assert.match(pub.instagramCaptionProblems('x'.repeat(2201))[0], /2201 characters/);
+  assert.match(pub.instagramCaptionProblems(Array.from({ length: 31 }, (_, i) => `#t${i}`).join(' '))[0], /31 hashtags/);
+  const d = reelDraft('x'.repeat(2300));
+  addFootage(d);
+  const before = seen.length;
+  await assert.rejects(pub.instagramReelPublisher.publish(d, '', FB_ENV), /too long to publish/);
+  assert.equal(seen.length, before);
+});
+
+// ---- photos on posts
+
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('rest-of-png')]);
+const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('rest-of-jpg')]);
+function photoDraft(kind, body, files = [PNG, JPG]) {
+  const images = require('../src/social/images');
+  const d = q.createDraft({ agent: 'social', kind, title: 'p', body, meta: {} });
+  fs.mkdirSync(images.imageDir(d.id), { recursive: true });
+  for (const f of files) {
+    const part = path.join(images.imageDir(d.id), `t-${Math.random()}.part`);
+    fs.writeFileSync(part, f);
+    images.addImage(d.id, part);
+  }
+  return d;
+}
+
+test('photos: checked by their content, numbered in order, at most 4 and 5 MB', () => {
+  const images = require('../src/social/images');
+  assert.equal(images.sniffImage(PNG), 'png');
+  assert.equal(images.sniffImage(JPG), 'jpg');
+  assert.equal(images.sniffImage(Buffer.from('GIF89a....')), 'gif');
+  assert.equal(images.sniffImage(Buffer.from('<html>hi</html>')), null);
+  const d = photoDraft('facebook_post', 'x');
+  assert.deepEqual(images.listImages(d.id).map((i) => i.name), ['1.png', '2.jpg']);
+  const add = (buf) => {
+    const part = path.join(images.imageDir(d.id), `t-${Math.random()}.part`);
+    fs.writeFileSync(part, buf);
+    return () => images.addImage(d.id, part);
+  };
+  assert.throws(add(Buffer.from('not a photo')), /not a JPG, PNG or GIF/);
+  assert.throws(add(Buffer.concat([JPG, Buffer.alloc(5 * 1024 * 1024)])), /up to 5 MB/);
+  add(PNG)();
+  add(PNG)();
+  assert.throws(add(PNG), /at most 4 photos/);
+  images.removeImage(d.id, '1.png');
+  assert.deepEqual(images.listImages(d.id).map((i) => i.name), ['2.jpg', '3.png', '4.png']);
+  assert.ok(!fs.readdirSync(images.imageDir(d.id)).some((f) => f.endsWith('.part')), 'refused uploads are cleaned up');
+  assert.throws(() => images.removeImage(d.id, '../x'), /no such photo/);
+});
+
+test('Facebook: photos are uploaded unpublished, then attached to one post', async () => {
+  const d = photoDraft('facebook_post', 'Look at this');
+  let n = 0;
+  routes['POST /fb/v23.0/1234567890/photos'] = () => [200, { id: `ph${++n}` }];
+  routes['POST /fb/v23.0/1234567890/feed'] = () => [200, { id: '1234567890_777' }];
+  const from = seen.length;
+  const r = await pub.facebookPublisher.publish(d, '', FB_ENV);
+  assert.equal(r.url, 'https://www.facebook.com/1234567890_777');
+  const ups = seen.slice(from).filter((c) => c.path.endsWith('/photos'));
+  assert.equal(ups.length, 2);
+  assert.match(ups[0].headers['content-type'], /multipart\/form-data/);
+  assert.match(ups[0].body, /name="published"\r\n\r\nfalse/);
+  const feed = new URLSearchParams(seen.slice(from).find((c) => c.path.endsWith('/feed')).body);
+  assert.equal(feed.get('message'), 'Look at this');
+  assert.equal(feed.get('attached_media[0]'), '{"media_fbid":"ph1"}');
+  assert.equal(feed.get('attached_media[1]'), '{"media_fbid":"ph2"}');
+});
+
+test('X: photos are uploaded and go on the first post of a thread only', async () => {
+  const d = photoDraft('x_thread', 'One\n\n---\n\nTwo');
+  let m = 0;
+  routes['POST /x/2/media/upload'] = () => [200, { data: { id: `m${++m}` } }];
+  let t = 0;
+  routes['POST /x/2/tweets'] = () => [201, { data: { id: `t${++t}` } }];
+  const from = seen.length;
+  await pub.xPublisher.publish(d, '', X_ENV);
+  const calls = seen.slice(from);
+  const ups = calls.filter((c) => c.path === '/x/2/media/upload');
+  assert.equal(ups.length, 2);
+  assert.match(ups[0].headers.authorization, /^OAuth /);
+  assert.match(ups[0].body, /name="media_category"\r\n\r\ntweet_image/);
+  const tweets = calls.filter((c) => c.path === '/x/2/tweets').map((c) => JSON.parse(c.body));
+  assert.deepEqual(tweets[0].media, { media_ids: ['m1', 'm2'] });
+  assert.equal(tweets[1].media, undefined);
+});
+
+test('LinkedIn: one photo is a media post, several are a multi-photo post', async () => {
+  routes['GET /li/v2/userinfo'] = () => [200, { sub: 'abc' }];
+  let i = 0;
+  routes['POST /li/rest/images'] = () => [200, { value: { uploadUrl: `${base}/li/up/${++i}`, image: `urn:li:image:${i}` } }];
+  routes['PUT /li/up/1'] = routes['PUT /li/up/2'] = routes['PUT /li/up/3'] = () => [201, {}];
+  routes['POST /li/rest/posts'] = () => [201, {}, { 'x-restli-id': 'urn:li:share:1' }];
+  const from = seen.length;
+  await pub.linkedinPublisher.publish(photoDraft('linkedin_post', 'Hi', [PNG]), '', LI_ENV);
+  let post = JSON.parse(seen.slice(from).find((c) => c.path === '/li/rest/posts').body);
+  assert.deepEqual(post.content, { media: { id: 'urn:li:image:1' } });
+  const init = JSON.parse(seen.slice(from).find((c) => c.path === '/li/rest/images').body);
+  assert.deepEqual(init, { initializeUploadRequest: { owner: 'urn:li:person:abc' } });
+  assert.equal(seen.slice(from).find((c) => c.path === '/li/up/1').headers['content-type'], 'image/png');
+  const from2 = seen.length;
+  await pub.linkedinPublisher.publish(photoDraft('linkedin_post', 'Hi'), '', LI_ENV);
+  post = JSON.parse(seen.slice(from2).find((c) => c.path === '/li/rest/posts').body);
+  assert.deepEqual(post.content, { multiImage: { images: [{ id: 'urn:li:image:2' }, { id: 'urn:li:image:3' }] } });
+});
+
+test('photo upload route: added, served, refused for articles and approved posts, removed', async () => {
+  const { buildServer } = require('../src/server');
+  const app = buildServer(4497);
+  const H = { host: '127.0.0.1:4497', 'x-plume-site': 'test.example' };
+  const d = q.createDraft({ agent: 'social', kind: 'facebook_post', title: 'p', body: 'x', meta: {} });
+  let r = await app.inject({ method: 'POST', url: `/api/drafts/${d.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual(r.json().images.map((i) => i.name), ['1.png']);
+  r = await app.inject({ url: `/api/drafts/${d.id}/images/1.png`, headers: H });
+  assert.equal(r.headers['content-type'], 'image/png');
+  assert.ok(Buffer.from(r.rawPayload).equals(PNG));
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${d.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: Buffer.from('<svg/>') });
+  assert.equal(r.statusCode, 400);
+  assert.match(r.json().error, /not a JPG, PNG or GIF/);
+  const article = q.createDraft({ agent: 'writer', kind: 'blog_post', title: 'a', body: 'x', meta: {} });
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${article.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 404);
+  r = await app.inject({ method: 'DELETE', url: `/api/drafts/${d.id}/images/1.png`, headers: H });
+  assert.deepEqual(r.json().images, []);
+  q.moveDraft(d.id, 'approved', { target: 'facebook' });
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${d.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 409);
+  await app.close();
 });

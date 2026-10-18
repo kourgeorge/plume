@@ -28,6 +28,8 @@ export interface IntegrationDef {
   group?: 'analytics' | 'phone' | 'social' | 'outreach';
   /** A page that helps get the details, shown as a button on the card. */
   link?: { label: string; url: string };
+  /** Another connection this one borrows its keys from: it is only ready once that one is. */
+  uses?: string;
   fields: Field[];
 }
 
@@ -157,6 +159,24 @@ export const INTEGRATIONS: IntegrationDef[] = [
     ],
   },
   {
+    id: 'instagram',
+    group: 'social',
+    label: 'Instagram',
+    uses: 'facebook',
+    blurb:
+      'Post Reels to Instagram, using the Facebook Page connection above (fill that in first). The Instagram account must be a Business or Creator account linked to that Facebook Page. When you make the Page token, also add the "instagram_basic" and "instagram_content_publish" permissions. Upload your filmed video to a video draft, then approve it to Instagram.',
+    fields: [
+      {
+        key: 'accountId',
+        env: 'INSTAGRAM_ACCOUNT_ID',
+        label: 'Instagram account ID',
+        optional: true,
+        placeholder: 'leave empty to find it from the Facebook Page',
+        help: 'Only needed if Plume cannot find it on its own.',
+      },
+    ],
+  },
+  {
     id: 'reddit',
     group: 'social',
     label: 'Reddit',
@@ -259,15 +279,17 @@ export function describeIntegrations() {
   const all = readAll();
   return INTEGRATIONS.map((def) => {
     const saved = all[def.id] ?? {};
+    const base = def.uses ? INTEGRATIONS.find((d) => d.id === def.uses) : undefined;
+    const baseReady = !base || base.fields.every((f) => f.optional || all[base.id]?.[f.key]);
     return {
       id: def.id,
       label: def.label,
       blurb: def.blurb,
       link: def.link ?? null,
       group: def.group ?? 'publishing',
-      connected: def.fields.every((f) => (f.optional && !f.laterRequired) || saved[f.key]),
+      connected: baseReady && (!def.uses || !!all[def.id]) && def.fields.every((f) => (f.optional && !f.laterRequired) || saved[f.key]),
       // Test can help finish a connection (Wix lists who can be the author), so allow it once the required parts are saved.
-      testable: def.fields.every((f) => f.optional || saved[f.key]),
+      testable: baseReady && def.fields.every((f) => f.optional || saved[f.key]),
       fields: def.fields.map((f) => ({
         key: f.key,
         label: f.label,
@@ -345,6 +367,7 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
       case 'x':
       case 'linkedin':
       case 'facebook':
+      case 'instagram':
       case 'reddit': {
         const { testSocial } = await import('./social/publishers');
         return await testSocial(id, env);

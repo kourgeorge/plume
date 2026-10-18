@@ -5,10 +5,12 @@ import { ContactKind, STATUSES, addContact, getContact, listContacts, removeCont
 import { discoverCreators, draftCreatorMessage } from '../outreach/creators';
 import { discoverLinkPages, draftLinkRequest } from '../outreach/links';
 import { emailDailyLimit, emailsSentToday } from '../outreach/email';
-import { SIZES, SizeId, previews, renderPreview, videoDir } from '../video/agent';
+import { pipeline } from 'stream/promises';
+import { SIZES, SizeId, footage, footagePath, previews, renderPreview, videoDir } from '../video/agent';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { siteEnv } from '../integrations';
 import { getDraft } from '../queue';
+import { IMAGE_KINDS, IMAGE_MIME, addImage, imageDir, imageFile, listImages, removeImage } from '../social/images';
 
 /** Routes for outreach (creators, link prospects, email) and video previews. Registered from the main route file. */
 export function registerOutreachRoutes(app: FastifyInstance): void {
@@ -93,7 +95,7 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>('/api/video/:id', async (req, reply) => {
     const d = getDraft(Number(req.params.id));
     if (!d || d.kind !== 'video_script') return reply.code(404).send({ error: 'not a video script' });
-    return { previews: previews(d.id), sizes: Object.fromEntries(Object.entries(SIZES).map(([k, v]) => [k, v.label])), running: runningJob(`video:${d.id}`)?.progress ?? null };
+    return { previews: previews(d.id), footage: footage(d.id), sizes: Object.fromEntries(Object.entries(SIZES).map(([k, v]) => [k, v.label])), running: runningJob(`video:${d.id}`)?.progress ?? null };
   });
 
   app.post<{ Params: { id: string }; Body: { sizes?: string[] } }>('/api/video/:id/render', async (req, reply) => {
@@ -110,10 +112,87 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     return { jobId };
   });
 
-  /** Serve a finished preview. Only the three known file names, from that draft's own folder. */
+  // The owner's filmed video arrives as the raw request body, so a large file streams straight to disk.
+  app.addContentTypeParser(['video/mp4', 'video/quicktime', 'application/octet-stream', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic'], { bodyLimit: 1024 * 1024 * 1024 }, (_req, payload, done) => done(null, payload));
+
+  app.post<{ Params: { id: string } }>('/api/video/:id/footage', async (req, reply) => {
+    const d = getDraft(Number(req.params.id));
+    if (!d || d.kind !== 'video_script') return reply.code(404).send({ error: 'not a video script' });
+    if (!req.body || typeof (req.body as any).pipe !== 'function') return reply.code(400).send({ error: 'send the video file itself (MP4 or MOV)' });
+    fs.mkdirSync(videoDir(d.id), { recursive: true });
+    // Written to a side file first, so a broken upload never replaces a good one.
+    const part = `${footagePath(d.id)}.part`;
+    try {
+      await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(part));
+      if (!fs.statSync(part).size) throw new Error('the file was empty');
+      fs.renameSync(part, footagePath(d.id));
+    } catch (err) {
+      fs.rmSync(part, { force: true });
+      return bad(reply, err);
+    }
+    return { footage: footage(d.id) };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/video/:id/footage', async (req, reply) => {
+    const d = getDraft(Number(req.params.id));
+    if (!d || d.kind !== 'video_script') return reply.code(404).send({ error: 'not a video script' });
+    fs.rmSync(footagePath(d.id), { force: true });
+    return { footage: null };
+  });
+
+  // ---- photos on social posts ----
+  const postDraft = (id: string) => {
+    const d = getDraft(Number(id));
+    return d && IMAGE_KINDS.includes(d.kind) ? d : null;
+  };
+  const shown = (draftId: number) => listImages(draftId).map(({ name, type, bytes, at }) => ({ name, type, bytes, at }));
+
+  app.get<{ Params: { id: string } }>('/api/drafts/:id/images', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
+    return { images: shown(d.id) };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/images', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
+    if (d.status !== 'draft' && d.status !== 'failed') return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
+    if (!req.body || typeof (req.body as any).pipe !== 'function') return reply.code(400).send({ error: 'send the photo file itself (JPG, PNG or GIF)' });
+    fs.mkdirSync(imageDir(d.id), { recursive: true });
+    const part = path.join(imageDir(d.id), `upload-${Date.now()}.part`);
+    try {
+      await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(part));
+      addImage(d.id, part);
+    } catch (err) {
+      fs.rmSync(part, { force: true });
+      return bad(reply, err);
+    }
+    return { images: shown(d.id) };
+  });
+
+  app.delete<{ Params: { id: string; name: string } }>('/api/drafts/:id/images/:name', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
+    if (d.status !== 'draft' && d.status !== 'failed') return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
+    try {
+      removeImage(d.id, req.params.name);
+    } catch (err) {
+      return bad(reply, err, 404);
+    }
+    return { images: shown(d.id) };
+  });
+
+  app.get<{ Params: { id: string; name: string } }>('/api/drafts/:id/images/:name', async (req, reply) => {
+    const id = Number(req.params.id);
+    const img = Number.isInteger(id) ? imageFile(id, req.params.name) : null;
+    if (!img) return reply.code(404).send({ error: 'no such photo' });
+    return reply.type(IMAGE_MIME[img.type]).header('cache-control', 'no-store').send(fs.createReadStream(img.file));
+  });
+
+  /** Serve a finished preview or the uploaded video. Only known file names, from that draft's own folder. */
   app.get<{ Params: { id: string; file: string } }>('/api/video/:id/:file', async (req, reply) => {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !/^(vertical|square|wide)\.mp4$/.test(req.params.file)) return reply.code(404).send({ error: 'no such file' });
+    if (!Number.isInteger(id) || !/^(vertical|square|wide|footage)\.mp4$/.test(req.params.file)) return reply.code(404).send({ error: 'no such file' });
     const file = path.join(videoDir(id), req.params.file);
     if (!fs.existsSync(file)) return reply.code(404).send({ error: 'no such file' });
     // Safari only plays video from a server that answers byte-range requests.

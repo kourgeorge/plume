@@ -63,9 +63,9 @@ export function getPublisher(id: string): Publisher | undefined {
 /** Which kinds of draft each destination takes. File export takes anything. */
 const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
 const REDDIT_KINDS = ['reddit_reply', 'reddit_post'];
-const SOCIAL_TARGETS = ['x', 'linkedin', 'facebook', 'reddit', 'email'];
-/** Not for publishing anywhere: an outreach email goes to one person; a video script is filmed, not posted. */
-const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['export'] };
+const SOCIAL_TARGETS = ['x', 'linkedin', 'facebook', 'facebook_reel', 'instagram', 'reddit', 'email'];
+/** Kinds with their own short list: an outreach email goes to one person; a video script is posted as a Reel, using the video the owner filmed and uploaded. */
+const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['facebook_reel', 'instagram', 'export'] };
 export function targetsFor(kind: string): string[] {
   if (PRIVATE_KINDS[kind]) return PRIVATE_KINDS[kind];
   if (REDDIT_KINDS.includes(kind)) return ['reddit', 'export'];
@@ -84,7 +84,7 @@ export function checkTarget(kind: string, targetId: string): void {
     kind === 'outreach_email' || kind === 'outreach_message'
       ? 'an outreach message'
       : kind === 'video_script'
-        ? 'a video script'
+        ? 'a Reel'
         : SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind)
           ? 'a social post'
           : 'an article';

@@ -244,14 +244,23 @@
           <span class="muted" id="draft-agent"></span>
         </div>
         <input id="draft-title" class="title-input" dir="auto">
-        <p id="draft-reason" class="muted"></p>
-        <div class="seo-fields">
+        <div id="draft-reason" class="draft-reason" hidden><span class="draft-reason-label">Why this one</span><p id="draft-reason-text" dir="auto"></p></div>
+        <div class="seo-fields" id="draft-seo">
           <label>Address <input id="draft-slug"></label>
           <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta" dir="auto"></label>
         </div>
         <textarea id="draft-body" class="editor-area" dir="auto"></textarea>
-        <div class="editor-bar">
-          <span><select id="draft-target"></select><input id="draft-when" type="datetime-local" title="Leave empty to publish now"></span>
+        <p id="draft-count" class="small muted draft-count" hidden></p>
+        <div id="draft-photos" class="draft-photos" hidden>
+          <div class="photos-head"><span class="small"><strong>Photos</strong> <span class="muted" id="photos-note">up to 4 · JPG, PNG or GIF, 5 MB each</span></span><label class="small-btn" id="photos-pick">Add photo<input type="file" id="photos-file" accept="image/jpeg,image/png,image/gif" multiple hidden></label></div>
+          <div id="photos-list" class="photos-list"></div>
+          <p id="photos-msg" class="small" hidden></p>
+        </div>
+        <div class="editor-bar draft-actions">
+          <span class="draft-where">
+            <label>Post to <select id="draft-target"></select></label>
+            <label>When <input id="draft-when" type="datetime-local"><small class="muted">empty = right away</small></label>
+          </span>
           <span>
             <button id="draft-reject" class="secondary">Not useful</button>
             <button id="draft-save" class="secondary">Save edits</button>

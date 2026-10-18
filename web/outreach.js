@@ -184,8 +184,6 @@
   const OUTREACH = ['outreach_email', 'outreach_message'];
 
   async function wireDraft(d) {
-    const seo = document.querySelector('#view-draft .seo-fields');
-    if (seo) seo.hidden = OUTREACH.includes(d.kind) || d.kind === 'video_script';
     extra.innerHTML = '';
     if (OUTREACH.includes(d.kind)) {
       const editable = d.status === 'draft' || d.status === 'failed';
@@ -200,10 +198,60 @@
       return;
     }
     if (d.kind !== 'video_script') return;
-    extra.innerHTML = `<div class="video-box"><div class="editor-bar"><span class="small muted" id="vid-msg">A quick preview: each scene's on-screen text on your brand colours, timed like the script. Film the real clips from the shot list.</span><span><button id="vid-make" class="secondary">Make preview</button></span></div><div id="vid-players" class="vid-players"></div></div>`;
+    const editable = d.status === 'draft' || d.status === 'failed';
+    extra.innerHTML = `<div class="video-box">
+      <div class="editor-bar"><span class="small" id="foot-msg"><strong>Your video</strong> <span class="muted">— film the script, then add the finished video here. This is what gets posted as a Reel, with the caption below.</span></span><span><label class="small-btn" id="foot-pick" ${editable ? '' : 'hidden'}>Add video<input type="file" id="foot-file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden></label> <button id="foot-remove" class="secondary small-btn" hidden>Remove</button></span></div>
+      <progress id="foot-progress" max="100" value="0" hidden></progress>
+      <div id="foot-player" class="vid-players"></div>
+      <div class="editor-bar"><span class="small muted" id="vid-msg">A quick preview: each scene's on-screen text on your brand colours, timed like the script. It is only for checking timing and is never posted.</span><span><button id="vid-make" class="secondary">Make preview</button></span></div><div id="vid-players" class="vid-players"></div></div>`;
+    const footMsg = (text, cls = 'small bad') => {
+      $('foot-msg').className = cls;
+      $('foot-msg').textContent = text;
+    };
+    $('foot-file').onchange = () => {
+      const file = $('foot-file').files[0];
+      if (!file) return;
+      // XMLHttpRequest, not fetch: it is the only way to show how far an upload has got.
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/video/${d.id}/footage`);
+      xhr.setRequestHeader('x-plume-site', SITE);
+      xhr.setRequestHeader('content-type', /\.mov$/i.test(file.name) ? 'video/quicktime' : 'video/mp4');
+      $('foot-progress').hidden = false;
+      $('foot-pick').hidden = true;
+      xhr.upload.onprogress = (e) => e.lengthComputable && ($('foot-progress').value = Math.round((e.loaded / e.total) * 100));
+      xhr.onloadend = () => {
+        $('foot-progress').hidden = true;
+        $('foot-file').value = '';
+        if (xhr.status !== 200) {
+          let why = xhr.statusText || 'the upload did not finish';
+          try {
+            why = JSON.parse(xhr.responseText).error || why;
+          } catch {}
+          footMsg(`Upload failed: ${why}`);
+        }
+        show();
+      };
+      xhr.send(file);
+    };
+    $('foot-remove').onclick = async () => {
+      if (!confirm('Remove your uploaded video from this draft?')) return;
+      try {
+        await api(`/api/video/${d.id}/footage`, { method: 'DELETE' });
+      } catch (err) {
+        footMsg(err.message);
+      }
+      show();
+    };
     const show = async () => {
       if (currentDraft !== d.id) return;
       const v = await api(`/api/video/${d.id}`);
+      const f = v.footage;
+      $('foot-pick').hidden = !editable || !$('foot-progress').hidden;
+      $('foot-pick').firstChild.textContent = f ? 'Replace video' : 'Add video';
+      $('foot-remove').hidden = !editable || !f;
+      $('foot-player').innerHTML = f
+        ? `<figure><video controls preload="metadata" src="${withSite(`/api/video/${d.id}/${f.file}`)}&t=${encodeURIComponent(f.at)}"></video><figcaption class="small muted">${(f.bytes / 1048576).toFixed(1)} MB · added ${esc(when(f.at))}</figcaption></figure>`
+        : `<p class="small muted">No video yet. Approving to Facebook or Instagram needs one.</p>`;
       $('vid-make').disabled = !!v.running;
       $('vid-make').textContent = v.running ? v.running : v.previews.length ? 'Make again' : 'Make preview';
       $('vid-players').innerHTML = v.previews
