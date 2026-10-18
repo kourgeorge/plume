@@ -214,6 +214,40 @@
     return ghState;
   }
 
+  const prLink = (url, label, cls = 'secondary') => `<a href="${esc(url)}" target="_blank" rel="noopener"><button class="${cls}">${label}</button></a>`;
+  const diffHtml = (lines) =>
+    lines.map((l) => `<div class="${l.t === 'add' ? 'd-add' : l.t === 'del' ? 'd-del' : l.t === 'gap' ? 'd-gap' : ''}" dir="auto">${l.t === 'gap' ? '…' : esc(l.line) || ' '}</div>`).join('');
+  const HOW = { text: 'Found by matching the live page', remembered: 'Found by matching the live page', name: 'Guessed from the file name only — check it' };
+
+  /** The prepared change: which file, why that file, and the exact lines, before anything is sent. */
+  function showProposal(holder, id, fix) {
+    const p = fix.proposal;
+    const src = p.source
+      ? `<p class="small">This page comes from <code>${esc(p.source.path)}</code> in ${esc(p.repo)}. <span class="${p.source.how === 'name' ? 'warn' : 'muted'}">${esc(HOW[p.source.how] ?? '')}: ${esc(p.source.evidence)}.</span></p>`
+      : `<p class="small">Change in ${esc(p.repo)}:</p>`;
+    holder.innerHTML = `<div class="act">${src}<p class="small">${esc(p.summary)}</p>
+      ${p.files.map((f) => `<div class="small muted">${f.isNew ? 'New file' : 'File'}: <code>${esc(f.path)}</code></div><div class="diff">${diffHtml(f.diff)}</div>`).join('')}
+      <div class="act-foot"><button data-open>Open the pull request</button><button class="secondary" data-cancel>Cancel</button>
+      <small class="muted">Goes into "${esc(p.base)}" after you merge it. Plume never merges.</small></div></div>`;
+    holder.querySelector('[data-open]').onclick = async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Opening…';
+      try {
+        const r = await post('/api/code-fixes/open', { issueId: id });
+        ghState = null;
+        holder.innerHTML = r.prUrl ? `${prLink(r.prUrl, 'Review the pull request ↗', '')} <small class="muted">After you merge it, Plume checks the live page and marks this fixed.</small>` : `<small class="warn">${esc(r.message)}</small>`;
+      } catch (err) {
+        holder.innerHTML = `<small class="warn">${esc(err.message)}</small>`;
+      }
+    };
+    holder.querySelector('[data-cancel]').onclick = async () => {
+      await post('/api/code-fixes/cancel', { issueId: id }).catch(() => {});
+      ghState = null;
+      delete holder.dataset.prWired;
+      wirePr(holder.parentElement);
+    };
+  }
+
   /** Add the button next to every fix in `container` that has a data-pr-issue attribute holder. */
   async function wirePr(container) {
     const g = await github();
@@ -222,15 +256,24 @@
       holder.dataset.prWired = '1';
       const id = holder.dataset.prIssue;
       const prior = g.fixes[id];
-      if (prior?.status === 'opened' && prior.prUrl) {
-        holder.innerHTML = `<a href="${esc(prior.prUrl)}" target="_blank" rel="noopener"><button class="secondary">Pull request opened ↗</button></a>`;
+      if (prior?.status === 'proposed' && prior.proposal) {
+        showProposal(holder, id, prior);
+        continue;
+      }
+      if (prior?.prUrl && prior.status === 'opened') {
+        holder.innerHTML = `${prLink(prior.prUrl, 'Pull request opened ↗')} <small class="muted">Plume checks the live page once it's merged.</small>`;
+        continue;
+      }
+      if (prior?.prUrl && ['merged', 'verified', 'check-by-hand'].includes(prior.status)) {
+        holder.innerHTML = `${prLink(prior.prUrl, prior.status === 'verified' ? 'Fixed and checked ✓' : 'Merged ↗')} <small class="${prior.status === 'check-by-hand' ? 'warn' : 'muted'}">${esc(prior.message ?? '')}</small>`;
         continue;
       }
       if (!g.connected) {
         holder.innerHTML = '<a href="#settings"><button class="secondary" title="Connect this website\'s GitHub repository under Settings">Fix with a pull request…</button></a>';
         continue;
       }
-      holder.innerHTML = `<button class="secondary">Fix with a pull request</button>${prior && prior.status !== 'opened' ? `<small class="muted"> last try: ${esc(prior.message ?? prior.status)}</small>` : ''}`;
+      const last = prior && !['opened', 'cancelled'].includes(prior.status) ? `<small class="muted"> last try: ${esc(prior.message ?? prior.status)}</small>` : '';
+      holder.innerHTML = `<button class="secondary" title="Plume finds the file, shows you the change, and only opens the pull request when you say so">Fix with a pull request</button>${last}`;
       holder.querySelector('button').onclick = async (e) => {
         const b = e.target;
         b.disabled = true;
@@ -244,8 +287,8 @@
             if (job.status !== 'running') {
               ghState = null;
               const fix = (await api(`/api/code-fixes/status?issueId=${encodeURIComponent(id)}`)).fix;
-              if (fix?.prUrl) holder.innerHTML = `<a href="${esc(fix.prUrl)}" target="_blank" rel="noopener"><button>Review the pull request ↗</button></a>`;
-              else holder.innerHTML = `<small class="warn">${esc(job.error || fix?.message || 'Could not open a pull request.')}</small>`;
+              if (fix?.status === 'proposed' && fix.proposal) showProposal(holder, id, fix);
+              else holder.innerHTML = `<small class="warn">${esc(job.error || fix?.message || 'Could not prepare a change.')}</small>`;
               break;
             }
           }

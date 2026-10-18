@@ -3,7 +3,7 @@ import {
   ENGINES, EngineId, MAX_QUESTIONS, addQuestion, brandNames, detectEngines, engineSettings, estimateCost, getAnswer,
   listQuestions, openGaps, pinEngine, removeQuestion, runVisibilityCheck, runningRun, setBrandNames, suggestQuestions, visibilitySummary,
 } from '../geo/visibility';
-import { findIssue, fixesByIssue, lastFix, startFixPullRequest } from '../geo/codefix';
+import { cancelProposedFix, findIssue, fixesByIssue, lastFix, openProposedFix, startFixPullRequest } from '../geo/codefix';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { siteEnv } from '../integrations';
 import { aiGapSeen } from '../today';
@@ -91,5 +91,14 @@ export function registerGeoRoutes(app: FastifyInstance): void {
       return bad(reply, err);
     }
   });
+  // The owner looked at the prepared change: open the pull request, or drop it.
+  app.post<{ Body: { issueId?: string } }>('/api/code-fixes/open', async (req, reply) => {
+    try {
+      return await openProposedFix(req.body?.issueId ?? '');
+    } catch (err) {
+      return bad(reply, err);
+    }
+  });
+  app.post<{ Body: { issueId?: string } }>('/api/code-fixes/cancel', async (req) => (cancelProposedFix(req.body?.issueId ?? ''), { ok: true }));
   app.get<{ Querystring: { issueId?: string } }>('/api/code-fixes/status', async (req) => ({ fix: lastFix(req.query.issueId ?? '') }));
 }

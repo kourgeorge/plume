@@ -14,6 +14,7 @@ import { detectMoves, listTracked } from './seo/rankings';
 import { checkAllSerps, serpCreds } from './seo/serp';
 import { listQuestions, runVisibilityCheck, visibilitySummary } from './geo/visibility';
 import { finishJob, startJob } from './jobs';
+import { followUpFixes } from './geo/codefix';
 import { currentSite, withSite } from './site';
 import { listSites, siteUrl } from './sites';
 
@@ -76,6 +77,17 @@ export function taskDefs(): TaskDef[] {
         } finally {
           await closeBrowser();
         }
+      },
+    },
+    {
+      id: 'fix-follow-up',
+      label: 'Check merged fix pull requests on the live site',
+      cron: '23 * * * *',
+      costsMoney: false,
+      run: async () => {
+        const r = await followUpFixes();
+        if (!r.checked) return null;
+        return `checked ${r.checked} pull request(s)${r.verified.length ? `, ${r.verified.length} confirmed fixed` : ''}${r.closed ? `, ${r.closed} closed without merging` : ''}`;
       },
     },
     {
@@ -200,7 +212,8 @@ export async function runTask(id: string): Promise<{ status: 'done' | 'failed' |
   const key = runKey(id);
   if (running.has(key)) return { status: 'skipped', message: 'already running' };
   running.add(key);
-  const quiet = id === 'publish';
+  // Frequent tasks: no job card or run row each time; they still log when they did something.
+  const quiet = id === 'publish' || id === 'fix-follow-up';
   const jobId = quiet ? null : startJob(`task:${id}`, def.label);
   const runId = quiet ? null : Number(getDb().prepare(`INSERT INTO task_runs (task, started_at, status) VALUES (?, ?, 'running')`).run(id, new Date().toISOString()).lastInsertRowid);
   const end = (status: 'done' | 'failed' | 'skipped', message: string) => {
