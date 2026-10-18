@@ -1711,20 +1711,20 @@ function drawChart(box, title, points, avg, opts = {}) {
   const mag = 10 ** Math.floor(Math.log10(max));
   const top = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((t) => t >= max) ?? 10 * mag;
   const x = (i) => L + (i * (W - L - 8)) / Math.max(1, points.length - 1);
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join('');
+  const area = `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z`;
   let path2 = '';
   second.forEach((p, i) => {
     if (p.y != null) path2 += `${path2 && second[i - 1]?.y != null ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`;
   });
-  const y = (v) => T + (1 - v / top) * (H - T - B);
-  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join('');
-  const area = `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z`;
   const step = Math.ceil(points.length / 8);
   const last = points[points.length - 1];
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="line-chart" role="img" aria-label="${esc(title)}">
-    ${path2 ? `<path d="${path2}" class="line second"/>` : ''}
     ${(top < 2 ? [0, 1] : [0, 0.5, 1]).map((f) => `<line x1="${L}" x2="${W}" y1="${y(top * f)}" y2="${y(top * f)}" class="grid"/><text x="${L - 6}" y="${y(top * f) + 4}" class="axis" text-anchor="end">${Math.round(top * f).toLocaleString()}</text>`).join('')}
     ${avg != null ? `<line x1="${L}" x2="${W - 8}" y1="${y(avg)}" y2="${y(avg)}" class="avg"/>` : ''}
     <path d="${area}" class="area"/><path d="${path}" class="line"/>
+    ${path2 ? `<path d="${path2}" class="line second"/>` : ''}
     <circle cx="${x(points.length - 1)}" cy="${y(last.y)}" r="4" class="dot"/>
     <text x="${x(points.length - 1)}" y="${y(last.y) - 9}" class="axis strong" text-anchor="end">${fmtDay(last.x)} · ${n(last.y)}</text>
     ${points.map((p, i) => ((i % step === 0 && points.length - 1 - i >= step / 2) || i === points.length - 1 ? `<text x="${x(i)}" y="${H - 4}" class="axis" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${p.x.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/')}</text>` : '')).join('')}

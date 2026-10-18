@@ -629,6 +629,17 @@ body.chat-resizing { cursor: col-resize; user-select: none; }
 .line-chart .avg { stroke: var(--faint); stroke-dasharray: 5 4; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .line-chart .line { fill: none; stroke: #3b82f6; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .line-chart .area { fill: rgba(59,130,246,.08); }
+.line-chart .line.second { stroke: #f59e0b; }
+.lg-line.second { border-top-color: #f59e0b; }
+.funnel { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 0 2px; }
+.funnel-step { flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; }
+.funnel-step .lbl { font-size: 12.5px; color: var(--ink-2); }
+.funnel-step .val { display: flex; align-items: baseline; gap: 8px; }
+.funnel-step .val b { font: 500 22px/1.3 var(--font-mono); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.funnel-step .delta { background: transparent; padding: 0; font-size: 12px; }
+.funnel-arrow { color: var(--faint); font-size: 18px; }
+.bars-table td.cut { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.bars-table .flag { font-size: 15px; }
 .line-chart .dot { fill: #3b82f6; stroke: var(--panel); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .line-chart .axis { fill: var(--muted); font-size: 11px; font-family: var(--font); }
 .details-empty { padding: 4px 2px; }
@@ -660,17 +671,6 @@ body.chat-resizing { cursor: col-resize; user-select: none; }
 .gauge2 text { font: 500 17px var(--font-mono); fill: var(--ink); letter-spacing: -.03em; }
 .gauges-row .count b { font: 500 26px/64px var(--font-mono); border: 0; }
 .vitals-title { margin-bottom: 4px; }
-.line-chart .line.second { stroke: #f59e0b; }
-.lg-line.second { border-top-color: #f59e0b; }
-.funnel { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 0 2px; }
-.funnel-step { flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; }
-.funnel-step .lbl { font-size: 12.5px; color: var(--ink-2); }
-.funnel-step .val { display: flex; align-items: baseline; gap: 8px; }
-.funnel-step .val b { font: 500 22px/1.3 var(--font-mono); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.funnel-step .delta { background: transparent; padding: 0; font-size: 12px; }
-.funnel-arrow { color: var(--faint); font-size: 18px; }
-.bars-table td.cut { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.bars-table .flag { font-size: 15px; }
 .vital-rows { border-top: 1px solid var(--line-soft); }
 .vital-row { display: grid; grid-template-columns: 10px 1fr auto 120px; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
 .vital-row b { font: 500 13px var(--font-mono); border: 0; }
