@@ -1132,7 +1132,7 @@ async function loadUsage() {
   const search = { server: "Claude's built-in search", local: 'Plume runs searches itself (Tavily)', off: 'off — add TAVILY_API_KEY to .env to turn it on' }[l.webSearch];
   $('usage-llm').innerHTML = l.error
     ? `AI is not connected. <a href="/#llm">Set up the AI connection</a>.`
-    : `Calls go to ${esc(l.endpoint)} (key ${esc(l.keyHint)}, ${l.source === 'saved' ? 'saved on the AI connection screen' : 'from .env'}). Models: research ${esc(l.models.research)}, writing ${esc(l.models.draft)}, scoring ${esc(l.models.score)}. Web search: ${esc(search)}. <a href="/#llm">Change</a>`;
+    : `Calls go to ${esc(l.providerLabel)} at ${esc(l.endpoint)} (${l.keyHint ? `key ${esc(l.keyHint)}` : 'no key'}, ${l.source === 'saved' ? 'saved on the AI connection screen' : 'from .env'}). Models: research ${esc(l.models.research)}, writing ${esc(l.models.draft)}, scoring ${esc(l.models.score)}. Web search: ${esc(search)}. <a href="/#llm">Change</a>`;
   $('usage-rows').innerHTML = u.byPurpose
     .map((r) => `<tr><td>${esc(r.purpose)}</td><td>${esc(r.model)}</td><td>${r.calls}</td><td>${n(r.input)} / ${n(r.output)}</td><td>$${r.cost.toFixed(3)}</td></tr>`)
     .join('');

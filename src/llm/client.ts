@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { priceFor, supportsEffort } from '../config';
-import { LlmConfig, getLlmConfig, llmProblem, parseHeaders, viaProxy } from './settings';
+import { LlmConfig, describeLlm, endpointOf, getLlmConfig, llmProblem, openAiFormat, parseHeaders, providerOf, viaProxy } from './settings';
+import { openAiCall } from './openai';
 import { LOCAL_TOOLS, localSearchAvailable, runLocalTool } from './search';
 import { checkBudget } from './budget';
 import { log } from '../log';
@@ -16,7 +17,7 @@ let client: { cfg: LlmConfig; sdk: Anthropic } | null = null;
 export function clientFor(cfg: LlmConfig): Anthropic {
   const proxy = viaProxy(cfg);
   return new Anthropic({
-    baseURL: cfg.baseUrl || null,
+    baseURL: endpointOf(cfg) || null,
     apiKey: proxy ? null : cfg.apiKey,
     authToken: proxy ? cfg.apiKey : null,
     defaultHeaders: parseHeaders(cfg.headers),
@@ -29,7 +30,7 @@ function anthropic(): Anthropic {
   return client.sdk;
 }
 
-/** Server-side refusal fallback is an Anthropic API feature; gateways generally don't forward it. */
+/** Server-side refusal fallback is an Anthropic API feature; gateways and other providers don't have it. */
 const fallbacksOn = () => (process.env.PLUME_FALLBACKS ? process.env.PLUME_FALLBACKS === '1' : !viaProxy());
 
 export interface AskOptions {
@@ -217,6 +218,7 @@ async function callStream(
   fallbackOk: boolean,
   noMoreTools = false,
 ): Promise<Anthropic.Beta.BetaMessage> {
+  if (openAiFormat()) return callOpenAiStream(opts, messages, tools, noMoreTools);
   const stream = anthropic().beta.messages.stream({
     model: opts.model,
     max_tokens: opts.maxTokens ?? 32000,
@@ -250,14 +252,53 @@ async function callStream(
   }
 }
 
+/** The same call for providers that speak OpenAI's format, with the same silence limit. */
+async function callOpenAiStream(opts: AskOptions, messages: Anthropic.Beta.BetaMessageParam[], tools: Anthropic.Beta.BetaToolUnion[], noMoreTools: boolean): Promise<Anthropic.Beta.BetaMessage> {
+  const abort = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let stalled = false;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ((stalled = true), abort.abort()), streamIdleMs);
+  };
+  arm();
+  try {
+    const msg = await openAiCall(
+      getLlmConfig(),
+      { model: opts.model, max_tokens: opts.maxTokens ?? 32000, system: opts.system, messages, tools, noMoreTools, schema: opts.schema, effort: opts.effort },
+      { signal: abort.signal, onChunk: arm },
+    );
+    recordUsage(opts.purpose, msg);
+    return msg;
+  } catch (err) {
+    throw stalled ? new StreamStalled(Math.round(streamIdleMs / 1000)) : err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The JSON in an answer. Some models wrap it in a ``` block or add a sentence around it. */
+export function extractJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)?.[1];
+    if (fenced) return JSON.parse(fenced);
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+    throw new Error('no JSON in the answer');
+  }
+}
+
 /** Like `ask`, but the answer is JSON matching `schema`, parsed. */
 export async function askJson<T>(opts: AskOptions & { schema: Record<string, unknown> }): Promise<T & { _sources: string[] }> {
   const res = await ask(opts);
   if (res.stopReason === 'max_tokens') throw new Error(`answer was cut off for ${opts.purpose}; raise maxTokens`);
   try {
-    return { ...(JSON.parse(res.text) as T), _sources: res.sources };
+    return { ...(extractJson(res.text) as T), _sources: res.sources };
   } catch {
-    throw new Error(`${opts.model} answered in prose instead of JSON for ${opts.purpose} — it (or the gateway) ignores structured output; pick another model in .env`);
+    throw new Error(`${opts.model} answered in prose instead of JSON for ${opts.purpose} — it (or the provider) ignores structured output; pick another model under "AI connection"`);
   }
 }
 
@@ -272,10 +313,10 @@ export async function askPlain(opts: { purpose: string; model: string; prompt: s
   for (let attempt = 0; ; attempt++) {
     checkBudget(opts.purpose);
     try {
-      const msg = await anthropic().beta.messages.create(
-        { model: opts.model, max_tokens: opts.maxTokens ?? 1500, messages: [{ role: 'user', content: opts.prompt }] },
-        { timeout: 120_000, maxRetries: 1 },
-      );
+      const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: opts.prompt }];
+      const msg = openAiFormat()
+        ? await openAiCall(getLlmConfig(), { model: opts.model, max_tokens: opts.maxTokens ?? 1500, messages }, { timeoutMs: 120_000 })
+        : await anthropic().beta.messages.create({ model: opts.model, max_tokens: opts.maxTokens ?? 1500, messages }, { timeout: 120_000, maxRetries: 1 });
       recordUsage(opts.purpose, msg);
       if (msg.stop_reason === 'refusal') throw new Error(`${opts.model} declined to answer`);
       return msg.content
@@ -296,6 +337,7 @@ export function costOf(model: string, u: { input: number; output: number; cacheR
 }
 
 function recordUsage(purpose: string, msg: Anthropic.Beta.BetaMessage): void {
+  const free = providerOf().local;
   const u = msg.usage;
   const row = {
     input: u.input_tokens ?? 0,
@@ -309,7 +351,7 @@ function recordUsage(purpose: string, msg: Anthropic.Beta.BetaMessage): void {
       `INSERT INTO llm_calls (at, site, purpose, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, cost_usd, stop_reason)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(new Date().toISOString(), currentSiteOrNull(), purpose, msg.model, row.input, row.output, row.cacheRead, row.cacheWrite, row.searches, costOf(msg.model, row), msg.stop_reason);
+    .run(new Date().toISOString(), currentSiteOrNull(), purpose, msg.model, row.input, row.output, row.cacheRead, row.cacheWrite, row.searches, free ? 0 : costOf(msg.model, row), msg.stop_reason);
 }
 
 export interface ModelCheck {
@@ -325,10 +367,15 @@ export interface ModelCheck {
 export function explainCallError(err: any): string {
   const status = err?.status;
   const raw = String(err?.error?.error?.message ?? err?.message ?? err);
-  if (status === 401 || /invalid.*(key|token|jwt)|unauthori[sz]ed|authentication/i.test(raw)) return 'the key was refused — check it, and that it belongs to this gateway';
+  if (status === 401 || /invalid.*(key|token|jwt)|unauthori[sz]ed|authentication|api key not valid/i.test(raw)) return 'the key was refused — check it, and that it belongs to this provider';
+  if (status === 402 || /insufficient.*(quota|balance|credit)|billing|payment required/i.test(raw)) return 'the provider says your account is out of credit — add some on its website';
   if (status === 403 && /not allowed to access model|model/i.test(raw)) return "your gateway doesn't allow this model for your key — pick one it offers";
-  if (status === 404 || /model.*not found|no such model|invalid model/i.test(raw)) return 'this model name is unknown to the gateway';
-  if (status === 429) return 'the gateway is rate-limiting you — wait a minute and try again';
+  if (status === 404 || /model.*(not found|does not exist|not exist)|no such model|invalid model|unknown model|try pulling it/i.test(raw)) return 'this model name is unknown to the provider — check the spelling on its model list';
+  if (status === 429) return 'the provider is rate-limiting you — wait a minute and try again';
+  const code = String(err?.cause?.code ?? '');
+  if (/ECONNREFUSED/.test(code)) return `nothing is answering at that address — if it runs on this computer (Ollama, LM Studio), check that it is started`;
+  if (err?.name === 'TimeoutError') return 'the provider did not answer in time';
+  if (err instanceof TypeError && /fetch failed/i.test(raw)) return `could not reach the provider (${String((err.cause as any)?.message ?? code ?? raw).slice(0, 120)})`;
   if (err instanceof Anthropic.APIConnectionTimeoutError) return 'the gateway did not answer in time';
   if (err instanceof Anthropic.APIConnectionError) return `could not reach the gateway (${String((err.cause as any)?.message ?? raw).slice(0, 120)})`;
   return raw.slice(0, 200);
@@ -341,7 +388,8 @@ export function explainCallError(err: any): string {
 export async function testConnection(cfg: LlmConfig): Promise<{ ok: boolean; problem: string | null; checks: ModelCheck[] }> {
   const problem = llmProblem(cfg);
   if (problem) return { ok: false, problem, checks: [] };
-  const sdk = clientFor(cfg);
+  const openai = openAiFormat(cfg);
+  const sdk = openai ? null : clientFor(cfg);
   const checks: ModelCheck[] = [];
   const roles = ['research', 'draft', 'score'] as const;
   const seen = new Map<string, ModelCheck>();
@@ -354,22 +402,32 @@ export async function testConnection(cfg: LlmConfig): Promise<{ ok: boolean; pro
     }
     const check: ModelCheck = { role, model, ok: false, message: '', json: null };
     try {
-      const r = await sdk.messages.create({ model, max_tokens: 64, messages: [{ role: 'user', content: 'Reply with the single word: ok' }] }, { timeout: 60_000, maxRetries: 0 });
+      // Thinking models spend part of the allowance before answering, so it is generous.
+      const r = openai
+        ? await openAiCall(cfg, { model, max_tokens: 1000, messages: [{ role: 'user', content: 'Reply with the single word: ok' }] }, { timeoutMs: 90_000 })
+        : await sdk!.messages.create({ model, max_tokens: 64, messages: [{ role: 'user', content: 'Reply with the single word: ok' }] }, { timeout: 60_000, maxRetries: 0 });
       check.ok = r.content.some((b) => b.type === 'text');
       check.message = check.ok ? 'works' : 'answered, but with no text';
       try {
-        const j = await sdk.messages.create(
-          {
-            model,
-            max_tokens: 200,
-            messages: [{ role: 'user', content: 'Is the sky blue on a clear day?' }],
-            output_config: { format: { type: 'json_schema', schema: { type: 'object', additionalProperties: false, required: ['yes'], properties: { yes: { type: 'boolean' } } } } },
-          } as any,
-          { timeout: 60_000, maxRetries: 0 },
-        );
-        const text = j.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
-        JSON.parse(text);
-        check.json = true;
+        const schema = { type: 'object', additionalProperties: false, required: ['yes'], properties: { yes: { type: 'boolean' } } };
+        if (openai) {
+          const j = await openAiCall(cfg, { model, max_tokens: 1000, schema, messages: [{ role: 'user', content: 'Is the sky blue on a clear day?' }] }, { timeoutMs: 90_000 });
+          extractJson(j.content.map((b) => (b.type === 'text' ? b.text : '')).join(''));
+          check.json = true;
+        } else {
+          const j = await sdk!.messages.create(
+            {
+              model,
+              max_tokens: 200,
+              messages: [{ role: 'user', content: 'Is the sky blue on a clear day?' }],
+              output_config: { format: { type: 'json_schema', schema } },
+            } as any,
+            { timeout: 60_000, maxRetries: 0 },
+          );
+          const text = j.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+          JSON.parse(text);
+          check.json = true;
+        }
       } catch {
         check.json = false;
         check.message = 'works for writing, but ignores structured answers — agents that plan or score need another model';
@@ -381,6 +439,6 @@ export async function testConnection(cfg: LlmConfig): Promise<{ ok: boolean; pro
     checks.push(check);
   }
   const ok = checks.every((c) => c.ok && c.json !== false);
-  log(ok ? 'info' : 'warn', 'llm', `connection test to ${cfg.baseUrl || 'Anthropic'}: ${checks.map((c) => `${c.role} ${c.model} ${c.ok ? (c.json === false ? 'no-json' : 'ok') : 'failed'}`).join(', ')}`);
+  log(ok ? 'info' : 'warn', 'llm', `connection test to ${describeLlm(cfg).providerLabel} (${endpointOf(cfg)}): ${checks.map((c) => `${c.role} ${c.model} ${c.ok ? (c.json === false ? 'no-json' : 'ok') : 'failed'}`).join(', ')}`);
   return { ok, problem: null, checks };
 }

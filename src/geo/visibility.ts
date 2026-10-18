@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { getDb, getGlobalDb, getGlobalSetting, getSetting, setGlobalSetting, setSetting } from '../db';
 import { MODELS } from '../config';
 import { askJson, askPlain } from '../llm/client';
-import { viaProxy } from '../llm/settings';
+import { providerOf } from '../llm/settings';
 import { agentSystem } from '../context/profile';
 import { listCompetitors } from '../context/extra';
 import { getSite, siteUrl } from '../sites';
@@ -74,6 +74,29 @@ const CANDIDATES: Record<EngineId, string[]> = {
   gemini: ['gemini-2.5-flash', 'gcp/gemini-3.6-flash', 'gcp/gemini-3-flash-preview', 'gemini-2.5-pro', 'gcp/gemini-3.1-pro-preview'],
 };
 
+/** OpenRouter spells every company's models as company/model. */
+const OPENROUTER: Record<EngineId, string[]> = {
+  claude: ['anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-4.5'],
+  gpt: ['openai/gpt-5-mini', 'openai/gpt-5'],
+  gemini: ['google/gemini-2.5-flash', 'google/gemini-2.5-pro'],
+};
+
+/** Which provider offers each assistant's own models when it is the one connected. */
+const OWN_PROVIDER: Record<EngineId, string> = { claude: 'anthropic', gpt: 'openai', gemini: 'gemini' };
+
+/**
+ * Model names to try for an assistant on the current AI connection; null = this connection can't reach it.
+ * A gateway, OpenRouter or a custom service can offer all three; a single company offers only its own.
+ */
+function candidatesFor(engine: EngineId): string[] | null {
+  const p = providerOf();
+  if (p.id === OWN_PROVIDER[engine]) return [MODELS.draft];
+  if (p.id === 'gateway') return engine === 'claude' ? [MODELS.draft] : CANDIDATES[engine];
+  if (p.id === 'openrouter') return OPENROUTER[engine];
+  if (p.id === 'custom') return engine === 'claude' ? null : CANDIDATES[engine];
+  return null;
+}
+
 export interface EngineState {
   model: string | null;
   status: 'ok' | 'unavailable' | 'unchecked';
@@ -88,7 +111,7 @@ export function engineSettings(): EngineSettings {
   const saved = getGlobalSetting<Partial<EngineSettings>>('aiEngines', {});
   const blank = (): EngineState => ({ model: null, status: 'unchecked', note: '', pinned: false });
   return {
-    claude: saved.claude ?? { model: MODELS.draft, status: 'ok', note: 'the writing model from the AI connection', pinned: false },
+    claude: saved.claude ?? (['anthropic', 'gateway'].includes(providerOf().id) ? { model: MODELS.draft, status: 'ok', note: 'the writing model from the AI connection', pinned: false } : blank()),
     gpt: saved.gpt ?? blank(),
     gemini: saved.gemini ?? blank(),
     checkedAt: saved.checkedAt ?? null,
@@ -100,7 +123,7 @@ export function pinEngine(engine: EngineId, model: string): EngineSettings {
   const m = String(model ?? '').trim();
   if (m && !/^[\w./:@-]{2,80}$/.test(m)) throw new Error(`"${m}" doesn't look like a model name`);
   const s = engineSettings();
-  s[engine] = m ? { model: m, status: 'unchecked', note: 'typed by you — not checked yet', pinned: true } : { model: engine === 'claude' ? MODELS.draft : null, status: engine === 'claude' ? 'ok' : 'unchecked', note: '', pinned: false };
+  s[engine] = m ? { model: m, status: 'unchecked', note: 'typed by you — not checked yet', pinned: true } : { model: null, status: 'unchecked', note: '', pinned: false };
   setGlobalSetting('aiEngines', s);
   return s;
 }
@@ -110,11 +133,12 @@ export async function detectEngines(): Promise<EngineSettings> {
   const s = engineSettings();
   for (const engine of ENGINES) {
     const st = s[engine];
-    if (engine !== 'claude' && !viaProxy() && !st.pinned) {
-      s[engine] = { model: null, status: 'unavailable', note: 'Plume talks to Anthropic directly, which only offers Claude. A gateway such as LiteLLM can add GPT and Gemini.', pinned: false };
+    const candidates = candidatesFor(engine);
+    if (!candidates && !st.pinned) {
+      s[engine] = { model: null, status: 'unavailable', note: `Your AI connection (${providerOf().label}) doesn't offer ${ENGINE_LABEL[engine]}. OpenRouter or a gateway such as LiteLLM can reach all three.`, pinned: false };
       continue;
     }
-    const tries = st.pinned || engine === 'claude' ? [st.model ?? MODELS.draft] : CANDIDATES[engine];
+    const tries = st.pinned && st.model ? [st.model] : candidates!;
     let found: string | null = null;
     let lastError = '';
     for (const model of tries) {

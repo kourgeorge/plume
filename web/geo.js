@@ -26,7 +26,7 @@
 
     <details class="instructions" id="ai-setup">
       <summary>Assistants and names <span id="ai-setup-tag" class="muted small"></span></summary>
-      <p class="muted small">Plume reaches each assistant through your AI connection. With a gateway such as LiteLLM, GPT and Gemini models are usually available too; type the exact model name if Plume can't find one.</p>
+      <p class="muted small">Plume reaches each assistant through your AI connection. A single company (say OpenAI) only offers its own assistant; OpenRouter or a gateway such as LiteLLM can reach all three. Type the exact model name if Plume can't find one.</p>
       <div id="ai-engines" class="form"></div>
       <div class="editor-bar"><span id="ai-eng-msg" class="small"></span><span><button id="ai-detect" class="secondary">Find assistants</button></span></div>
       <label class="small muted">Names your business goes by (one per line — include spellings in other languages)

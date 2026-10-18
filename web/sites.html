@@ -45,10 +45,12 @@
         <span id="llm-status" class="small"></span>
         <span class="llm-toggle small muted">Change</span>
       </summary>
-      <p class="muted small">Shared by all websites. For LiteLLM or another gateway, enter its address and your key; leave the address empty to use Anthropic directly. The key is stored on this computer only (<code>data/tokens/llm.json</code>) and is never shown again.</p>
+      <p class="muted small">Shared by all websites. Pick the company whose AI you want to use and paste your key. The key is stored on this computer only (<code>data/tokens/llm.json</code>) and is never shown again.</p>
       <form id="llm-form" class="form">
-        <label class="wide">Base URL <input id="llm-url" placeholder="https://litellm.yourcompany.com" autocomplete="off" spellcheck="false"></label>
-        <label class="wide">API key <input id="llm-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label>
+        <label class="wide">Provider <select id="llm-provider"></select></label>
+        <p id="llm-provider-note" class="wide muted small"></p>
+        <label class="wide" id="llm-url-row">Address <input id="llm-url" placeholder="https://litellm.yourcompany.com" autocomplete="off" spellcheck="false"></label>
+        <label class="wide" id="llm-key-row">API key <span id="llm-key-link" class="muted"></span><input id="llm-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label>
         <label>Research model <input id="llm-m-research" spellcheck="false"></label>
         <label>Writing model <input id="llm-m-draft" spellcheck="false"></label>
         <label>Scoring model <input id="llm-m-score" spellcheck="false"></label>
@@ -194,24 +196,49 @@
       }
     };
     // ---- AI connection ----
+    let providers = [];
+    let savedLlm = null;
+    const providerById = (id) => providers.find((p) => p.id === id);
+    /** Show the fields the picked provider needs. Switching provider fills in its address and model names. */
+    function showProvider(id, fill) {
+      const p = providerById(id);
+      if (!p) return;
+      const same = savedLlm && savedLlm.provider === id;
+      $('llm-provider-note').textContent = p.note ?? '';
+      $('llm-url-row').hidden = !p.urlEditable;
+      $('llm-url').placeholder = p.baseUrl || (p.format === 'anthropic' ? 'https://litellm.yourcompany.com' : 'https://your-service.example.com/v1');
+      if (fill) $('llm-url').value = same ? savedLlm.customUrl : '';
+      $('llm-key-link').innerHTML = p.keyUrl ? `· <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener">get a key</a>` : p.needsKey ? '' : '(optional)';
+      $('llm-key').placeholder = same && savedLlm.keyHint ? `saved (ends ${savedLlm.keyHint.slice(1)}) — leave empty to keep it` : p.needsKey ? 'paste your key' : 'not needed';
+      if (fill) {
+        const m = same ? savedLlm.models : p.models;
+        $('llm-m-research').value = m.research;
+        $('llm-m-draft').value = m.draft;
+        $('llm-m-score').value = m.score;
+      }
+    }
+    $('llm-provider').onchange = () => showProvider($('llm-provider').value, true);
     async function loadLlm() {
+      if (!providers.length) {
+        providers = await api('/api/llm/providers');
+        $('llm-provider').innerHTML = providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+      }
       const c = await api('/api/llm');
-      $('llm-url').value = c.viaProxy ? c.endpoint : '';
+      savedLlm = c;
+      $('llm-provider').value = c.provider;
       $('llm-key').value = '';
-      $('llm-key').placeholder = c.keyHint ? `saved (ends ${c.keyHint.slice(1)}) — leave empty to keep it` : 'sk-…';
-      $('llm-m-research').value = c.models.research;
-      $('llm-m-draft').value = c.models.draft;
-      $('llm-m-score').value = c.models.score;
+      showProvider(c.provider, true);
       $('llm-headers').placeholder = c.headerNames.length ? `saved: ${c.headerNames.join(', ')}` : 'x-team-id: marketing';
       $('llm-status').className = `small llm-status ${c.error ? 'warn' : 'muted'}`;
       $('llm-dot').className = `llm-dot ${c.error ? 'off' : 'on'}`;
       if (c.error) $('llm').open = true;
       $('llm-status').textContent = c.error
         ? 'Not connected — AI tasks are off'
-        : `Connected to ${c.endpoint} (${c.source === 'saved' ? 'saved here' : 'from .env'}) · web search: ${{ server: 'built in', local: 'Plume runs it', off: 'off' }[c.webSearch]}`;
+        : `Connected to ${c.providerLabel} (${c.source === 'saved' ? 'saved here' : 'from .env'}) · web search: ${{ server: 'built in', local: 'Plume runs it', off: 'off' }[c.webSearch]}`;
       $('llm-clear').hidden = c.source !== 'saved';
     }
     const llmBody = () => ({
+      provider: $('llm-provider').value,
       baseUrl: $('llm-url').value.trim(),
       apiKey: $('llm-key').value.trim(),
       ...($('llm-headers').value.trim() ? { headers: $('llm-headers').value } : {}),

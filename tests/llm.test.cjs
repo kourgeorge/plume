@@ -100,7 +100,7 @@ test('connection errors are explained in plain words', () => {
   const { explainCallError } = require('../src/llm/client');
   assert.match(explainCallError({ status: 401, message: 'Token verification failed: invalid jwt string' }), /key was refused/);
   assert.match(explainCallError({ status: 403, message: "team not allowed to access model. This team can only access models=['x']" }), /doesn't allow this model/);
-  assert.match(explainCallError({ status: 404, message: 'model not found' }), /unknown to the gateway/);
+  assert.match(explainCallError({ status: 404, message: 'model not found' }), /unknown to the provider/);
   assert.match(explainCallError({ status: 429, message: 'slow down' }), /rate-limiting/);
 });
 

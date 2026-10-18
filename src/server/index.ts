@@ -7,6 +7,7 @@ import { addSite, getSite, removeSite, renameSite, setSiteUrl, siteSummaries, si
 import { MODELS } from '../config';
 import { clearLlmConfig, describeLlm, getLlmConfig, llmProblem, saveLlmConfig } from '../llm/settings';
 import { searchMode, testConnection } from '../llm/client';
+import { PROVIDERS } from '../llm/providers';
 import { RTL, contentLanguage, languageName } from '../context/language';
 import { PROFILE_DOCS, docWrittenAt, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
 import { renderMarkdown } from '../render';
@@ -96,7 +97,7 @@ export function buildServer(port: number): FastifyInstance {
 
   // ---- AI connection (shared by all sites) ----
   app.get('/api/llm', async () => ({ ...describeLlm(), webSearch: searchMode() }));
-  app.put<{ Body: { baseUrl?: string; apiKey?: string; headers?: string; models?: Record<string, string> } }>('/api/llm', async (req, reply) => {
+  app.put<{ Body: { provider?: string; baseUrl?: string; apiKey?: string; headers?: string; models?: Record<string, string> } }>('/api/llm', async (req, reply) => {
     try {
       saveLlmConfig(req.body ?? {});
       return { ...describeLlm(), webSearch: searchMode() };
@@ -104,6 +105,8 @@ export function buildServer(port: number): FastifyInstance {
       return reply.code(400).send({ error: err.message });
     }
   });
+  /** The providers the connection screen offers, with their default address and models. */
+  app.get('/api/llm/providers', async () => PROVIDERS);
   app.delete('/api/llm', async () => (clearLlmConfig(), describeLlm()));
   /** One tiny call per model, so the user sees at once which models their gateway allows. Costs a fraction of a cent. */
   app.post('/api/llm/test', async () => testConnection(getLlmConfig()));
