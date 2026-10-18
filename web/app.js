@@ -740,7 +740,7 @@ async function loadFolder(id) {
   const drafts = await api(`/api/drafts?agent=${encodeURIComponent(id)}&status=${folderStatus}`);
   $('folder-list').innerHTML = drafts.length
     ? drafts
-        .map((d) => `<li><a href="#draft/${d.id}" dir="auto">${esc(d.title)}</a><small>${esc(kindLabel(d.kind))} · ${d.words} words · ${when(d.updatedAt)}${d.dryRun ? ' · dry run' : ''}${d.publishedUrl ? ` · <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">open</a>` : ''}</small></li>`)
+        .map((d) => `<li><a href="#draft/${d.id}" dir="auto">${esc(d.title)}</a><small>${esc(kindLabel(d.kind))} · ${d.words} words · ${when(d.updatedAt)}${d.dryRun ? ' · dry run' : ''}${d.publishedUrl?.startsWith('http') ? ` · <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">open</a>` : ''}</small></li>`)
         .join('')
     : '<li class="muted">Nothing here yet.</li>';
   draftBack = `#folder/${id}`;
@@ -767,6 +767,11 @@ async function loadDraft(id) {
   updateMetaLen();
   $('draft-body').value = d.body;
   currentKind = d.kind;
+  // Articles are Markdown: Write shows the text, Preview shows how the page will read.
+  $('draft-modes').hidden = short;
+  const editable = d.status === 'draft' || d.status === 'failed';
+  previewFor = null;
+  setDraftMode(editable || short ? 'write' : 'preview');
   updateCount();
   loadPhotos(d);
   $('draft-target').innerHTML = fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' — dry run (no keys)'}</option>`).join('');
@@ -775,11 +780,17 @@ async function loadDraft(id) {
     const firstLive = fitting(d).find((p) => p.configured && p.id !== 'export');
     if (firstLive) $('draft-target').value = firstLive.id;
   }
-  const editable = d.status === 'draft' || d.status === 'failed';
   for (const el of ['draft-title', 'draft-slug', 'draft-meta', 'draft-body', 'draft-save', 'draft-approve', 'draft-target', 'draft-when']) $(el).disabled = !editable;
   $('draft-reject').textContent = d.status === 'rejected' ? 'Reopen' : 'Not useful';
   $('draft-reject').disabled = d.status === 'published' || d.status === 'approved';
+  $('draft-badge').hidden = d.status === 'draft';
+  $('draft-badge').className = `draft-badge ${d.status}`;
+  $('draft-badge').textContent = { approved: 'Scheduled', published: d.dryRun ? 'Saved as files' : 'Published', failed: 'Failed', rejected: 'Turned down' }[d.status] ?? '';
+  // Once it is out, the buttons have nothing left to do.
+  $('draft-actions').hidden = d.status === 'published';
+  $('draft-status').className = `draft-status ${d.status}`;
   $('draft-status').innerHTML = statusLine(d);
+  $('draft-status').hidden = !$('draft-status').innerHTML;
   $('draft-events').innerHTML = d.events.map((e) => `<li>${esc(when(e.at))}: ${esc(e.to_status)}${e.note ? ` — ${esc(e.note)}` : ''}</li>`).join('');
   $('draft-sources').innerHTML = (d.meta.sources ?? []).map((s) => `<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a></li>`).join('');
   if (window.plumeOutreach) window.plumeOutreach.wireDraft(d);
@@ -787,13 +798,52 @@ async function loadDraft(id) {
 
 function statusLine(d) {
   if (d.status === 'published') {
-    const where = d.publishedUrl ? ` <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">${esc(d.publishedUrl)}</a>` : '';
-    return d.dryRun ? `Dry run: ${esc(d.target)} isn't connected, so the files were saved instead.${where}` : `Published to ${esc(d.target)}.${where}`;
+    const files = d.dryRun || d.target === 'export';
+    const head = files
+      ? d.dryRun
+        ? `<strong>Saved as files.</strong> ${esc(targetName(d.target))} isn't connected, so nothing went to your site. Download the page and add it yourself.`
+        : '<strong>Saved as files.</strong> Download the page and add it to your site.'
+      : `<strong>Published to ${esc(targetName(d.target))}.</strong>${d.publishedUrl ? ` <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">Open it ↗</a>` : ''}`;
+    return `<p>${head}</p>${SHORT_KINDS.includes(d.kind) ? '' : downloadLinks(d)}`;
   }
-  if (d.status === 'failed') return `Publishing failed: ${esc(d.error)}`;
-  if (d.status === 'approved') return `Scheduled for ${esc(when(d.scheduledFor))} on ${esc(d.target)}.`;
-  if (d.status === 'rejected') return 'Turned down.';
+  if (d.status === 'failed') return `<p><strong>Publishing failed.</strong> ${esc(d.error)}</p>`;
+  if (d.status === 'approved') return `<p>Scheduled for ${esc(when(d.scheduledFor))} on ${esc(targetName(d.target))}.</p>`;
+  if (d.status === 'rejected') return '<p>Turned down.</p>';
   return '';
+}
+
+function targetName(id) {
+  return publishers.find((p) => p.id === id)?.label ?? id;
+}
+
+/** The finished page as a file: HTML to upload anywhere, Markdown for site builders that take it. */
+function downloadLinks(d) {
+  const url = (q) => withSite(`/api/drafts/${d.id}/page${q}`);
+  return `<div class="download-row">
+    <a class="btn" href="${url('?download=1')}" download>Download page (.html)</a>
+    <a class="btn secondary" href="${url('?format=md&download=1')}" download>Download text (.md)</a>
+    <a class="small" href="${url('')}" target="_blank" rel="noopener">Open the page ↗</a>
+  </div>`;
+}
+
+let previewFor = null;
+/** Write or Preview. The preview is drawn from the text on screen, saved or not. */
+async function setDraftMode(mode) {
+  for (const b of $('draft-modes').querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === mode);
+  const preview = mode === 'preview';
+  $('draft-body').hidden = preview;
+  $('draft-preview').hidden = !preview;
+  if (!preview) return;
+  const text = $('draft-body').value;
+  if (previewFor === text) return;
+  $('draft-preview').innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const { html } = await post('/api/preview', { body: text });
+    previewFor = text;
+    $('draft-preview').innerHTML = `<h1>${esc($('draft-title').value)}</h1>${html}`;
+  } catch (err) {
+    $('draft-preview').innerHTML = `<p class="bad">${esc(err.message)}</p>`;
+  }
 }
 
 const SHORT_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post', 'reddit_reply', 'reddit_post', 'outreach_email', 'outreach_message', 'video_script'];
@@ -811,6 +861,8 @@ function fitBody() {
 
 function updateCount() {
   fitBody();
+  const words = $('draft-body').value.trim().split(/\s+/).filter(Boolean).length;
+  $('draft-words').textContent = SHORT_KINDS.includes(currentKind) ? '' : `${words.toLocaleString()} words`;
   const show = ['social_post', 'x_post', 'linkedin_post', 'facebook_post', 'reddit_reply', 'reddit_post'].includes(currentKind);
   $('draft-count').hidden = !show;
   if (!show) return;
@@ -1621,7 +1673,13 @@ $('notes-save').onclick = async () => {
 $('llms-copy').onclick = () => navigator.clipboard.writeText($('llms-body').textContent).then(() => ($('llms-copy').textContent = 'Copied'));
 $('draft-meta').oninput = updateMetaLen;
 $('draft-body').addEventListener('input', updateCount);
-$('draft-save').onclick = async () => (await saveDraft(), ($('draft-status').textContent = 'Saved.'));
+for (const b of $('draft-modes').querySelectorAll('button')) b.onclick = () => setDraftMode(b.dataset.mode);
+$('draft-title').addEventListener('input', () => (previewFor = null));
+$('draft-save').onclick = async () => {
+  await saveDraft();
+  $('draft-save').textContent = 'Saved ✓';
+  setTimeout(() => ($('draft-save').textContent = 'Save edits'), 1500);
+};
 $('draft-approve').onclick = async () => {
   try {
     await saveDraft();

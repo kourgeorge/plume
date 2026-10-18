@@ -18,7 +18,7 @@ import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
-import { PUBLISHERS, getPublisher, targetsFor } from '../publish';
+import { PUBLISHERS, getPublisher, pageHtml, stripTitle, targetsFor } from '../publish';
 import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
 import { publishOne } from '../publish/runner';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
@@ -304,6 +304,22 @@ export function buildServer(port: number): FastifyInstance {
   app.get<{ Params: { id: string } }>('/api/drafts/:id', async (req, reply) => {
     const d = getDraft(Number(req.params.id));
     return d ? { ...d, events: draftEvents(d.id), targets: targetsFor(d.kind) } : reply.code(404).send({ error: 'no such draft' });
+  });
+
+  // How the article will read, for the Preview tab. Takes the unsaved text, so it matches what is on screen.
+  app.post<{ Body: { body?: string } }>('/api/preview', async (req) => ({ html: renderMarkdown(stripTitle(String(req.body?.body ?? ''))) }));
+
+  // The draft as a finished web page (or its Markdown). ?download=1 saves it as a file instead of opening it.
+  app.get<{ Params: { id: string }; Querystring: { format?: string; download?: string } }>('/api/drafts/:id/page', async (req, reply) => {
+    const d = getDraft(Number(req.params.id));
+    if (!d) return reply.code(404).send({ error: 'no such draft' });
+    const md = req.query.format === 'md';
+    const name = `${d.meta.slug || `draft-${d.id}`}.${md ? 'md' : 'html'}`.replace(/[^\w.-]+/g, '-');
+    reply.header('content-type', md ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
+    // AI-written text opened on the dashboard's own address: no scripts, no requests back to the dashboard.
+    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; sandbox");
+    if (req.query.download === '1') reply.header('content-disposition', `attachment; filename="${name}"`);
+    return md ? d.body : pageHtml(d);
   });
 
   app.put<{ Params: { id: string }; Body: { title?: string; body?: string; meta?: DraftMeta } }>('/api/drafts/:id', async (req, reply) => {

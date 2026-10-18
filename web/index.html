@@ -242,14 +242,19 @@
         <div class="view-head">
           <a href="#today" class="back" id="draft-back">← Back</a>
           <span class="muted" id="draft-agent"></span>
+          <span class="actions"><span id="draft-badge" class="draft-badge" hidden></span><span id="draft-words" class="small muted"></span></span>
         </div>
-        <input id="draft-title" class="title-input" dir="auto">
+        <input id="draft-title" class="title-input" dir="auto" aria-label="Title">
         <div id="draft-reason" class="draft-reason" hidden><span class="draft-reason-label">Why this one</span><p id="draft-reason-text" dir="auto"></p></div>
         <div class="seo-fields" id="draft-seo">
-          <label>Address <input id="draft-slug"></label>
-          <label>Search snippet <span id="meta-len" class="muted"></span><input id="draft-meta" dir="auto"></label>
+          <label><span>Address</span><input id="draft-slug" placeholder="page-address"></label>
+          <label><span>Search snippet <span id="meta-len" class="muted"></span></span><input id="draft-meta" dir="auto" placeholder="One or two sentences shown under the title on Google"></label>
         </div>
-        <textarea id="draft-body" class="editor-area" dir="auto"></textarea>
+        <div class="draft-modes" id="draft-modes" hidden>
+          <div class="tabs"><button data-mode="write" class="on">Write</button><button data-mode="preview">Preview</button></div>
+        </div>
+        <textarea id="draft-body" class="editor-area" dir="auto" aria-label="Text"></textarea>
+        <article id="draft-preview" class="doc draft-preview" dir="auto" hidden></article>
         <p id="draft-count" class="small muted draft-count" hidden></p>
         <div id="draft-photos" class="draft-photos" hidden>
           <div class="photos-head"><span class="small"><strong>Photos or a video</strong> <span class="muted" id="photos-note">up to 4 photos or one video</span></span><span class="photos-buttons"><label class="small-btn" id="photos-pick" title="JPG, PNG or GIF, up to 5 MB each">Add photo<input type="file" id="photos-file" accept="image/jpeg,image/png,image/gif" multiple hidden></label><label class="small-btn" id="video-pick" title="MP4 or MOV, up to 512 MB">Add video<input type="file" id="video-file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden></label></span></div>
@@ -257,19 +262,19 @@
           <div id="photos-list" class="photos-list"></div>
           <p id="photos-msg" class="small" hidden></p>
         </div>
-        <div class="editor-bar draft-actions">
-          <span class="draft-where">
+        <div id="draft-status" class="draft-status" hidden></div>
+        <div class="draft-actions" id="draft-actions">
+          <div class="draft-where">
             <label>Post to <select id="draft-target"></select></label>
-            <label>When <input id="draft-when" type="datetime-local"><small class="muted">empty = right away</small></label>
-          </span>
-          <span>
+            <label>When <input id="draft-when" type="datetime-local" title="Leave empty to publish right away"></label>
+          </div>
+          <div class="draft-buttons">
             <button id="draft-reject" class="secondary">Not useful</button>
             <button id="draft-save" class="secondary">Save edits</button>
             <button id="draft-approve">Approve</button>
-          </span>
+          </div>
         </div>
-        <p id="draft-status" class="muted"></p>
-        <details><summary>History and sources</summary><ul id="draft-events"></ul><ul id="draft-sources"></ul></details>
+        <details class="draft-more"><summary>History and sources</summary><ul id="draft-events"></ul><ul id="draft-sources"></ul></details>
       </section>
 
       <section id="view-check" class="view" hidden>

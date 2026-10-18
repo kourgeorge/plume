@@ -9,6 +9,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
 process.env.PLUME_SITE = 'test.example';
 const q = require('../src/queue');
 const { publishOne, publishDue } = require('../src/publish/runner');
+const { siteDir } = require('../src/site');
 
 const mk = (keyword = 'widgets') => q.createDraft({ agent: 'seo', kind: 'blog_post', title: 'T', body: '# T\n\nHello', meta: { slug: 't', keyword } });
 
@@ -36,9 +37,11 @@ test('approve with no keys = dry run, files saved, marked published', async () =
   const p = await publishOne(d.id, {});
   assert.equal(p.status, 'published');
   assert.equal(p.dryRun, true);
-  const html = fs.readFileSync(p.publishedUrl.replace('file://', ''), 'utf8');
+  assert.equal(p.publishedUrl, null, 'saved files are downloaded from the draft page, not opened by address');
+  const dir = path.join(siteDir(), 'exports');
+  const html = fs.readFileSync(path.join(dir, fs.readdirSync(dir).find((f) => f.startsWith(`${d.id}-`) && f.endsWith('.html'))), 'utf8');
   assert.match(html, /<p>Hello<\/p>/);
-  assert.doesNotMatch(html, /<h1>T<\/h1>/, 'title should not be repeated in the body');
+  assert.equal((html.match(/<h1>T<\/h1>/g) || []).length, 1, 'title should not be repeated in the body');
   assert.throws(() => q.editDraft(d.id, { body: 'x' }), /already published/);
 });
 

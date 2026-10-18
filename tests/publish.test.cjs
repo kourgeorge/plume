@@ -66,3 +66,16 @@ test('configured() needs every key', () => {
   assert.equal(wordpress.configured({ WP_URL: 'x', WP_USER: 'y' }), false);
   assert.equal(webflow.configured({ WEBFLOW_TOKEN: 't', WEBFLOW_COLLECTION_ID: 'c' }), true);
 });
+
+test('export saves a full page and gives no file:// address', async () => {
+  const { exportFiles, pageHtml } = require('../src/publish');
+  const d = { id: 7, kind: 'article', title: 'מבחן <תאוריה>', body: '# מבחן\n\nשלום **עולם**', meta: { slug: 'test-page', metaDescription: 'a "snippet"' } };
+  const html = pageHtml(d);
+  assert.match(html, /<html dir="rtl">/);
+  assert.match(html, /<title>מבחן &lt;תאוריה&gt;<\/title>/);
+  assert.match(html, /content="a &quot;snippet&quot;"/);
+  assert.match(html, /<strong>עולם<\/strong>/);
+  assert.equal((html.match(/<h1>/g) || []).length, 1, 'the Markdown title is not repeated');
+  const r = await exportFiles.publish(d, '');
+  assert.equal(r.url, null);
+});

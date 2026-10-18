@@ -38,19 +38,55 @@ export function stripTitle(markdown: string): string {
   return markdown.replace(/^\s*#\s+[^\n]*\n+/, '');
 }
 
-/** Writes HTML + Markdown to the site's exports folder. Used for Framer (no write API) and for every dry run. */
+/** Hebrew, Arabic and other right-to-left text: the page should read that way too. */
+const RTL_CHARS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
+/** A whole web page for one draft: title, search snippet and simple readable styling, ready to upload or paste anywhere. */
+export function pageHtml(draft: Pick<Draft, 'title' | 'body' | 'meta'>): string {
+  const dir = RTL_CHARS.test(draft.title + draft.body.slice(0, 400)) ? 'rtl' : 'ltr';
+  const desc = draft.meta.metaDescription ? `\n<meta name="description" content="${escapeHtml(String(draft.meta.metaDescription))}">` : '';
+  return `<!doctype html>
+<html dir="${dir}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(draft.title)}</title>${desc}
+<style>
+  body { margin: 0; background: #fff; color: #1a1919; font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1, h2, h3 { line-height: 1.25; letter-spacing: -.01em; }
+  h1 { font-size: 2.1em; margin: 0 0 .6em; } h2 { font-size: 1.45em; margin: 1.8em 0 .5em; } h3 { font-size: 1.15em; margin: 1.5em 0 .4em; }
+  a { color: #00705f; } img { max-width: 100%; height: auto; }
+  blockquote { margin: 1.2em 0; padding: .2em 1em; border-inline-start: 3px solid #d8d2c4; color: #4b4740; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; font-size: .92em; } th, td { border: 1px solid #e4ddcd; padding: 8px 10px; text-align: start; } th { background: #faf8f4; }
+  code { background: #f3f0ec; padding: .1em .35em; border-radius: 4px; font-size: .9em; } pre { background: #f3f0ec; padding: 14px; border-radius: 8px; overflow-x: auto; } pre code { background: none; padding: 0; }
+  @media (prefers-color-scheme: dark) { body { background: #161413; color: #f3efea; } a { color: #3cc4a8; } blockquote { color: #c9c2b5; border-color: #4a443e; } th { background: #201e1d; } th, td { border-color: #3d3833; } code, pre { background: #282523; } }
+</style>
+</head>
+<body>
+<main>
+<h1>${escapeHtml(draft.title)}</h1>
+${toHtml(stripTitle(draft.body))}
+</main>
+</body>
+</html>
+`;
+}
+
+/** Writes HTML + Markdown to the site's exports folder. Used for Framer (no write API) and for every dry run. Download them from the draft page. */
 export const exportFiles: Publisher = {
   id: 'export',
   label: 'Save as files (Framer / copy-paste)',
   needs: [],
   configured: () => true,
-  async publish(draft, html) {
+  async publish(draft) {
     const dir = path.join(siteDir(), 'exports');
     fs.mkdirSync(dir, { recursive: true });
     const base = path.join(dir, `${draft.id}-${draft.meta.slug ?? 'item'}`);
     fs.writeFileSync(`${base}.md`, draft.body);
-    fs.writeFileSync(`${base}.html`, `<!doctype html><meta charset="utf-8"><title>${escapeHtml(draft.title)}</title>\n${html}`);
-    return { url: `file://${base}.html`, externalId: null, dryRun: false };
+    fs.writeFileSync(`${base}.html`, pageHtml(draft));
+    // No address: a file:// link can't be opened from the dashboard, so the draft page offers downloads instead.
+    return { url: null, externalId: null, dryRun: false };
   },
 };
 
