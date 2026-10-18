@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { siteDir } from './site';
+import { TOKEN_URL } from './github';
 
 /**
  * Connection details for each website's publishing destinations. They live in that site's own folder
@@ -25,6 +26,8 @@ export interface IntegrationDef {
   label: string;
   blurb: string;
   group?: 'analytics' | 'phone' | 'social' | 'outreach';
+  /** A page that helps get the details, shown as a button on the card. */
+  link?: { label: string; url: string };
   fields: Field[];
 }
 
@@ -101,10 +104,12 @@ export const INTEGRATIONS: IntegrationDef[] = [
   {
     id: 'github',
     label: 'GitHub',
-    blurb: 'Open a pull request that adds each article as a Markdown file. Nothing changes until you merge it.',
+    blurb:
+      "Plume opens pull requests on your site's repository: one for each article, and one for each site fix you ask for. Nothing changes until you merge it. To connect: press \"Make a token on GitHub\" (the right permissions are already ticked), choose your site's repository under \"Repository access\", press Generate, and paste the token here.",
+    link: { label: 'Make a token on GitHub ↗', url: TOKEN_URL },
     fields: [
-      { key: 'repo', env: 'GITHUB_REPO', label: 'Repository', placeholder: 'owner/name' },
-      { key: 'token', env: 'GITHUB_TOKEN', label: 'Access token (needs repo write access)', secret: true },
+      { key: 'repo', env: 'GITHUB_REPO', label: 'Repository', placeholder: 'owner/name', help: 'Or paste the repository address, like https://github.com/owner/name.' },
+      { key: 'token', env: 'GITHUB_TOKEN', label: 'Access token', secret: true, placeholder: 'github_pat_…' },
       { key: 'branch', env: 'GITHUB_BRANCH', label: 'Base branch', optional: true, placeholder: "the repository's main branch" },
       { key: 'path', env: 'GITHUB_PATH', label: 'Folder for articles', optional: true, placeholder: 'content/blog' },
     ],
@@ -236,7 +241,10 @@ export function saveIntegration(id: string, values: Record<string, unknown>): vo
     if (url && !/^https?:\/\/[^\s/]+/i.test(url)) throw new Error(`"${url}" should start with https://`);
   }
   if (id === 'google' && !/\.apps\.googleusercontent\.com$/.test(next.clientId)) throw new Error('the client ID should end in .apps.googleusercontent.com');
-  if (id === 'github' && !/^[\w.-]+\/[\w.-]+$/.test(next.repo)) throw new Error('the repository should look like owner/name');
+  if (id === 'github') {
+    next.repo = next.repo.replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/(\.git)?\/*$/, '').split('/').slice(0, 2).join('/');
+    if (!/^[\w.-]+\/[\w.-]+$/.test(next.repo)) throw new Error('the repository should look like owner/name');
+  }
   writeAll({ ...all, [id]: next });
 }
 
@@ -255,6 +263,7 @@ export function describeIntegrations() {
       id: def.id,
       label: def.label,
       blurb: def.blurb,
+      link: def.link ?? null,
       group: def.group ?? 'publishing',
       connected: def.fields.every((f) => (f.optional && !f.laterRequired) || saved[f.key]),
       // Test can help finish a connection (Wix lists who can be the author), so allow it once the required parts are saved.
@@ -328,12 +337,8 @@ export async function testIntegration(id: string, env = siteEnv()): Promise<{ ok
         return res.ok ? { ok: true, message: 'Connected to HubSpot.' } : { ok: false, message: `HubSpot said ${res.status}: ${data.message ?? res.statusText}` };
       }
       case 'github': {
-        const api = (env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, '');
-        const { res, data } = await get(`${api}/repos/${env.GITHUB_REPO}`, { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' });
-        if (!res.ok) return { ok: false, message: `GitHub said ${res.status}: ${data.message ?? res.statusText}` };
-        return data.permissions && !data.permissions.push
-          ? { ok: false, message: 'Found the repository, but this token cannot write to it.' }
-          : { ok: true, message: `Found ${data.full_name}.` };
+        const { ghTest } = await import('./github');
+        return await ghTest(env);
       }
       case 'google':
         return { ok: true, message: 'Saved. Use Connect Google to sign in.' };

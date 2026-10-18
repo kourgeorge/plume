@@ -8,6 +8,7 @@ import { AuditResult, Issue, pinnedIssues } from '../agents/seoAudit';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { log } from '../log';
 import { recordAction } from '../actions';
+import { Gh, ghBase, ghCall, ghFrom, ghPath, ghPullRequest } from '../github';
 
 /**
  * Site fixes as GitHub pull requests. Plume finds the files behind the page, asks for exact find → replace
@@ -36,34 +37,8 @@ function db(): Database.Database {
 
 // ---------------------------------------------------------------- GitHub
 
-interface Gh {
-  api: string;
-  repo: string;
-  token: string;
-}
-
-function gh(env = siteEnv()): Gh {
-  if (!env.GITHUB_TOKEN || !/^[\w.-]+\/[\w.-]+$/.test(env.GITHUB_REPO ?? '')) {
-    throw new Error('connect GitHub for this website under Settings (repository and access token) to open pull requests');
-  }
-  return { api: (env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, ''), repo: env.GITHUB_REPO!, token: env.GITHUB_TOKEN! };
-}
-
-async function call(g: Gh, method: string, path: string, body?: unknown): Promise<any> {
-  const res = await fetch(`${g.api}/repos/${g.repo}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${g.token}`, accept: 'application/vnd.github+json', 'user-agent': 'plume', ...(body ? { 'content-type': 'application/json' } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 401) throw new Error('GitHub refused the access token — make a new one and save it in Settings');
-    if (res.status === 403 || res.status === 404) throw new Error(`GitHub says this token can't ${method === 'GET' ? 'read' : 'change'} ${g.repo} (${data.message ?? res.status})`);
-    throw new Error(`GitHub said ${res.status}: ${data.message ?? res.statusText}`);
-  }
-  return data;
-}
+const gh = (env = siteEnv()): Gh => ghFrom(env);
+const call = ghCall;
 
 // ---------------------------------------------------------------- which files
 
@@ -221,9 +196,7 @@ function record(issueId: string, status: string, message: string, prUrl: string 
 export async function openFixPullRequest(issue: Issue, onProgress: (m: string) => void = () => {}, env = siteEnv()): Promise<{ prUrl: string | null; message: string }> {
   const g = gh(env);
   onProgress(`Reading ${g.repo}`);
-  const repo = await call(g, 'GET', '');
-  const base: string = env.GITHUB_BRANCH || repo.default_branch;
-  const headSha: string = (await call(g, 'GET', `/git/ref/heads/${encodeURIComponent(base)}`)).object.sha;
+  const { base, sha: headSha } = await ghBase(g, env);
   const tree: TreeFile[] = ((await call(g, 'GET', `/git/trees/${headSha}?recursive=1`)).tree ?? []).filter((t: any) => t.type === 'blob').map((t: any) => ({ path: t.path, size: t.size ?? 0 }));
   const paths = candidateFiles(issue, tree);
   const builder = techSignals().list.find((s) => s.kind === 'builder' && BUILDERS.has(s.name));
@@ -241,7 +214,7 @@ export async function openFixPullRequest(issue: Issue, onProgress: (m: string) =
   const shas: Record<string, string> = {};
   let total = 0;
   for (const p of paths) {
-    const f = await call(g, 'GET', `/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(base)}`);
+    const f = await call(g, 'GET', `/contents/${ghPath(p)}?ref=${encodeURIComponent(base)}`);
     const text = Buffer.from(String(f.content ?? ''), 'base64').toString('utf8');
     if (total + text.length > MAX_TOTAL) break;
     total += text.length;
@@ -280,31 +253,31 @@ export async function openFixPullRequest(issue: Issue, onProgress: (m: string) =
   }
 
   onProgress('Opening the pull request');
-  const branch = `plume/fix-${issue.check}-${Date.now().toString(36)}`;
-  await call(g, 'POST', '/git/refs', { ref: `refs/heads/${branch}`, sha: headSha });
-  const changed: string[] = [];
-  for (const [p, text] of Object.entries(result.files)) {
-    if (text === contents[p]) continue;
-    await call(g, 'PUT', `/contents/${p.split('/').map(encodeURIComponent).join('/')}`, { message: `Fix: ${issue.title}`, content: Buffer.from(text).toString('base64'), branch, sha: shas[p] });
-    changed.push(p);
-  }
-  for (const f of plan.new_files) {
-    await call(g, 'PUT', `/contents/${f.path.split('/').map(encodeURIComponent).join('/')}`, { message: `Add ${f.path}`, content: Buffer.from(f.content).toString('base64'), branch });
-    changed.push(f.path);
-  }
+  const changes = [
+    ...Object.entries(result.files).filter(([p, text]) => text !== contents[p]).map(([p, text]) => ({ path: p, text, sha: shas[p] as string | undefined, message: `Fix: ${issue.title}` })),
+    ...plan.new_files.map((f) => ({ path: f.path, text: f.content, sha: undefined as string | undefined, message: `Add ${f.path}` })),
+  ];
   const body = [
     `**Problem:** ${issue.title} (${issue.url})`,
     `**Why it matters:** ${issue.why}`,
     `**What this changes:** ${plan.summary}`,
-    `**Files:** ${changed.map((c) => `\`${c}\``).join(', ')}`,
+    `**Files:** ${changes.map((c) => `\`${c.path}\``).join(', ')}`,
     '',
     '_Opened by Plume. Please review before merging — Plume never merges anything itself._',
   ].join('\n\n');
-  const pr = await call(g, 'POST', '/pulls', { title: `Fix: ${issue.title}`.slice(0, 250), head: branch, base, body });
-  record(issue.id, 'opened', plan.summary, pr.html_url ?? null, changed);
-  recordAction({ kind: 'code-pr', ref: issue.id, url: issue.url, title: issue.title, data: { prUrl: pr.html_url ?? null, files: changed } });
-  log('info', 'codefix', `opened ${pr.html_url} for ${issue.check} (${changed.length} file(s))`);
-  return { prUrl: pr.html_url ?? null, message: plan.summary };
+  const pr = await ghPullRequest(
+    g,
+    { base, sha: headSha, branch: `plume/fix-${issue.check}-${Date.now().toString(36)}`, title: `Fix: ${issue.title}`, body },
+    async (branch) => {
+      for (const c of changes) await call(g, 'PUT', `/contents/${ghPath(c.path)}`, { message: c.message, content: Buffer.from(c.text).toString('base64'), branch, ...(c.sha ? { sha: c.sha } : {}) });
+    },
+  );
+  const prUrl = pr.url;
+  const changed = changes.map((c) => c.path);
+  record(issue.id, 'opened', plan.summary, prUrl, changed);
+  recordAction({ kind: 'code-pr', ref: issue.id, url: issue.url, title: issue.title, data: { prUrl, files: changed } });
+  log('info', 'codefix', `opened ${prUrl} for ${issue.check} (${changed.length} file(s))`);
+  return { prUrl, message: plan.summary };
 }
 
 /** Background job for the web page: "Fix it with a pull request". */

@@ -110,5 +110,60 @@ test('test-connection reports a bad token plainly', async (t) => {
   t.after(() => s.close());
   const r = await ints.testIntegration('github', { GITHUB_API_URL: `http://127.0.0.1:${s.address().port}`, GITHUB_TOKEN: 'x', GITHUB_REPO: 'o/r' });
   assert.equal(r.ok, false);
-  assert.match(r.message, /401: Bad credentials/);
+  assert.match(r.message, /refused the access token/);
+});
+
+test('saving a GitHub address keeps just owner/name', () => {
+  withSite('gh.example', () => {
+    ints.saveIntegration('github', { repo: 'https://github.com/Acme/site.git', token: 't' });
+    assert.equal(ints.siteEnv({}).GITHUB_REPO, 'Acme/site');
+    assert.ok(ints.describeIntegrations().find((i) => i.id === 'github').link.url.includes('pull_requests=write'));
+  });
+});
+
+test('publishing an article again replaces the file instead of failing', async (t) => {
+  let put;
+  const s = await server((req, body, res) => {
+    if (req.method === 'GET' && req.url === '/repos/o/r') return json(res, 200, { default_branch: 'main' });
+    if (req.url.endsWith('/git/ref/heads/main')) return json(res, 200, { object: { sha: 'abc' } });
+    if (req.method === 'GET' && req.url.includes('/contents/')) return json(res, 200, { sha: 'old-sha' });
+    if (req.method === 'PUT') return ((put = body), json(res, 200, {}));
+    if (req.url.endsWith('/git/refs')) return json(res, 201, {});
+    return json(res, 201, { number: 4, html_url: 'https://github.com/o/r/pull/4' });
+  });
+  t.after(() => s.close());
+  await github.publish(draft, '', { GITHUB_API_URL: `http://127.0.0.1:${s.address().port}`, GITHUB_TOKEN: 't', GITHUB_REPO: 'o/r' });
+  assert.equal(put.sha, 'old-sha');
+});
+
+test('a failed pull request deletes the branch it made', async (t) => {
+  const calls = [];
+  const s = await server((req, body, res) => {
+    calls.push(`${req.method} ${req.url}`);
+    if (req.method === 'GET' && req.url === '/repos/o/r') return json(res, 200, { default_branch: 'main' });
+    if (req.url.endsWith('/git/ref/heads/main')) return json(res, 200, { object: { sha: 'abc' } });
+    if (req.method === 'GET' && req.url.includes('/contents/')) return json(res, 404, { message: 'Not Found' });
+    if (req.url.endsWith('/git/refs')) return json(res, 201, {});
+    if (req.method === 'PUT') return json(res, 201, {});
+    if (req.method === 'DELETE') return json(res, 204, {});
+    return json(res, 403, { message: 'Resource not accessible by personal access token' });
+  });
+  t.after(() => s.close());
+  await assert.rejects(github.publish(draft, '', { GITHUB_API_URL: `http://127.0.0.1:${s.address().port}`, GITHUB_TOKEN: 't', GITHUB_REPO: 'o/r' }), /can't open pull requests/);
+  assert.match(calls.at(-1), /^DELETE \/repos\/o\/r\/git\/refs\/heads\/plume\/hello-/);
+});
+
+test('test-connection catches a read-only token and a missing base branch', async (t) => {
+  let perms = { push: false };
+  const s = await server((req, body, res) => {
+    if (req.url === '/repos/o/r') return json(res, 200, { full_name: 'o/r', default_branch: 'main', permissions: perms });
+    return json(res, 404, { message: 'Not Found' });
+  });
+  t.after(() => s.close());
+  const env = { GITHUB_API_URL: `http://127.0.0.1:${s.address().port}`, GITHUB_TOKEN: 'x', GITHUB_REPO: 'o/r' };
+  assert.match((await ints.testIntegration('github', env)).message, /can only read it/);
+  perms = { push: true };
+  const r = await ints.testIntegration('github', { ...env, GITHUB_BRANCH: 'live' });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /no branch called "live"/);
 });

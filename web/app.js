@@ -1527,6 +1527,7 @@ function integrationCard(i) {
   return `<details class="int-card" data-int="${i.id}">
     <summary class="int-head"><strong>${esc(i.label)}</strong><span class="small ${i.connected ? 'good' : 'muted'}">${i.connected ? 'Connected' : 'Not connected'}</span></summary>
     <p class="muted small">${esc(i.blurb)}</p>
+    ${i.link ? `<p><a href="${esc(i.link.url)}" target="_blank" rel="noopener"><button type="button" class="secondary">${esc(i.link.label)}</button></a></p>` : ''}
     <div class="form">${fields}</div>
     <p class="actions-row"><button data-act="save">Save</button> <button data-act="test" class="secondary" ${i.testable ?? i.connected ? '' : 'disabled'}>Test</button>
       ${i.connected ? '<button data-act="remove" class="secondary">Disconnect</button>' : ''} <span class="int-msg small"></span></p>
