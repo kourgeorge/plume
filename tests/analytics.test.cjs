@@ -147,7 +147,7 @@ test('pullAll stores both sources; a failure in one does not stop the other', as
   const gscCall = calls.find((c) => c.url.includes('searchAnalytics'));
   assert.deepEqual(JSON.parse(gscCall.body).dimensions, ['date', 'query', 'page']);
   assert.equal(JSON.parse(gscCall.body).endDate, '2026-10-14');
-  assert.equal(JSON.parse(gscCall.body).startDate, '2026-09-15');
+  assert.equal(JSON.parse(gscCall.body).startDate, '2026-08-16');
 
   setSetting('ga4Property', '999');
   const s2 = await pull.pullAll(new Date('2026-10-16T12:00:00Z'));
@@ -203,6 +203,37 @@ test('summary: returning visitors, key events, engagement, channels, sites, land
   assert.deepEqual(s.topSources.map((r) => r.label), ['google', '(direct)', 'chatgpt.com']);
   assert.deepEqual(s.landing.map((r) => [r.label, r.users]), [['/', 250], ['/pricing', 90]]);
   assert.deepEqual(s.countries.map((r) => [r.country, r.code, r.clicks]), [['isr', 'IL', 18], ['pse', 'PS', 3], ['zzz', null, 2]], 'the 2026-09-20 row is outside the window');
+});
+
+test('summary: previous daily series use the preceding period and keep missing visitor counts unknown', () => {
+  const db = require('../src/db').getDb();
+  db.exec('SAVEPOINT previous_chart');
+  try {
+    for (const table of ['gsc_daily', 'gsc_site_daily', 'ga_daily', 'ga_site_daily']) db.exec(`DELETE FROM ${table}`);
+    const date = (i) => new Date(Date.UTC(2026, 8, 1 + i)).toISOString().slice(0, 10);
+    for (let i = 0; i < 60; i++) {
+      db.prepare('INSERT INTO gsc_daily (date, query, page, clicks, impressions) VALUES (?, ?, ?, ?, ?)').run(date(i), 'test', '/', i, i * 10);
+      db.prepare('INSERT INTO gsc_site_daily (date, clicks, impressions) VALUES (?, ?, ?)').run(date(i), i + 100, i * 10);
+      db.prepare('INSERT INTO ga_daily (date, path, views, sessions) VALUES (?, ?, ?, ?)').run(date(i), '/', i * 2, i);
+      if (i !== 2) db.prepare('INSERT INTO ga_site_daily (date, users) VALUES (?, ?)').run(date(i), i * 3);
+    }
+    for (const days of [7, 30]) {
+      const s = results.resultsSummary(days);
+      assert.equal(s.compare.search, true);
+      assert.equal(s.compare.visits, true);
+      assert.equal(s.previousDaily.length, days);
+      assert.equal(s.previousVisits.length, days);
+      assert.equal(s.previousDaily[0].date, date(60 - days * 2));
+      assert.equal(s.previousDaily[0].clicks, 160 - days * 2, 'uses whole-site search totals');
+      assert.equal(s.previousVisits.at(-1).users, (59 - days) * 3);
+      assert.equal(s.previousVisits.at(-1).date, date(59 - days));
+    }
+    assert.equal(results.resultsSummary(30).previousVisits[2].users, null, 'missing visitors are not shown as zero');
+    db.prepare('DELETE FROM ga_daily WHERE date = ?').run(date(0));
+    assert.equal(results.resultsSummary(30).compare.visits, false, 'incomplete history is not comparable');
+  } finally {
+    db.exec('ROLLBACK TO previous_chart; RELEASE previous_chart');
+  }
 });
 
 test('channel names are plain and AI chat sites are their own channel', () => {

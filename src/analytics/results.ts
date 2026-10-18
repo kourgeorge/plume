@@ -186,6 +186,8 @@ export interface Summary {
   days: number; from: string | null; to: string | null; now: Totals; before: Totals; daily: DayPoint[];
   /** Analytics per day, on Analytics' own dates (Search Console runs a day or two behind). */
   visits: VisitDay[];
+  previousDaily: DayPoint[];
+  previousVisits: VisitDay[];
   sources: SourceRow[]; pages: { page: string; views: number; sessions: number }[];
   /** Plain-word channels (Search, Direct, Social, AI Assistant, ...) by visitors. */
   channels: NamedCount[];
@@ -313,5 +315,28 @@ export function resultsSummary(days = 7): Summary {
   const covered = (table: string, start: string | null) =>
     start != null && (db.prepare(`SELECT COUNT(DISTINCT date) n FROM ${table} WHERE date BETWEEN ? AND ?`).get(shift(start, -days), shift(start, -1)) as { n: number }).n >= days;
   const compare = { search: covered('gsc_daily', gscFrom), visits: covered('ga_daily', gaFrom) };
-  return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, sources, pages, compare, channels, topSources, landing, countries };
+  const previousDaily: DayPoint[] = [];
+  const previousVisits: VisitDay[] = [];
+  if (from) {
+    const start = shift(from, -days), end = shift(from, -1);
+    const hasWhole = db.prepare('SELECT 1 FROM gsc_site_daily WHERE date BETWEEN ? AND ? LIMIT 1').get(start, end) != null;
+    const search = new Map((db.prepare(hasWhole
+      ? 'SELECT date, clicks, impressions FROM gsc_site_daily WHERE date BETWEEN ? AND ?'
+      : 'SELECT date, SUM(clicks) clicks, SUM(impressions) impressions FROM gsc_daily WHERE date BETWEEN ? AND ? GROUP BY date')
+      .all(start, end) as { date: string; clicks: number; impressions: number }[]).map((r) => [r.date, r]));
+    for (let i = 0; i < days; i++) {
+      const date = shift(start, i);
+      previousDaily.push({ date, clicks: search.get(date)?.clicks ?? 0, impressions: search.get(date)?.impressions ?? 0, views: null });
+    }
+  }
+  if (gaFrom) {
+    const start = shift(gaFrom, -days), end = shift(gaFrom, -1);
+    const users = new Map((db.prepare('SELECT date, users FROM ga_site_daily WHERE date BETWEEN ? AND ?').all(start, end) as { date: string; users: number }[]).map((r) => [r.date, r.users]));
+    const views = new Map((db.prepare('SELECT date, SUM(views) views FROM ga_daily WHERE date BETWEEN ? AND ? GROUP BY date').all(start, end) as { date: string; views: number }[]).map((r) => [r.date, r.views]));
+    for (let i = 0; i < days; i++) {
+      const date = shift(start, i);
+      previousVisits.push({ date, users: users.get(date) ?? null, views: views.get(date) ?? null });
+    }
+  }
+  return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, previousDaily, previousVisits, sources, pages, compare, channels, topSources, landing, countries };
 }

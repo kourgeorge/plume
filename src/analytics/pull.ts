@@ -26,10 +26,10 @@ export function matchSite(sites: string[], origin: string): string | null {
 
 // ---- pulls ----
 
-/** Days kept per pull. Search Console data lags ~2 days, so its window ends 2 days ago. */
-export const PULL_DAYS = 30;
+/** Fetch two 30-day periods so comparisons work from the first refresh. Search Console lags ~2 days. */
+export const PULL_DAYS = 60;
 
-/** Last 30 days of date × query × page rows. Re-pulling replaces those days (late data fills in). */
+/** Last 60 days of date × query × page rows. Re-pulling replaces those days (late data fills in). */
 export async function pullSearchConsole(site: string, today = new Date()): Promise<number> {
   type Row = { keys: [string, string, string]; clicks: number; impressions: number; position: number };
   const rows: Row[] = [];

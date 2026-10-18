@@ -1301,7 +1301,7 @@ function renderBarNumbers() {
   // Visitors when Analytics has them, else page views, else Google clicks.
   const [label, key] = s.now.users != null ? ['Visitors', 'users'] : s.now.views != null ? ['Views', 'views'] : ['Clicks', 'clicks'];
   $('bar-numbers').innerHTML = `
-    <a href="#analytics/traffic" class="bar-stat" title="${label}, last ${s.days} days"><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}</a>
+    <a href="#analytics/${key === 'clicks' ? 'seo' : 'traffic'}" class="bar-stat" title="${label}, last ${s.days} days"><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}</a>
     ${s.now.revenue != null ? `<a href="#analytics/traffic" class="bar-stat" title="GA4 conversion value, last ${s.days} days"><span class="lbl">Revenue</span><b>${money(s.now.revenue)}</b></a>` : ''}`;
 }
 
@@ -1436,45 +1436,18 @@ async function renderDetails() {
   return renderGeo(body);
 }
 
-/** Traffic: from a Google result to a visit, how you rank, what visitors did, where they came from, and which pages they landed on. */
-async function renderTraffic(body, s) {
+/** Traffic: visitors, behavior, acquisition channels and landing pages from Google Analytics. */
+function renderTraffic(body, s) {
   if (!s?.from) return (body.innerHTML = emptyNote(NO_GOOGLE));
-  const res = await api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null);
-  if (detailsTab !== 'traffic' || summary !== s) return;
   // No change shown when the period before isn't fully collected yet: "↑ 2,000%" against half-empty days misleads.
-  const SEARCH = ['impressions', 'clicks', 'position'];
-  const fair = (k) => (SEARCH.includes(k) ? s.compare?.search : s.compare?.visits) !== false;
+  const fair = () => s.compare?.visits !== false;
   const vs = (k, lowerIsBetter) => (fair(k) ? delta(change(s.now[k], s.before[k]), lowerIsBetter) : '');
   const was = (k, show = n) => (fair(k) ? `was ${show(s.before[k] ?? 0)}` : 'no earlier period to compare yet');
   const pct = (x, digits = 1) => (x == null ? '—' : `${(100 * x).toFixed(digits)}%`);
-  const ctr = (t) => (t.impressions ? t.clicks / t.impressions : null);
   const bounce = (t) => (t.engagement == null ? null : 1 - t.engagement);
   const ratioDelta = (k, now, before, lowerIsBetter) => (fair(k) ? delta(change(now, before), lowerIsBetter) : '');
 
-  // 1. Seen in Google → clicked → visited.
-  const step = (label, value, d) => `<div class="funnel-step"><span class="lbl">${label}</span><span class="val"><b>${value}</b>${d}</span></div>`;
-  const others = s.now.users && s.now.searchUsers ? s.now.users / s.now.searchUsers : null;
-  const funnel = `<div class="chart-card"><div class="funnel">
-      ${step('Saw you in Google', n(s.now.impressions), vs('impressions'))}<span class="funnel-arrow" aria-hidden="true">→</span>
-      ${step('Clicked through', n(s.now.clicks), vs('clicks'))}<span class="funnel-arrow" aria-hidden="true">→</span>
-      ${step('Visited your site', s.now.searchUsers == null ? '—' : n(s.now.searchUsers), s.now.searchUsers == null ? '' : vs('searchUsers'))}
-    </div>
-    <p class="muted small card-foot">${ctr(s.now) == null ? '' : `${pct(ctr(s.now))} click rate`}${others ? ` · ${n(s.now.users)} visitors in all, ${others.toFixed(1)}× the ones from search` : s.now.searchUsers == null ? ` · ${gaMissing(s, 'visits from search')}` : ''}</p></div>`;
-
-  // 3. Ranking, plus the searches that bring people.
-  const queries = (res?.queries ?? []).filter((q) => q.clicks > 0).sort((a, b) => b.clicks - a.clicks).slice(0, 8);
-  const ranking = `<div class="stat-cards an-gap">${[
-    statCard('Average position', s.now.position ? `#${s.now.position.toFixed(0)}` : '—', fair('position') ? placeDelta(s.now.position, s.before.position) : '', 'lower is better'),
-    statCard('Click rate', pct(ctr(s.now), 2), ratioDelta('clicks', ctr(s.now), ctr(s.before)), 'clicks out of times seen'),
-    statCard('Total clicks', n(s.now.clicks), vs('clicks'), was('clicks')),
-  ].join('')}</div>
-  <div class="chart-card"><div class="chart-head"><span>Top searches</span><span class="muted small">last ${s.days} days</span></div>${queries.length
-    ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Clicks</th><th>Click rate</th></tr></thead><tbody>${queries
-        .map((q) => `<tr><td dir="auto" class="cut" title="${esc(q.query)}">${esc(q.query)}</td><td></td><td>${n(q.clicks)}</td><td>${pct(q.ctr)}</td></tr>`)
-        .join('')}</tbody></table>`
-    : emptyNote('No searches with clicks yet.')}</div>`;
-
-  // 4. What visitors did.
+  // What visitors did.
   const mins = (sec) => (sec == null ? '—' : `${Math.floor(sec / 60)}m ${String(Math.round(sec % 60)).padStart(2, '0')}s`);
   const did = [
     s.now.users != null && statCard('Visitors', n(s.now.users), vs('users'), was('users')),
@@ -1489,7 +1462,7 @@ async function renderTraffic(body, s) {
   ].filter(Boolean);
   const noNew = s.now.engagement == null && s.now.users != null;
 
-  // 5–7. Bars tables: channels, sites, landing pages, countries.
+  // Acquisition channels, referring sites and landing pages.
   const bars = (rows, head, val, label, total) => {
     const max = Math.max(1, ...rows.map(val));
     return `<table class="bars-table"><thead><tr><th>${head[0]}</th><th></th><th>${head[1]}</th></tr></thead><tbody>${rows
@@ -1500,35 +1473,40 @@ async function renderTraffic(body, s) {
   const channels = s.channels.length ? bars(s.channels, ['Channel', 'Share'], (r) => r.users, (r) => esc(r.label), chTotal) : emptyNote(gaMissing(s, 'where visitors come from'));
   const sites = s.topSources.length ? bars(s.topSources, ['Site', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.channels.length ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see which sites sent them.' : gaMissing(s, 'which sites send visitors'));
   const landing = s.landing.length ? bars(s.landing, ['Page', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.now.users != null ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see where visits start.' : gaMissing(s, 'where visits start'));
-  const names = new Intl.DisplayNames(undefined, { type: 'region' });
-  const flag = (code) => (code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '🌐');
-  const country = (r) => {
-    let name = r.country.toUpperCase();
-    try { if (r.code) name = names.of(r.code) ?? name; } catch {}
-    return `<span class="flag" aria-hidden="true">${flag(r.code)}</span> ${esc(name)}`;
-  };
-  const cTotal = s.countries.reduce((a, r) => a + r.clicks, 0);
-  const world = s.countries.length ? bars(s.countries.map((r) => ({ ...r, label: r.country })), ['Country', 'Share'], (r) => r.clicks, country, cTotal) : emptyNote('Press <b>Get latest data</b> on <a href="#results">Results</a> to see searchers’ countries.');
 
-  body.innerHTML = `${block('How people found you', null, `<p class="muted small card-note">From a Google result to a visit on your site.</p>${funnel}`)}
-    ${block('Traffic over time', null, `<div class="chart-card"><div id="traffic-chart"></div></div>`)}
-    ${block('How well you’re ranking', ['#rankings', 'Rankings'], ranking)}
+  body.innerHTML = `${block('Traffic over time', null, `<div class="chart-card"><div id="traffic-chart"></div></div>`)}
     ${block('What they did on your site', null, `${noNew ? `<p class="muted small card-note">Press <b>Get latest data</b> on <a href="#results">Results</a> to fill in returning visitors, key events and engagement.</p>` : ''}<div class="stat-cards">${did.join('')}</div>`)}
     <div class="an-row">${block('Where they came from', null, `<div class="chart-card">${channels}</div>`)}${block('Top sources', null, `<div class="chart-card">${sites}</div>`)}</div>
-    <div class="an-row">${block('Top landing pages', null, `<div class="chart-card">${landing}</div>`)}${block('Where in the world', null, `<div class="chart-card"><p class="muted small card-note">Google search clicks by country.</p>${world}</div>`)}</div>
-    <p class="muted small">Google Analytics + Search Console · ${s.compare?.search === false || s.compare?.visits === false ? `changes show once Plume has collected the ${s.days} days before this period` : `changes compare with the ${s.days} days before`}</p>`;
+    ${block('Top landing pages', null, `<div class="chart-card">${landing}</div>`)}
+    <p class="muted small">Google Analytics · ${s.compare?.visits === false ? `changes show once Plume has collected the ${s.days} days before this period` : `changes compare with the ${s.days} days before`}</p>`;
 
-  // Visits and search clicks share a chart; Search Console runs a day or two behind, so both are keyed by date.
-  const clicksBy = new Map(s.daily.map((d) => [d.date, d.clicks]));
   const visitKey = s.now.users != null ? 'users' : s.now.views != null ? 'views' : null;
-  const dates = [...new Set([...(visitKey ? s.visits.map((d) => d.date) : []), ...s.daily.map((d) => d.date)])].sort().slice(-s.days);
-  const visitBy = new Map(s.visits.map((d) => [d.date, d[visitKey]]));
-  if (visitKey)
-    drawChart($('traffic-chart'), 'Visits and search clicks', dates.map((d) => ({ x: d, y: visitBy.get(d) ?? 0 })), null, {
-      label: visitKey === 'users' ? 'Visits' : 'Page views',
-      other: { label: 'Search clicks', points: dates.map((d) => ({ x: d, y: clicksBy.get(d) ?? null })) },
-    });
-  else drawChart($('traffic-chart'), 'Search clicks', dates.map((d) => ({ x: d, y: clicksBy.get(d) ?? 0 })), null, { label: 'Search clicks' });
+  if (!visitKey || !s.visits.length) {
+    $('traffic-chart').innerHTML = emptyNote(gaMissing(s, 'traffic over time'));
+    return;
+  }
+  const label = visitKey === 'users' ? 'Visitors' : 'Page views';
+  drawPeriodChart($('traffic-chart'), label, s.visits, s.previousVisits ?? [], visitKey, s, s.compare?.visits);
+}
+
+/** Draw one metric with its matching previous period, without mixing Analytics and Search Console dates. */
+function drawPeriodChart(box, label, rows, prior, key, s, comparable) {
+  if (!rows.length) return (box.innerHTML = emptyNote('No daily data for this period yet.'));
+  const points = rows.map((d) => ({ x: d.date, y: d[key] ?? 0 }));
+  const values = new Map(prior.map((d) => [d.date, d[key]]));
+  const range = (items) => `${fmtDay(items[0].x)} – ${fmtDay(items[items.length - 1].x)}`;
+  const previous = comparable ? [{
+    label: `${label}, previous ${s.days} days`,
+    points: points.map((p) => {
+      const date = new Date(new Date(`${p.x}T00:00:00Z`).getTime() - s.days * 86400_000).toISOString().slice(0, 10);
+      return { x: date, y: values.get(date) ?? null };
+    }),
+  }] : [];
+  if (previous.length) previous[0].label += ` (${range(previous[0].points)})`;
+  drawChart(box, label, points, null, {
+    label: `${label}, current ${s.days} days (${range(points)})`, previous,
+    comparisonNote: comparable ? '' : `Previous-period lines appear once the earlier ${s.days} days have been collected.`,
+  });
 }
 
 /** SEO has three parts, one at a time: how Google search is going, how fast pages load, and what the on-page check found. */
@@ -1541,7 +1519,7 @@ async function renderSeo(body, s) {
     api('/api/audit').catch(() => ({})),
     s?.from ? api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null) : null,
   ]);
-  if (detailsTab !== 'seo') return;
+  if (detailsTab !== 'seo' || summary !== s) return;
   const audit = check.audit;
   const slow = ['mobile', 'desktop'].some((d) => speed[d]?.headline);
   const views = [
@@ -1561,6 +1539,23 @@ function seoSearch(main, s, res, again) {
   if (!s?.from) return (main.innerHTML = emptyNote(NO_GOOGLE));
   const ctr = (t) => (t.impressions ? (100 * t.clicks) / t.impressions : null);
   const c = ctr(s.now);
+  const comparable = s.compare?.search !== false;
+  const vs = (key) => comparable ? delta(change(s.now[key], s.before[key])) : '';
+  const rate = (v) => v == null ? '—' : `${v.toFixed(2)}%`;
+  const rank = (v) => v ? `#${v.toFixed(1)}` : '—';
+  const was = (value, description) => `${comparable ? `Previous: ${value}` : 'Previous period incomplete'} · ${description}`;
+  const priorDate = (date) => new Date(new Date(`${date}T00:00:00Z`).getTime() - s.days * 86400_000).toISOString().slice(0, 10);
+  const period = `Current: ${fmtDay(s.from)} – ${fmtDay(s.to)} · Previous: ${fmtDay(priorDate(s.from))} – ${fmtDay(priorDate(s.to))}`;
+  const names = new Intl.DisplayNames(undefined, { type: 'region' });
+  const flag = (code) => (code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '🌐');
+  const country = (r) => {
+    let name = r.country.toUpperCase();
+    try { if (r.code) name = names.of(r.code) ?? name; } catch {}
+    return `<span class="flag" aria-hidden="true">${flag(r.code)}</span> ${esc(name)}`;
+  };
+  const cTotal = s.countries.reduce((a, r) => a + r.clicks, 0);
+  const world = s.countries.length ? `<table class="bars-table"><thead><tr><th>Country</th><th>Clicks</th><th>Share</th></tr></thead><tbody>${s.countries.map((r) => `<tr><td>${country(r)}</td><td>${n(r.clicks)}</td><td>${cTotal ? (100 * r.clicks / cTotal).toFixed(1) : '0.0'}%</td></tr>`).join('')}</tbody></table>` : emptyNote('Press <b>Get latest data</b> on <a href="#results">Results</a> to see searchers’ countries.');
+
   // Brand searches are people who already know you: the site's own name, split into its parts.
   const host = state.site ? new URL(state.site).hostname.replace(/^www\./, '') : '';
   // "test4u" also yields "test" and "4u", so "teoria 4 u" counts as a brand search.
@@ -1573,15 +1568,17 @@ function seoSearch(main, s, res, again) {
   const all = res?.queries ?? [];
   const q = all.filter((x) => searchKind === 'all' || (searchKind === 'brand') === brand(x.query)).sort((a, b) => b.clicks - a.clicks).slice(0, 10);
   const near = res?.nearlyThere ?? [];
-  main.innerHTML = `<div class="stat-cards an-gap">${[
-    statCard('Seen in Google', n(s.now.impressions), delta(change(s.now.impressions, s.before.impressions)), 'times you showed up in results'),
-    statCard('Clicks', n(s.now.clicks), delta(change(s.now.clicks, s.before.clicks)), c == null ? '' : `${c.toFixed(1)}% click rate`),
-    statCard('Average position', s.now.position ? `#${s.now.position.toFixed(1)}` : '—', placeDelta(s.now.position, s.before.position), 'lower is better'),
+  main.innerHTML = `<p class="muted small">${period}</p><div class="stat-cards an-gap">${[
+    statCard('Seen in Google', n(s.now.impressions), vs('impressions'), was(n(s.before.impressions), 'times you showed up in results')),
+    statCard('Clicks', n(s.now.clicks), vs('clicks'), was(n(s.before.clicks), 'clicks from Google search results')),
+    statCard('Click rate', rate(c), comparable ? delta(change(c, ctr(s.before))) : '', was(rate(ctr(s.before)), 'clicks out of times seen')),
+    statCard('Average position', rank(s.now.position), comparable ? placeDelta(s.now.position, s.before.position) : '', was(rank(s.before.position), 'lower is better')),
   ].join('')}</div>
+  ${block('Search clicks over time', null, `<div class="chart-card"><div id="search-chart"></div></div>`)}
   <div class="an-row">
     ${block('Top searches', ['#rankings', 'Rankings'], `<div class="chart-card"><div class="chart-head">${seg('search-kind', [['all', 'All'], ['other', 'Not your name'], ['brand', 'Your name']], searchKind)}</div>${q.length
-      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Clicks</th></tr></thead><tbody>${q
-          .map((x) => `<tr><td dir="auto" class="cut">${esc(x.query)}</td><td></td><td>#${x.position.toFixed(0)}</td><td>${n(x.clicks)}</td></tr>`)
+      ? `<table class="bars-table"><thead><tr><th>Search</th><th></th><th>Position</th><th>Clicks</th><th>Click rate</th></tr></thead><tbody>${q
+          .map((x) => `<tr><td dir="auto" class="cut">${esc(x.query)}</td><td></td><td>#${x.position.toFixed(0)}</td><td>${n(x.clicks)}</td><td>${x.ctr == null ? '—' : `${(100 * x.ctr).toFixed(1)}%`}</td></tr>`)
           .join('')}</tbody></table>`
       : emptyNote('No searches here yet.')}</div>`)}
     ${block('Nearly on page one', null, `<div class="chart-card"><p class="muted small card-note">Google shows you for these on page 2–3. The SEO agent writes for these first.</p>${near.length
@@ -1590,7 +1587,10 @@ function seoSearch(main, s, res, again) {
           .map((o) => `<tr><td dir="auto" class="cut">${esc(o.keyword)}</td><td></td><td>#${pos(o.position)}</td><td>${n(o.impressions)}</td></tr>`)
           .join('')}</tbody></table>`
       : emptyNote('None right now.')}</div>`)}
-  </div>`;
+  </div>
+  ${block('Searchers by country', null, `<div class="chart-card"><p class="muted small card-note">Google search clicks by country.</p>${world}</div>`)}
+  <p class="muted small">Search Console · ${!comparable ? `changes show once Plume has collected the ${s.days} days before this period` : `changes compare with the ${s.days} days before`}</p>`;
+  drawPeriodChart($('search-chart'), 'Search clicks', s.daily, s.previousDaily ?? [], 'clicks', s, s.compare?.search);
   onSeg('search-kind', (v) => ((searchKind = v), pref.set('searchKind', v), again()));
 }
 
@@ -1701,12 +1701,14 @@ async function renderGeo(body) {
 
 /**
  * A plain SVG line chart: this period as a line, last period's daily average as a dashed line.
- * `opts.other` adds a second line (search clicks next to visits); days it has no number for are skipped.
+ * `opts.other` adds a second metric line; days it has no number for are skipped.
+ * `opts.previous` adds dashed daily comparisons aligned to the current period by day.
  */
 function drawChart(box, title, points, avg, opts = {}) {
   const W = Math.max(320, box.clientWidth || 1000), H = 220, L = 36, B = 22, T = 18;
   const second = opts.other?.points ?? [];
-  const max = Math.max(1, avg ?? 0, ...points.map((p) => p.y), ...second.map((p) => p.y ?? 0));
+  const previous = (opts.previous ?? []).filter((s) => s.points.some((p) => p.y != null));
+  const max = Math.max(1, avg ?? 0, ...points.map((p) => p.y), ...second.map((p) => p.y ?? 0), ...previous.flatMap((s) => s.points.map((p) => p.y ?? 0)));
   // Round the top up to a tidy number so the line fills the chart instead of hugging the floor.
   const mag = 10 ** Math.floor(Math.log10(max));
   const top = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((t) => t >= max) ?? 10 * mag;
@@ -1718,6 +1720,13 @@ function drawChart(box, title, points, avg, opts = {}) {
   second.forEach((p, i) => {
     if (p.y != null) path2 += `${path2 && second[i - 1]?.y != null ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`;
   });
+  const previousPaths = previous.map((s) => {
+    let d = '';
+    s.points.forEach((p, i) => {
+      if (p.y != null) d += `${i && s.points[i - 1]?.y != null ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`;
+    });
+    return `<path d="${d}" class="line previous${s.second ? ' second' : ''}"/>`;
+  }).join('');
   const step = Math.ceil(points.length / 8);
   const last = points[points.length - 1];
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="line-chart" role="img" aria-label="${esc(title)}">
@@ -1725,11 +1734,13 @@ function drawChart(box, title, points, avg, opts = {}) {
     ${avg != null ? `<line x1="${L}" x2="${W - 8}" y1="${y(avg)}" y2="${y(avg)}" class="avg"/>` : ''}
     <path d="${area}" class="area"/><path d="${path}" class="line"/>
     ${path2 ? `<path d="${path2}" class="line second"/>` : ''}
+    ${previousPaths}
     <circle cx="${x(points.length - 1)}" cy="${y(last.y)}" r="4" class="dot"/>
     <text x="${x(points.length - 1)}" y="${y(last.y) - 9}" class="axis strong" text-anchor="end">${fmtDay(last.x)} · ${n(last.y)}</text>
     ${points.map((p, i) => ((i % step === 0 && points.length - 1 - i >= step / 2) || i === points.length - 1 ? `<text x="${x(i)}" y="${H - 4}" class="axis" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${p.x.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/')}</text>` : '')).join('')}
   </svg>
-  <div class="chart-legend muted small"><span><span class="lg-line"></span>${esc(opts.label ?? 'This period')}</span>${opts.other ? `<span><span class="lg-line second"></span>${esc(opts.other.label)}</span>` : ''}${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>`;
+  <div class="chart-legend muted small"><span><span class="lg-line"></span>${esc(opts.label ?? 'This period')}</span>${opts.other ? `<span><span class="lg-line second"></span>${esc(opts.other.label)}</span>` : ''}${previous.map((s) => `<span><span class="lg-line previous${s.second ? ' second' : ''}"></span>${esc(s.label)}</span>`).join('')}${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>
+  ${opts.comparisonNote ? `<p class="muted small">${esc(opts.comparisonNote)}</p>` : ''}`;
 }
 
 for (const b of $('details-tabs').querySelectorAll('button')) b.onclick = () => ((detailsTab = b.dataset.tab), pref.set('analyticsTab', detailsTab), renderDetails());
@@ -1741,7 +1752,7 @@ for (const b of $('an-range').querySelectorAll('button'))
   };
 // The window is resized: redraw so the charts keep their width.
 let resizeTimer;
-window.addEventListener('resize', () => (clearTimeout(resizeTimer), (resizeTimer = setTimeout(() => location.hash.startsWith('#analytics') && detailsTab === 'traffic' && renderDetails(), 150))));
+window.addEventListener('resize', () => (clearTimeout(resizeTimer), (resizeTimer = setTimeout(() => location.hash.startsWith('#analytics') && ['traffic', 'seo'].includes(detailsTab) && renderDetails(), 150))));
 
 // ---------------------------------------------------------------- tour
 
