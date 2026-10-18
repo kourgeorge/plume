@@ -8,7 +8,7 @@ import { MODELS } from '../config';
 import { clearLlmConfig, describeLlm, getLlmConfig, llmProblem, saveLlmConfig } from '../llm/settings';
 import { searchMode, testConnection } from '../llm/client';
 import { PROVIDERS } from '../llm/providers';
-import { RTL, contentLanguage, languageName } from '../context/language';
+import { RTL, contentLanguage, contentLanguages, languageList, languageName, setContentLanguages } from '../context/language';
 import { PROFILE_DOCS, docWrittenAt, isProfileDocId, profileComplete, readDoc, writeDoc } from '../context/profile';
 import { renderMarkdown } from '../render';
 import { techSignals } from '../research/techSignals';
@@ -149,8 +149,22 @@ export function buildServer(port: number): FastifyInstance {
     hasApiKey: !llmProblem(),
     llmError: llmProblem(),
     llm: { ...describeLlm(), webSearch: searchMode() },
-    language: { code: contentLanguage(), name: languageName(contentLanguage()), rtl: RTL.has(contentLanguage()) },
+    language: {
+      code: contentLanguage(),
+      name: languageName(contentLanguage()),
+      rtl: RTL.has(contentLanguage()),
+      all: contentLanguages(),
+      names: languageList(contentLanguages()),
+    },
   }));
+
+  /** The owner corrects the site's languages: codes like "he" or "en", main first. Research then leaves them alone. */
+  app.post<{ Body: { languages?: string[] } }>('/api/language', async (req, reply) => {
+    const codes = [...new Set((req.body?.languages ?? []).map((c) => String(c).toLowerCase().trim().split(/[-_]/)[0]).filter((c) => /^[a-z]{2,3}$/.test(c)))];
+    if (!codes.length) return reply.code(400).send({ error: 'give at least one language code, like "en" or "he"' });
+    setContentLanguages({ main: codes[0], all: codes }, true);
+    return { code: codes[0], names: languageList(codes) };
+  });
 
   /** Research always covers this site's own address; a different website is a different site in the list. */
   app.post<{ Body: { only?: string } }>('/api/research', async (req, reply) => {

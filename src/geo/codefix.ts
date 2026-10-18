@@ -12,6 +12,7 @@ import { Gh, GhError, ghBase, ghCall, ghConfigured, ghFrom, ghPath, ghPullReques
 import * as cheerio from 'cheerio';
 import { fetchHttp } from '../research/fetchPage';
 import { extractPage } from '../research/crawl';
+import { languageName, pageLanguageOf } from '../context/language';
 import { aiAccess } from '../research/aiCrawlers';
 import { auditPages, markFixDone } from '../agents/seoAudit';
 import { recordFixDone } from '../actions';
@@ -413,7 +414,7 @@ export async function prepareFix(issue: Issue, onProgress: (m: string) => void =
     const live = await fetchHttp(issue.url, opts.fetchFn);
     // A short page counts as "thin" to the crawler, but its title and headings still say which file it is.
     const liveHtml = live.html ?? null;
-    if (liveHtml) lang = extractPage(issue.url, 200, liveHtml).page.lang;
+    if (liveHtml) lang = pageLanguageOf(extractPage(issue.url, 200, liveHtml).page);
     source = await findPageSource(g, base, tree, issue.url, liveHtml, readFile);
     const named = candidateFiles(issue, tree);
     // A file that holds the page's text comes first. For site-wide checks the shared layout follows,
@@ -443,7 +444,7 @@ export async function prepareFix(issue: Issue, onProgress: (m: string) => void =
   const issueText =
     `Problem on ${issue.url}: ${issue.title}\nWhy it matters: ${issue.why}\nHow to fix it:\n${issue.steps.map((s) => `- ${s}`).join('\n')}` +
     (issue.snippet ? `\nSuggested code:\n${issue.snippet}` : '') +
-    (lang ? `\nThe page is in "${lang}": write any text visitors or search engines will read (titles, descriptions) in that language.` : '');
+    (lang ? `\nThe page is in ${languageName(lang)}: write any text visitors or search engines will read (titles, descriptions) in that language.` : '');
   const where = source
     ? source.how === 'name'
       ? `\n${source.path} looks like this page's file by its name only; check it really is before editing it.`

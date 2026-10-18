@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from '../config';
 import { getDb, getSetting, setSetting } from '../db';
-import { contentLanguage } from '../context/language';
+import { contentLanguage, contentLanguages, pageLanguageOf } from '../context/language';
 import { siteUrl } from '../sites';
 import { listTracked } from './rankings';
 
@@ -98,6 +98,16 @@ export function parseSerp(data: any): { results: SerpResult[]; cost: number } {
   return { results, cost: Number(task.cost ?? data.cost ?? 0) };
 }
 
+/**
+ * The language to ask Google in for one search. On a site in several languages, a search written in Hebrew
+ * letters is a Hebrew search even when the site is mainly English. Latin letters can't tell English from French,
+ * so those use the main language.
+ */
+export function keywordLanguage(keyword: string): string {
+  const byScript = pageLanguageOf({ lang: '', text: keyword });
+  return byScript && contentLanguages().includes(byScript) ? byScript : contentLanguage();
+}
+
 /** One live lookup for one search. Saves the snapshot and returns it. */
 export async function checkSerp(keyword: string, fetchFn: typeof fetch = fetch): Promise<{ results: SerpResult[]; ourPosition: number | null; cost: number }> {
   const c = serpCreds();
@@ -106,7 +116,7 @@ export async function checkSerp(keyword: string, fetchFn: typeof fetch = fetch):
   const res = await fetchFn(`${SERP_API.base}/v3/serp/google/organic/live/advanced`, {
     method: 'POST',
     headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' },
-    body: JSON.stringify([{ keyword, location_name: serpLocation(), language_code: contentLanguage(), depth: 20 }]),
+    body: JSON.stringify([{ keyword, location_name: serpLocation(), language_code: keywordLanguage(keyword), depth: 20 }]),
     signal: AbortSignal.timeout(60_000),
   });
   const data: any = await res.json().catch(() => ({}));

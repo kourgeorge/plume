@@ -166,7 +166,7 @@ test('prepares the change first: shows the file and the lines, opens nothing unt
   assert.match(r.proposal.source.evidence, /the page title/);
   assert.ok(r.proposal.files[0].diff.some((l) => l.t === 'add' && /meta name="description"/.test(l.line)));
   const prompt = calls.find((c) => c.path === 'llm').body.messages[0].content;
-  assert.match(prompt, /The page is in "ar"/);
+  assert.match(prompt, /The page is in Arabic/);
   assert.ok(!calls.some((c) => c.method !== 'GET' && c.path !== 'llm'), 'preparing must not change anything on GitHub');
   assert.equal(cf.lastFix(it.id).status, 'proposed');
   assert.ok(!('changes' in cf.lastFix(it.id).proposal), 'the page gets the preview, not the stored file contents');

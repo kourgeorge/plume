@@ -4,6 +4,7 @@ import { BrowserFetch, Failed, USER_AGENT, fetchHttp, fetchPage } from './fetchP
 import { TechSignal, detectTech, mergeSignals, saveTechSignals } from './techSignals';
 import { contactLinks, pageDate, profileLinks, schemaTypes } from './schema';
 import { setSetting } from '../db';
+import { detectLanguages, languageSetByOwner, setContentLanguages } from '../context/language';
 
 export interface CrawledPage {
   url: string;
@@ -211,6 +212,8 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   if (!pages.length) throw new CrawlError(startUrl, failures);
   forgetGonePages(seen);
   saveTechSignals(mergeSignals(signals));
+  // A language the owner picked by hand stays; reading the site only fills it in.
+  if (!languageSetByOwner()) setContentLanguages(detectLanguages(pages));
   return pages;
 }
 

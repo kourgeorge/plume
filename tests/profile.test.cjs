@@ -45,3 +45,26 @@ test('site language: html lang wins, script detection is the fallback, rule name
   assert.match(languageRule('he'), /in Hebrew/);
   assert.match(languageRule('he'), /Slugs stay in lowercase Latin/);
 });
+
+test('site languages: wrong <html lang> loses to the text, several languages are kept, strays are not', () => {
+  const { detectLanguages, pageLanguageOf, languageRule } = require('../src/context/language');
+  // Builders that stamp "en" on every page: the Hebrew text wins.
+  assert.equal(pageLanguageOf({ lang: 'en-US', text: 'קורס תאוריה לנהיגה עם סרטונים ומבחנים' }), 'he');
+  assert.equal(pageLanguageOf({ lang: '', text: 'Cours complet', url: 'https://x.fr/fr/cours' }), 'fr');
+  const he = (n) => Array.from({ length: n }, () => ({ lang: 'he', text: 'קורס תאוריה לנהיגה' }));
+  const en = (n) => Array.from({ length: n }, () => ({ lang: 'en', text: 'Theory course' }));
+  assert.deepEqual(detectLanguages([...he(8), ...en(4)]), { main: 'he', all: ['he', 'en'] });
+  assert.deepEqual(detectLanguages([...he(30), ...en(1)]), { main: 'he', all: ['he'] }, 'one stray English page');
+  assert.deepEqual(detectLanguages([]), { main: 'en', all: ['en'] });
+  const rule = languageRule('he', ['he', 'en']);
+  assert.match(rule, /in Hebrew/);
+  assert.match(rule, /also published in English/);
+  assert.equal(languageRule('en', ['en']), 'Write all customer-facing content in English.');
+});
+
+test('a language set by the owner survives a new crawl', () => {
+  const { setContentLanguages, contentLanguages, languageSetByOwner } = require('../src/context/language');
+  setContentLanguages({ main: 'ar', all: ['ar', 'he'] }, true);
+  assert.equal(languageSetByOwner(), true);
+  assert.deepEqual(contentLanguages(), ['ar', 'he']);
+});

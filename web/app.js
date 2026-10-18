@@ -136,7 +136,21 @@ async function renderChrome() {
   loadBarNumbers();
   pollLive();
   const lang = state.language;
-  $('lang-line').textContent = lang.code === 'en' ? 'Agents write in English.' : `Agents write in ${lang.name}, the language of your site.`;
+  $('lang-line').innerHTML =
+    (lang.all.length > 1
+      ? `Agents write in ${esc(lang.names)}, the languages of your site (mainly ${esc(lang.name)}).`
+      : `Agents write in ${esc(lang.name)}, the language of your site.`) + ' <a href="#" id="lang-change">Change</a>';
+  $('lang-change').onclick = async (e) => {
+    e.preventDefault();
+    const typed = prompt('Which languages is your site in? Two-letter codes, main language first, e.g. "he, en".', lang.all.join(', '));
+    if (typed === null) return;
+    try {
+      await post('/api/language', { languages: typed.split(/[\s,]+/).filter(Boolean) });
+      location.reload();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   $('doc-list').innerHTML =
     state.docs.map((d) => `<li><a href="#doc/${d.id}"><span class="nav-label">${NAV_ICON.doc}${esc(d.title)}</span><span class="tag">${d.written ? '' : 'not written'}</span></a></li>`).join('') +

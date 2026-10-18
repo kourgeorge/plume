@@ -152,3 +152,13 @@ test('account problems stop the weekly run with a plain reason', async () => {
   const refused = async () => new Response('{}', { status: 401 });
   await assert.rejects(serp.checkSerp('cable tray', refused), /refused the login/);
 });
+
+test('each search is looked up in its own language on a site with several', () => {
+  const { setContentLanguages } = require('../src/context/language');
+  const { keywordLanguage } = require('../src/seo/serp');
+  setContentLanguages({ main: 'en', all: ['en', 'he'] });
+  assert.equal(keywordLanguage('driving theory test'), 'en');
+  assert.equal(keywordLanguage('מבחן תאוריה'), 'he');
+  assert.equal(keywordLanguage('тест по вождению'), 'en', 'a language the site is not in falls back to the main one');
+  setContentLanguages({ main: 'en', all: ['en'] });
+});
