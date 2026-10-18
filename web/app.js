@@ -823,55 +823,93 @@ function updateCount() {
 const PHOTO_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
 const MAX_PHOTOS = 4;
 
-/** Photos on a post: shown in the order they will appear; added and removed while the post is still a draft. */
+/** Photos or one video on a post: shown in the order they will appear; changed while the post is still a draft. */
 async function loadPhotos(d) {
   const box = $('draft-photos');
   box.hidden = !PHOTO_KINDS.includes(d.kind);
   if (box.hidden) return;
   const editable = d.status === 'draft' || d.status === 'failed';
   const msg = (text) => (($('photos-msg').hidden = !text), ($('photos-msg').className = 'small bad'), ($('photos-msg').textContent = text || ''));
-  const render = (images) => {
+  const busy = () => !$('video-progress').hidden;
+  const render = ({ images, video }) => {
     if (currentDraft !== d.id) return;
-    $('photos-pick').hidden = !editable || images.length >= MAX_PHOTOS;
-    $('photos-note').textContent = images.length
-      ? `${images.length} of ${MAX_PHOTOS}${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
-      : 'up to 4 · JPG, PNG or GIF, 5 MB each';
-    $('photos-list').innerHTML = images.length
-      ? images
-          .map((im, i) => `<figure class="photo"><img src="${withSite(`/api/drafts/${d.id}/images/${im.name}`)}&t=${encodeURIComponent(im.at)}" alt="Photo ${i + 1}">${editable ? `<button class="photo-remove" data-photo="${esc(im.name)}" title="Remove this photo" aria-label="Remove photo ${i + 1}">×</button>` : ''}</figure>`)
-          .join('')
-      : `<p class="small muted">${editable ? 'No photos. Posts with a photo usually get noticed more.' : 'No photos.'}</p>`;
-    for (const b of $('photos-list').querySelectorAll('[data-photo]'))
+    // A post has photos or one video, never both, so each button hides once the other kind is there.
+    $('photos-pick').hidden = !editable || busy() || !!video || images.length >= MAX_PHOTOS;
+    $('video-pick').hidden = !editable || busy() || images.length > 0;
+    $('video-pick').firstChild.textContent = video ? 'Replace video' : 'Add video';
+    $('photos-note').textContent = video
+      ? `1 video · ${video.bytes < 1048576 ? `${Math.max(1, Math.round(video.bytes / 1024))} KB` : `${(video.bytes / 1048576).toFixed(1)} MB`}${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
+      : images.length
+        ? `${images.length} of ${MAX_PHOTOS} photos${d.kind === 'x_thread' ? ' · shown on the first post of the thread' : ''}`
+        : 'up to 4 photos or one video';
+    const remove = (what, label) => (editable ? `<button class="photo-remove" data-remove="${esc(what)}" title="Remove this ${label}" aria-label="Remove ${label}">×</button>` : '');
+    $('photos-list').innerHTML = video
+      ? `<figure class="photo post-video"><video controls preload="metadata" src="${withSite(`/api/drafts/${d.id}/video`)}&t=${encodeURIComponent(video.at)}"></video>${remove('video', 'video')}</figure>`
+      : images.length
+        ? images.map((im, i) => `<figure class="photo"><img src="${withSite(`/api/drafts/${d.id}/images/${im.name}`)}&t=${encodeURIComponent(im.at)}" alt="Photo ${i + 1}">${remove(im.name, `photo ${i + 1}`)}</figure>`).join('')
+        : `<p class="small muted">${editable ? 'Nothing added. Posts with a photo or video usually get noticed more.' : 'No photos or video.'}</p>`;
+    for (const b of $('photos-list').querySelectorAll('[data-remove]'))
       b.onclick = async () => {
+        const what = b.dataset.remove;
+        if (what === 'video' && !confirm('Remove the video from this post?')) return;
         try {
-          render((await api(`/api/drafts/${d.id}/images/${encodeURIComponent(b.dataset.photo)}`, { method: 'DELETE' })).images);
+          render(await api(what === 'video' ? `/api/drafts/${d.id}/video` : `/api/drafts/${d.id}/images/${encodeURIComponent(what)}`, { method: 'DELETE' }));
           msg('');
         } catch (err) {
           msg(err.message);
         }
       };
   };
+  const refresh = async () => render(await api(`/api/drafts/${d.id}/images`));
   $('photos-file').onchange = async () => {
     const files = [...$('photos-file').files];
     $('photos-file').value = '';
     msg('');
-    let images = null;
+    let media = null;
     for (const file of files) {
       try {
         const res = await fetch(`/api/drafts/${d.id}/images`, { method: 'POST', headers: { 'x-plume-site': SITE, 'content-type': file.type || 'application/octet-stream' }, body: file });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || res.statusText);
-        images = data.images;
+        media = data;
       } catch (err) {
         msg(`${file.name}: ${err.message}`);
         break;
       }
     }
-    render(images ?? (await api(`/api/drafts/${d.id}/images`)).images);
+    media ? render(media) : refresh();
+  };
+  $('video-file').onchange = () => {
+    const file = $('video-file').files[0];
+    $('video-file').value = '';
+    if (!file) return;
+    msg('');
+    // XMLHttpRequest, not fetch: it is the only way to show how far an upload has got.
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/drafts/${d.id}/video`);
+    xhr.setRequestHeader('x-plume-site', SITE);
+    xhr.setRequestHeader('content-type', /\.mov$/i.test(file.name) ? 'video/quicktime' : 'video/mp4');
+    $('video-progress').value = 0;
+    $('video-progress').hidden = false;
+    $('photos-pick').hidden = $('video-pick').hidden = true;
+    xhr.upload.onprogress = (e) => e.lengthComputable && ($('video-progress').value = Math.round((e.loaded / e.total) * 100));
+    xhr.onloadend = () => {
+      $('video-progress').hidden = true;
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status !== 200) {
+        msg(`${file.name}: ${data.error || xhr.statusText || 'the upload did not finish'}`);
+        return refresh();
+      }
+      render(data);
+    };
+    xhr.send(file);
   };
   $('photos-list').innerHTML = '';
   try {
-    render((await api(`/api/drafts/${d.id}/images`)).images);
+    await refresh();
   } catch (err) {
     msg(err.message);
   }

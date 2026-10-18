@@ -3,7 +3,7 @@ import fs from 'fs';
 import type { Publisher, PublishResult } from '../publish';
 import type { Draft } from '../queue';
 import { captionFromMarkdown, footagePath } from '../video/agent';
-import { IMAGE_MIME, PostImage, listImages } from './images';
+import { IMAGE_MIME, PostImage, PostVideo, VIDEO_MIME, listImages, postVideo } from './images';
 import { describeProblems, lengthProblems, linkedinEscape, plainText, splitThread } from './text';
 
 /** Overridable so tests can point at a fake server. */
@@ -27,6 +27,24 @@ const photoBlob = (img: PostImage) => new Blob([fs.readFileSync(img.file)], { ty
 
 /** The draft's photos, in order. Only post drafts have any. */
 const photosOf = (draft: Draft) => (draft.id ? listImages(draft.id) : []);
+/** The draft's video, if it has one instead of photos. */
+const videoOf = (draft: Draft) => (draft.id ? postVideo(draft.id) : null);
+
+/** Read one piece of a file without loading the whole video into memory. */
+function readPiece(file: string, start: number, length: number): Uint8Array<ArrayBuffer> {
+  const buf = new Uint8Array(new ArrayBuffer(length));
+  const fd = fs.openSync(file, 'r');
+  try {
+    const n = fs.readSync(fd, buf, 0, length, start);
+    return n === length ? buf : buf.subarray(0, n);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** How long to wait between checks while a network processes a video. Overridable so tests run fast. */
+export const VIDEO_WAIT = { everyMs: 5000, maxMs: 10 * 60_000, longestMs: 60_000 };
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- X
 
@@ -102,6 +120,50 @@ async function xUpload(env: NodeJS.ProcessEnv, img: PostImage): Promise<string> 
   return String(id);
 }
 
+/** X's reply to a media call: the id, and how its processing is going. */
+async function xMediaCall(env: NodeJS.ProcessEnv, method: 'GET' | 'POST', path: string, body?: FormData | Record<string, unknown>): Promise<any> {
+  const url = `${SOCIAL_API.x}${path}`;
+  const json = body && !(body instanceof FormData);
+  const res = await fetch(url, {
+    method,
+    headers: { authorization: oauth1Header(method, url, xKeys(env)), ...(json ? { 'content-type': 'application/json' } : {}) },
+    body: body ? (json ? JSON.stringify(body) : (body as FormData)) : undefined,
+    signal: AbortSignal.timeout(120_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const why = data.detail ?? data.title ?? data.errors?.[0]?.message ?? res.statusText;
+    if (res.status === 403) throw new Error(`X refused the video: ${why}. Check the app has "Read and write" permission.`);
+    if (res.status === 429) throw new Error('X rate limit reached — it will be retried later');
+    throw new Error(`X did not take the video (${res.status}: ${why})`);
+  }
+  return data.data ?? data;
+}
+
+/** X takes a video in pieces of up to 4 MB: start, send each piece, finish, then wait while X processes it. */
+async function xUploadVideo(env: NodeJS.ProcessEnv, vid: PostVideo): Promise<string> {
+  const start = await xMediaCall(env, 'POST', '/2/media/upload/initialize', { media_type: VIDEO_MIME[vid.type], total_bytes: vid.bytes, media_category: 'tweet_video' });
+  const id = String(start.id ?? '');
+  if (!id) throw new Error('X did not start the video upload');
+  const PIECE = 4 * 1024 * 1024;
+  for (let at = 0, n = 0; at < vid.bytes; at += PIECE, n++) {
+    const form = new FormData();
+    form.append('media', new Blob([readPiece(vid.file, at, Math.min(PIECE, vid.bytes - at))]), 'piece');
+    form.append('segment_index', String(n));
+    await xMediaCall(env, 'POST', `/2/media/upload/${id}/append`, form);
+  }
+  let info = (await xMediaCall(env, 'POST', `/2/media/upload/${id}/finalize`)).processing_info;
+  const until = Date.now() + VIDEO_WAIT.maxMs;
+  while (info && info.state !== 'succeeded') {
+    if (info.state === 'failed') throw new Error(`X could not use this video (${info.error?.message ?? 'no reason given'}). X takes MP4 or MOV up to 2 minutes 20 seconds.`);
+    if (Date.now() > until) throw new Error('X is still processing the video — it will be retried later');
+    // X says how long to wait; never less than our own pause, never more than a minute.
+    await pause(Math.min(VIDEO_WAIT.longestMs, Math.max(VIDEO_WAIT.everyMs, (Number(info.check_after_secs) || 0) * 1000)));
+    info = (await xMediaCall(env, 'GET', `/2/media/upload?command=STATUS&media_id=${id}`)).processing_info;
+  }
+  return id;
+}
+
 export const xPublisher: Publisher = {
   id: 'x',
   label: 'X (Twitter)',
@@ -113,7 +175,9 @@ export const xPublisher: Publisher = {
     // A thread is a chain of replies. If a later post fails, the earlier ones stay up and the error says how far it got.
     // Photos go on the first post, which is the one people see in their feed.
     const mediaIds: string[] = [];
-    for (const img of photosOf(draft)) mediaIds.push(await xUpload(env, img));
+    const vid = videoOf(draft);
+    if (vid) mediaIds.push(await xUploadVideo(env, vid));
+    else for (const img of photosOf(draft)) mediaIds.push(await xUpload(env, img));
     const ids: string[] = [];
     for (const [i, text] of posts.entries()) {
       try {
@@ -174,6 +238,48 @@ async function linkedinUpload(env: NodeJS.ProcessEnv, author: string, img: PostI
   return image;
 }
 
+async function linkedinJson(env: NodeJS.ProcessEnv, method: 'GET' | 'POST', path: string, body?: unknown): Promise<any> {
+  const res = await fetch(`${SOCIAL_API.linkedin}${path}`, {
+    method,
+    headers: { ...linkedinHeaders(env), ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('LinkedIn refused the token — it may have expired. Make a new one and save it in Settings.');
+  if (!res.ok) throw new Error(`LinkedIn would not take the video (${res.status}: ${data.message ?? res.statusText})`);
+  return data;
+}
+
+/** LinkedIn videos: ask for upload addresses (one per piece), send each piece, finish, then wait until it is ready. */
+async function linkedinUploadVideo(env: NodeJS.ProcessEnv, author: string, vid: PostVideo): Promise<string> {
+  const init = await linkedinJson(env, 'POST', '/rest/videos?action=initializeUpload', {
+    initializeUploadRequest: { owner: author, fileSizeBytes: vid.bytes, uploadCaptions: false, uploadThumbnail: false },
+  });
+  const { video, uploadToken = '', uploadInstructions = [] } = init.value ?? {};
+  if (!video || !uploadInstructions.length) throw new Error('LinkedIn did not start the video upload');
+  const parts: string[] = [];
+  for (const ins of uploadInstructions) {
+    const put = await fetch(ins.uploadUrl, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: readPiece(vid.file, ins.firstByte, ins.lastByte - ins.firstByte + 1),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!put.ok) throw new Error(`LinkedIn did not accept part of the video (${put.status})`);
+    parts.push(put.headers.get('etag') ?? '');
+  }
+  await linkedinJson(env, 'POST', '/rest/videos?action=finalizeUpload', { finalizeUploadRequest: { video, uploadToken, uploadedPartIds: parts } });
+  const until = Date.now() + VIDEO_WAIT.maxMs;
+  for (;;) {
+    const st = await linkedinJson(env, 'GET', `/rest/videos/${encodeURIComponent(video)}`);
+    if (st.status === 'AVAILABLE') return video;
+    if (st.status === 'PROCESSING_FAILED') throw new Error(`LinkedIn could not use this video (${st.processingFailureReason ?? 'no reason given'}). LinkedIn takes MP4 from 3 seconds to 30 minutes.`);
+    if (Date.now() > until) throw new Error('LinkedIn is still processing the video — it will be retried later');
+    await pause(VIDEO_WAIT.everyMs);
+  }
+}
+
 export const linkedinPublisher: Publisher = {
   id: 'linkedin',
   label: 'LinkedIn',
@@ -183,9 +289,16 @@ export const linkedinPublisher: Publisher = {
     const text = plainText(draft.body);
     tooLong('linkedin', text);
     const author = await linkedinAuthor(env);
+    const vid = videoOf(draft);
     const images: string[] = [];
-    for (const img of photosOf(draft)) images.push(await linkedinUpload(env, author, img));
-    const content = images.length === 1 ? { content: { media: { id: images[0] } } } : images.length ? { content: { multiImage: { images: images.map((id) => ({ id })) } } } : {};
+    if (!vid) for (const img of photosOf(draft)) images.push(await linkedinUpload(env, author, img));
+    const content = vid
+      ? { content: { media: { id: await linkedinUploadVideo(env, author, vid), title: draft.title.slice(0, 200) } } }
+      : images.length === 1
+        ? { content: { media: { id: images[0] } } }
+        : images.length
+          ? { content: { multiImage: { images: images.map((id) => ({ id })) } } }
+          : {};
     const res = await fetch(`${SOCIAL_API.linkedin}/rest/posts`, {
       method: 'POST',
       headers: {
@@ -251,6 +364,27 @@ const pageId = (env: NodeJS.ProcessEnv) => {
   return id;
 };
 
+/** Upload a Page video in pieces (start, send each piece, finish) and publish it with the post text. Returns its id. */
+async function facebookVideo(env: NodeJS.ProcessEnv, page: string, vid: PostVideo, text: string): Promise<string> {
+  const start = await facebookCall(env, 'POST', `/${page}/videos`, { upload_phase: 'start', file_size: String(vid.bytes) });
+  const session = start.upload_session_id;
+  if (!session || !start.video_id) throw new Error('Facebook did not start the video upload');
+  let from = Number(start.start_offset ?? 0);
+  let to = Number(start.end_offset ?? vid.bytes);
+  while (from < to) {
+    const form = new FormData();
+    form.append('upload_phase', 'transfer');
+    form.append('upload_session_id', String(session));
+    form.append('start_offset', String(from));
+    form.append('video_file_chunk', new Blob([readPiece(vid.file, from, to - from)], { type: VIDEO_MIME[vid.type] }), 'piece');
+    const next = await facebookCall(env, 'POST', `/${page}/videos`, form);
+    from = Number(next.start_offset);
+    to = Number(next.end_offset);
+  }
+  await facebookCall(env, 'POST', `/${page}/videos`, { upload_phase: 'finish', upload_session_id: String(session), description: text });
+  return String(start.video_id);
+}
+
 export const facebookPublisher: Publisher = {
   id: 'facebook',
   label: 'Facebook Page',
@@ -260,6 +394,12 @@ export const facebookPublisher: Publisher = {
     const text = plainText(draft.body);
     tooLong('facebook', text);
     const page = pageId(env);
+    const vid = videoOf(draft);
+    if (vid) {
+      // A video post: the video itself carries the text. Sent in pieces, the same way Facebook takes Reels.
+      const id = await facebookVideo(env, page, vid, text);
+      return { url: `https://www.facebook.com/${page}/videos/${id}`, externalId: id, dryRun: false };
+    }
     // Photos are uploaded unpublished first, then attached to one post, so several show together with the text.
     const attached: Record<string, string> = {};
     for (const [i, img] of photosOf(draft).entries()) {

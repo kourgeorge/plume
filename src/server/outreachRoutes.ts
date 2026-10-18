@@ -10,7 +10,7 @@ import { SIZES, SizeId, footage, footagePath, previews, renderPreview, videoDir 
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { siteEnv } from '../integrations';
 import { getDraft } from '../queue';
-import { IMAGE_KINDS, IMAGE_MIME, addImage, imageDir, imageFile, listImages, removeImage } from '../social/images';
+import { IMAGE_KINDS, IMAGE_MIME, VIDEO_MIME, addImage, addVideo, imageDir, imageFile, listImages, postVideo, removeImage, removeVideo } from '../social/images';
 
 /** Routes for outreach (creators, link prospects, email) and video previews. Registered from the main route file. */
 export function registerOutreachRoutes(app: FastifyInstance): void {
@@ -146,40 +146,72 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     return d && IMAGE_KINDS.includes(d.kind) ? d : null;
   };
   const shown = (draftId: number) => listImages(draftId).map(({ name, type, bytes, at }) => ({ name, type, bytes, at }));
+  const shownVideo = (draftId: number) => {
+    const v = postVideo(draftId);
+    return v ? { name: v.name, type: v.type, bytes: v.bytes, at: v.at } : null;
+  };
+  const media = (draftId: number) => ({ images: shown(draftId), video: shownVideo(draftId) });
+  const locked = (status: string) => status !== 'draft' && status !== 'failed';
+  /** Save an upload to a side file, then let `take` check it and give it its place. */
+  const receive = async (req: any, reply: any, draftId: number, take: (part: string) => void) => {
+    if (!req.body || typeof req.body.pipe !== 'function') return reply.code(400).send({ error: 'send the file itself' });
+    fs.mkdirSync(imageDir(draftId), { recursive: true });
+    const part = path.join(imageDir(draftId), `upload-${Date.now()}.part`);
+    try {
+      await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(part));
+      take(part);
+    } catch (err) {
+      fs.rmSync(part, { force: true });
+      return bad(reply, err);
+    }
+    return media(draftId);
+  };
 
   app.get<{ Params: { id: string } }>('/api/drafts/:id/images', async (req, reply) => {
     const d = postDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
-    return { images: shown(d.id) };
+    return media(d.id);
   });
 
   app.post<{ Params: { id: string } }>('/api/drafts/:id/images', async (req, reply) => {
     const d = postDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
-    if (d.status !== 'draft' && d.status !== 'failed') return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
-    if (!req.body || typeof (req.body as any).pipe !== 'function') return reply.code(400).send({ error: 'send the photo file itself (JPG, PNG or GIF)' });
-    fs.mkdirSync(imageDir(d.id), { recursive: true });
-    const part = path.join(imageDir(d.id), `upload-${Date.now()}.part`);
-    try {
-      await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(part));
-      addImage(d.id, part);
-    } catch (err) {
-      fs.rmSync(part, { force: true });
-      return bad(reply, err);
-    }
-    return { images: shown(d.id) };
+    if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
+    return receive(req, reply, d.id, (part) => addImage(d.id, part));
+  });
+
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/video', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have a video' });
+    if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its video' });
+    return receive(req, reply, d.id, (part) => addVideo(d.id, part));
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/drafts/:id/video', async (req, reply) => {
+    const d = postDraft(req.params.id);
+    if (!d) return reply.code(404).send({ error: 'this draft cannot have a video' });
+    if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its video' });
+    removeVideo(d.id);
+    return media(d.id);
+  });
+
+  app.get<{ Params: { id: string } }>('/api/drafts/:id/video', async (req, reply) => {
+    const id = Number(req.params.id);
+    const v = Number.isInteger(id) ? postVideo(id) : null;
+    if (!v) return reply.code(404).send({ error: 'no video' });
+    return sendRanged(req, reply, v.file, VIDEO_MIME[v.type]);
   });
 
   app.delete<{ Params: { id: string; name: string } }>('/api/drafts/:id/images/:name', async (req, reply) => {
     const d = postDraft(req.params.id);
     if (!d) return reply.code(404).send({ error: 'this draft cannot have photos' });
-    if (d.status !== 'draft' && d.status !== 'failed') return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
+    if (locked(d.status)) return reply.code(409).send({ error: 'this post is already approved — reopen it to change its photos' });
     try {
       removeImage(d.id, req.params.name);
     } catch (err) {
       return bad(reply, err, 404);
     }
-    return { images: shown(d.id) };
+    return media(d.id);
   });
 
   app.get<{ Params: { id: string; name: string } }>('/api/drafts/:id/images/:name', async (req, reply) => {
@@ -195,18 +227,22 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     if (!Number.isInteger(id) || !/^(vertical|square|wide|footage)\.mp4$/.test(req.params.file)) return reply.code(404).send({ error: 'no such file' });
     const file = path.join(videoDir(id), req.params.file);
     if (!fs.existsSync(file)) return reply.code(404).send({ error: 'no such file' });
-    // Safari only plays video from a server that answers byte-range requests.
-    const size = fs.statSync(file).size;
-    reply.type('video/mp4').header('cache-control', 'no-store').header('accept-ranges', 'bytes');
-    const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
-    if (!m || (!m[1] && !m[2])) return reply.header('content-length', size).send(fs.createReadStream(file));
-    const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
-    const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
-    if (start > end || start >= size) return reply.code(416).header('content-range', `bytes */${size}`).send();
-    return reply
-      .code(206)
-      .header('content-range', `bytes ${start}-${end}/${size}`)
-      .header('content-length', end - start + 1)
-      .send(fs.createReadStream(file, { start, end }));
+    return sendRanged(req, reply, file, 'video/mp4');
   });
+}
+
+/** Send a video file, answering byte-range requests: Safari only plays video from a server that does. */
+function sendRanged(req: any, reply: any, file: string, type: string) {
+  const size = fs.statSync(file).size;
+  reply.type(type).header('cache-control', 'no-store').header('accept-ranges', 'bytes');
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
+  if (!m || (!m[1] && !m[2])) return reply.header('content-length', size).send(fs.createReadStream(file));
+  const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+  const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+  if (start > end || start >= size) return reply.code(416).header('content-range', `bytes */${size}`).send();
+  return reply
+    .code(206)
+    .header('content-range', `bytes ${start}-${end}/${size}`)
+    .header('content-length', end - start + 1)
+    .send(fs.createReadStream(file, { start, end }));
 }

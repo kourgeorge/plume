@@ -740,3 +740,9 @@ input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
 label.small-btn { display: inline-flex; align-items: center; font-size: 13px; font-weight: 500; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); box-shadow: var(--shadow); cursor: pointer; }
 label.small-btn:hover { background: var(--hover); border-color: var(--faint); }
 label.small-btn[hidden] { display: none; }
+
+.photos-buttons { display: flex; gap: 8px; }
+.photos-list .post-video { width: auto; height: auto; max-width: 100%; background: #000; }
+.photos-list .post-video video { display: block; max-height: 360px; max-width: 100%; }
+#video-progress { width: 100%; margin: 0 0 8px; }
+label.small-btn { white-space: nowrap; }

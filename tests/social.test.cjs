@@ -470,3 +470,135 @@ test('photo upload route: added, served, refused for articles and approved posts
   assert.equal(r.statusCode, 409);
   await app.close();
 });
+
+// ---- a video on a post
+
+// A tiny file that starts like a real MP4 ("ftyp" box, "isom" brand), 10 bytes of video data after it.
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(12), Buffer.from('0123456789')]);
+function videoPostDraft(kind, body, bytes = MP4) {
+  const images = require('../src/social/images');
+  const d = q.createDraft({ agent: 'social', kind, title: 'Video post', body, meta: {} });
+  fs.mkdirSync(images.imageDir(d.id), { recursive: true });
+  const part = path.join(images.imageDir(d.id), `t-${Math.random()}.part`);
+  fs.writeFileSync(part, bytes);
+  images.addVideo(d.id, part);
+  return d;
+}
+
+test('post video: checked by content, one per post, never together with photos', () => {
+  const images = require('../src/social/images');
+  assert.equal(images.sniffVideo(MP4), 'mp4');
+  assert.equal(images.sniffVideo(Buffer.concat([Buffer.from([0, 0, 0, 0x14]), Buffer.from('ftypqt  '), Buffer.alloc(8)])), 'mov');
+  assert.equal(images.sniffVideo(PNG), null);
+  const d = videoPostDraft('facebook_post', 'x');
+  assert.equal(images.postVideo(d.id).name, 'video.mp4');
+  const part = (buf) => {
+    const p = path.join(images.imageDir(d.id), `t-${Math.random()}.part`);
+    fs.writeFileSync(p, buf);
+    return p;
+  };
+  assert.throws(() => images.addImage(d.id, part(PNG)), /photos or one video, not both/);
+  assert.throws(() => images.addVideo(d.id, part(PNG)), /not an MP4 or MOV/);
+  images.addVideo(d.id, part(MP4));
+  assert.equal(fs.readdirSync(images.imageDir(d.id)).filter((f) => f.startsWith('video.')).length, 1, 'a new video replaces the old one');
+  images.removeVideo(d.id);
+  assert.equal(images.postVideo(d.id), null);
+  const withPhoto = photoDraft('facebook_post', 'x', [PNG]);
+  assert.throws(() => images.addVideo(withPhoto.id, path.join(os.tmpdir(), 'nope')), /ENOENT|no such file/);
+  const p2 = path.join(images.imageDir(withPhoto.id), 'v.part');
+  fs.writeFileSync(p2, MP4);
+  assert.throws(() => images.addVideo(withPhoto.id, p2), /Remove the photos first/);
+});
+
+test('Facebook: a video post is sent in pieces with the text as its description', async () => {
+  const d = videoPostDraft('facebook_post', 'Watch **this**');
+  const half = Math.ceil(MP4.length / 2);
+  let transfers = 0;
+  routes['POST /fb/v23.0/1234567890/videos'] = (body, req) => {
+    if (/multipart/.test(req.headers['content-type'])) {
+      transfers++;
+      return transfers === 1 ? [200, { start_offset: String(half), end_offset: String(MP4.length) }] : [200, { start_offset: String(MP4.length), end_offset: String(MP4.length) }];
+    }
+    const f = new URLSearchParams(body);
+    if (f.get('upload_phase') === 'start') return [200, { upload_session_id: 's1', video_id: 'v9', start_offset: '0', end_offset: String(half) }];
+    return [200, { success: true }];
+  };
+  const from = seen.length;
+  const r = await pub.facebookPublisher.publish(d, '', FB_ENV);
+  assert.deepEqual(r, { url: 'https://www.facebook.com/1234567890/videos/v9', externalId: 'v9', dryRun: false });
+  const calls = seen.slice(from).filter((c) => c.path.endsWith('/videos'));
+  assert.equal(new URLSearchParams(calls[0].body).get('file_size'), String(MP4.length));
+  assert.equal(transfers, 2);
+  assert.match(calls[1].body, /name="start_offset"\r\n\r\n0\r\n/);
+  assert.match(calls[2].body, new RegExp(`name="start_offset"\\r\\n\\r\\n${half}\\r\\n`));
+  const fin = new URLSearchParams(calls.at(-1).body);
+  assert.deepEqual([fin.get('upload_phase'), fin.get('upload_session_id'), fin.get('description')], ['finish', 's1', 'Watch this']);
+  assert.ok(!seen.slice(from).some((c) => c.path.endsWith('/feed')), 'a video post is not a feed post');
+});
+
+test('X: a video is sent in pieces, X is asked until it is ready, then it goes on the first post', async () => {
+  Object.assign(pub.VIDEO_WAIT, { everyMs: 5, maxMs: 2000, longestMs: 5 });
+  const d = videoPostDraft('x_post', 'Clip');
+  routes['POST /x/2/media/upload/initialize'] = () => [200, { data: { id: 'vid1' } }];
+  routes['POST /x/2/media/upload/vid1/append'] = () => [200, {}];
+  routes['POST /x/2/media/upload/vid1/finalize'] = () => [200, { data: { id: 'vid1', processing_info: { state: 'pending', check_after_secs: 1 } } }];
+  const states = ['in_progress', 'succeeded'];
+  routes['GET /x/2/media/upload'] = () => [200, { data: { id: 'vid1', processing_info: { state: states.shift() ?? 'succeeded' } } }];
+  routes['POST /x/2/tweets'] = () => [201, { data: { id: 'tv' } }];
+  const from = seen.length;
+  await pub.xPublisher.publish(d, '', X_ENV);
+  const calls = seen.slice(from);
+  const init = JSON.parse(calls.find((c) => c.path.endsWith('/initialize')).body);
+  assert.deepEqual(init, { media_type: 'video/mp4', total_bytes: MP4.length, media_category: 'tweet_video' });
+  assert.match(calls.find((c) => c.path.endsWith('/append')).body, /name="segment_index"\r\n\r\n0/);
+  assert.equal(calls.filter((c) => c.path === '/x/2/media/upload').length, 2, 'asked until it was ready');
+  assert.deepEqual(JSON.parse(calls.find((c) => c.path === '/x/2/tweets').body).media, { media_ids: ['vid1'] });
+  routes['GET /x/2/media/upload'] = () => [200, { data: { processing_info: { state: 'failed', error: { message: 'bad codec' } } } }];
+  await assert.rejects(pub.xPublisher.publish(d, '', X_ENV), /could not use this video \(bad codec\)/);
+});
+
+test('LinkedIn: a video is uploaded in the parts LinkedIn asks for, finished, and posted once ready', async () => {
+  routes['GET /li/v2/userinfo'] = () => [200, { sub: 'abc' }];
+  const d = videoPostDraft('linkedin_post', 'Our clip');
+  const cut = 9;
+  routes['POST /li/rest/videos'] = (body, req) =>
+    req.url.includes('initializeUpload')
+      ? [200, { value: { video: 'urn:li:video:V1', uploadToken: 'tok', uploadInstructions: [{ uploadUrl: `${base}/li/vup/1`, firstByte: 0, lastByte: cut - 1 }, { uploadUrl: `${base}/li/vup/2`, firstByte: cut, lastByte: MP4.length - 1 }] } }]
+      : [200, {}];
+  routes['PUT /li/vup/1'] = () => [200, {}, { etag: 'e1' }];
+  routes['PUT /li/vup/2'] = () => [200, {}, { etag: 'e2' }];
+  const states = ['PROCESSING', 'AVAILABLE'];
+  routes[`GET /li/rest/videos/${encodeURIComponent('urn:li:video:V1')}`] = () => [200, { status: states.shift() ?? 'AVAILABLE' }];
+  routes['POST /li/rest/posts'] = () => [201, {}, { 'x-restli-id': 'urn:li:share:9' }];
+  const from = seen.length;
+  const r = await pub.linkedinPublisher.publish(d, '', LI_ENV);
+  assert.equal(r.url, 'https://www.linkedin.com/feed/update/urn:li:share:9');
+  const calls = seen.slice(from);
+  assert.equal(calls.find((c) => c.path === '/li/vup/1').body, MP4.subarray(0, cut).toString());
+  assert.equal(calls.find((c) => c.path === '/li/vup/2').body, MP4.subarray(cut).toString());
+  const fin = JSON.parse(calls.find((c) => c.path === '/li/rest/videos' && c.query.includes('finalizeUpload')).body);
+  assert.deepEqual(fin, { finalizeUploadRequest: { video: 'urn:li:video:V1', uploadToken: 'tok', uploadedPartIds: ['e1', 'e2'] } });
+  assert.deepEqual(JSON.parse(calls.find((c) => c.path === '/li/rest/posts').body).content, { media: { id: 'urn:li:video:V1', title: 'Video post' } });
+});
+
+test('post video route: added, played back with byte ranges, refused next to photos, removed', async () => {
+  const { buildServer } = require('../src/server');
+  const app = buildServer(4496);
+  const H = { host: '127.0.0.1:4496', 'x-plume-site': 'test.example' };
+  const d = q.createDraft({ agent: 'social', kind: 'linkedin_post', title: 'p', body: 'x', meta: {} });
+  let r = await app.inject({ method: 'POST', url: `/api/drafts/${d.id}/video`, headers: { ...H, 'content-type': 'video/mp4' }, payload: MP4 });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(r.json().video.name, 'video.mp4');
+  r = await app.inject({ url: `/api/drafts/${d.id}/video`, headers: { ...H, range: 'bytes=0-3' } });
+  assert.equal(r.statusCode, 206);
+  assert.equal(r.headers['content-type'], 'video/mp4');
+  assert.ok(Buffer.from(r.rawPayload).equals(MP4.subarray(0, 4)));
+  r = await app.inject({ method: 'POST', url: `/api/drafts/${d.id}/images`, headers: { ...H, 'content-type': 'image/png' }, payload: PNG });
+  assert.equal(r.statusCode, 400);
+  assert.match(r.json().error, /not both/);
+  r = await app.inject({ method: 'DELETE', url: `/api/drafts/${d.id}/video`, headers: H });
+  assert.equal(r.json().video, null);
+  r = await app.inject({ url: `/api/drafts/${d.id}/images`, headers: H });
+  assert.deepEqual(r.json(), { images: [], video: null });
+  await app.close();
+});

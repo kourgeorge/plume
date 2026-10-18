@@ -3,11 +3,12 @@ import path from 'path';
 import { siteDir } from '../site';
 
 /**
- * Photos attached to a social post draft. They live next to the site's other files, one folder per draft,
- * numbered in the order they were added (that is the order they appear in the post).
+ * Photos or a video attached to a social post draft. They live next to the site's other files, one folder per
+ * draft. Photos are numbered in the order they were added (that is the order they appear in the post).
+ * A post has photos or one video, never both: X and LinkedIn refuse the mix.
  */
 
-/** Which drafts can carry photos. Reddit posts and replies stay text. */
+/** Which drafts can carry photos or a video. Reddit posts and replies stay text. */
 export const IMAGE_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'facebook_post'];
 /** X takes at most 4 photos per post; the others take more, but 4 keeps one draft fitting everywhere. */
 export const MAX_IMAGES = 4;
@@ -69,6 +70,7 @@ export function addImage(draftId: number, uploaded: string): PostImage {
     fs.closeSync(fd);
     const type = sniffImage(head);
     if (!type) throw new Error('that is not a JPG, PNG or GIF photo');
+    if (postVideo(draftId)) throw new Error('this post has a video — a post can have photos or one video, not both. Remove the video first.');
     const have = listImages(draftId);
     if (have.length >= MAX_IMAGES) throw new Error(`a post can have at most ${MAX_IMAGES} photos — remove one first`);
     const next = have.reduce((n, i) => Math.max(n, Number(NAME.exec(i.name)![1])), 0) + 1;
@@ -78,6 +80,70 @@ export function addImage(draftId: number, uploaded: string): PostImage {
   } finally {
     fs.rmSync(uploaded, { force: true });
   }
+}
+
+// ---------------------------------------------------------------- video
+
+/** X refuses videos over 512 MB, so that is the limit for all (Facebook and LinkedIn take bigger). */
+export const MAX_VIDEO_BYTES = 512 * 1024 * 1024;
+
+export type VideoType = 'mp4' | 'mov';
+export const VIDEO_MIME: Record<VideoType, string> = { mp4: 'video/mp4', mov: 'video/quicktime' };
+const VIDEO_NAME = /^video\.(mp4|mov)$/;
+
+export interface PostVideo {
+  name: string;
+  file: string;
+  type: VideoType;
+  bytes: number;
+  at: string;
+}
+
+/** MP4 and MOV files both start with a size and a box name; "ftyp" says which brand, older MOVs start straight with a box. */
+export function sniffVideo(head: Buffer): VideoType | null {
+  if (head.length < 12) return null;
+  const box = head.subarray(4, 8).toString('latin1');
+  if (box === 'ftyp') return head.subarray(8, 12).toString('latin1') === 'qt  ' ? 'mov' : 'mp4';
+  if (['moov', 'mdat', 'wide', 'free', 'skip'].includes(box)) return 'mov';
+  return null;
+}
+
+export function postVideo(draftId: number): PostVideo | null {
+  const dir = imageDir(draftId);
+  if (!fs.existsSync(dir)) return null;
+  const name = fs.readdirSync(dir).find((f) => VIDEO_NAME.test(f));
+  if (!name) return null;
+  const file = path.join(dir, name);
+  const st = fs.statSync(file);
+  return { name, file, type: VIDEO_NAME.exec(name)![1] as VideoType, bytes: st.size, at: st.mtime.toISOString() };
+}
+
+/** Check a just-uploaded video and make it the post's video, replacing any earlier one. */
+export function addVideo(draftId: number, uploaded: string): PostVideo {
+  try {
+    const size = fs.statSync(uploaded).size;
+    if (!size) throw new Error('the file was empty');
+    if (size > MAX_VIDEO_BYTES) throw new Error(`the video is ${Math.round(size / 1048576)} MB; posts take videos up to 512 MB`);
+    const head = Buffer.alloc(12);
+    const fd = fs.openSync(uploaded, 'r');
+    fs.readSync(fd, head, 0, 12, 0);
+    fs.closeSync(fd);
+    const type = sniffVideo(head);
+    if (!type) throw new Error('that is not an MP4 or MOV video');
+    if (listImages(draftId).length) throw new Error('this post has photos — a post can have photos or one video, not both. Remove the photos first.');
+    removeVideo(draftId);
+    const name = `video.${type}`;
+    fs.renameSync(uploaded, path.join(imageDir(draftId), name));
+    return postVideo(draftId)!;
+  } finally {
+    fs.rmSync(uploaded, { force: true });
+  }
+}
+
+export function removeVideo(draftId: number): void {
+  const dir = imageDir(draftId);
+  if (!fs.existsSync(dir)) return;
+  for (const f of fs.readdirSync(dir)) if (VIDEO_NAME.test(f)) fs.rmSync(path.join(dir, f), { force: true });
 }
 
 export function removeImage(draftId: number, name: string): void {
