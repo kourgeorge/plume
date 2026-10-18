@@ -138,3 +138,22 @@ test('connection test and plain errors work for OpenAI-style providers', async (
   assert.match(down.checks[0].message, /nothing is answering/);
   settings.clearLlmConfig();
 });
+
+test('broken JSON: raw line breaks are mended locally; otherwise the model is asked once to resend it', async () => {
+  const schema = { type: 'object', properties: { body: { type: 'string' } } };
+  assert.deepEqual(client.extractJson('{"body": "## Heading\nline two\twith a \\"quote\\""}'), { body: '## Heading\nline two\twith a "quote"' });
+  assert.deepEqual(client.extractJson('Sure!\n```json\n{"body": "has ``` inside\nit"}\n```'), { body: 'has ``` inside\nit' });
+
+  settings.saveLlmConfig({ provider: 'custom', baseUrl: base, apiKey: 'sk-custom-9', models: { draft: 'my-model' } });
+  requests.length = 0;
+  let round = 0;
+  reply = () => (round++ === 0 ? { text: '{"body": "an "unescaped" quote"}' } : { text: '{"body": "an \\"unescaped\\" quote"}' });
+  const r = await client.askJson({ purpose: 'test', model: 'my-model', system: 's', prompt: 'p', schema });
+  assert.equal(r.body, 'an "unescaped" quote');
+  assert.equal(requests.length, 2, 'one extra call to resend');
+  assert.match(JSON.stringify(requests[1].body.messages), /isn't valid JSON/);
+
+  reply = () => ({ text: 'just prose' });
+  await assert.rejects(client.askJson({ purpose: 'test', model: 'my-model', system: 's', prompt: 'p', schema }), /even when asked again/);
+  settings.clearLlmConfig();
+});

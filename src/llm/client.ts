@@ -277,28 +277,83 @@ async function callOpenAiStream(opts: AskOptions, messages: Anthropic.Beta.BetaM
   }
 }
 
-/** The JSON in an answer. Some models wrap it in a ``` block or add a sentence around it. */
-export function extractJson(text: string): unknown {
+/**
+ * Raw line breaks and tabs inside JSON strings, escaped. Models writing JSON by hand (when a gateway
+ * doesn't enforce the schema) often put real line breaks in a long markdown body, which JSON forbids.
+ */
+export function escapeBreaksInStrings(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString && c === '\\') {
+      out += c + (text[++i] ?? '');
+      continue;
+    }
+    if (c === '"') inString = !inString;
+    out += inString && c === '\n' ? '\\n' : inString && c === '\r' ? '\\r' : inString && c === '\t' ? '\\t' : c;
+  }
+  return out;
+}
+
+function parseLoose(text: string): unknown {
   try {
     return JSON.parse(text);
+  } catch (err) {
+    const fixed = escapeBreaksInStrings(text);
+    if (fixed === text) throw err;
+    return JSON.parse(fixed);
+  }
+}
+
+/** The JSON in an answer. Some models wrap it in a ``` block, add a sentence around it, or leave raw line breaks in strings. */
+export function extractJson(text: string): unknown {
+  try {
+    return parseLoose(text.trim());
   } catch {
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)?.[1];
-    if (fenced) return JSON.parse(fenced);
+    const fenced = /```(?:json)?\s*([\s\S]*)```/.exec(text)?.[1];
+    if (fenced) {
+      try {
+        return parseLoose(fenced.trim());
+      } catch {
+        /* try the outer braces below */
+      }
+    }
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+    if (start >= 0 && end > start) return parseLoose(text.slice(start, end + 1));
     throw new Error('no JSON in the answer');
   }
 }
 
-/** Like `ask`, but the answer is JSON matching `schema`, parsed. */
+/**
+ * Like `ask`, but the answer is JSON matching `schema`, parsed. Gateways don't always enforce the schema,
+ * so a model may hand-write broken JSON (most often on long articles). Then the model is asked once more,
+ * without web search, to resend its own answer as valid JSON — cheaper than redoing the work.
+ */
 export async function askJson<T>(opts: AskOptions & { schema: Record<string, unknown> }): Promise<T & { _sources: string[] }> {
   const res = await ask(opts);
   if (res.stopReason === 'max_tokens') throw new Error(`answer was cut off for ${opts.purpose}; raise maxTokens`);
   try {
     return { ...(extractJson(res.text) as T), _sources: res.sources };
   } catch {
-    throw new Error(`${opts.model} answered in prose instead of JSON for ${opts.purpose} — it (or the provider) ignores structured output; pick another model under "AI connection"`);
+    log('warn', 'llm', `${opts.purpose}: answer was not valid JSON; asking the model to resend it. It began: ${res.text.slice(0, 300)}`);
+  }
+  const again = await ask({
+    ...opts,
+    purpose: `${opts.purpose}:fix-json`,
+    webSearches: 0,
+    effort: 'low',
+    prompt:
+      `Your answer below was meant to be one JSON object matching the schema, but it isn't valid JSON. ` +
+      `Resend the same content as valid JSON only — no text before or after it, line breaks inside strings written as \\n, ` +
+      `quotes inside strings escaped as \\". Don't shorten or rewrite anything.\n\n--- your answer ---\n${res.text}`,
+  });
+  try {
+    return { ...(extractJson(again.text) as T), _sources: res.sources };
+  } catch {
+    log('error', 'llm', `${opts.purpose}: still not valid JSON after asking again. It began: ${again.text.slice(0, 300)}`);
+    throw new Error(`${opts.model} didn't send valid JSON for ${opts.purpose}, even when asked again — try again, or pick another model under "AI connection"`);
   }
 }
 

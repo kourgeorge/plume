@@ -6,6 +6,7 @@ import { redditAgent, socialAgent } from '../social/agents';
 import { influencerAgent } from '../outreach/creators';
 import { linksAgent } from '../outreach/links';
 import { videoAgent } from '../video/agent';
+import { log } from '../log';
 import type { Agent } from './types';
 
 export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent, influencerAgent, linksAgent, videoAgent];
@@ -20,11 +21,19 @@ export async function runAgent(id: string, limit?: number, onProgress: (m: strin
   if (!agent) throw new Error(`no agent ${id}`);
   if (!profileComplete()) throw new Error('finish the business profile first — every agent works from it');
   const opps = await agent.findOpportunities({ limit, onProgress: (m) => onProgress(`${agent.label}: ${m}`) });
+  // One draft going wrong shouldn't throw away the others; the run fails only if none were written.
   let written = 0;
+  let lastError: unknown = null;
   for (const [i, opp] of opps.entries()) {
     onProgress(`${agent.label}: writing ${i + 1} of ${opps.length} — ${opp.title}`);
-    if (await agent.draft(opp)) written++;
+    try {
+      if (await agent.draft(opp)) written++;
+    } catch (err: any) {
+      lastError = err;
+      log('error', id, `couldn't write "${opp.title}": ${String(err?.message ?? err)}`);
+    }
   }
+  if (!written && lastError) throw lastError;
   return written;
 }
 
