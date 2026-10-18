@@ -346,18 +346,45 @@ async function loadToday() {
   const [t, folders] = await Promise.all([api('/api/today'), api('/api/agents')]);
   const total = t.left + t.doneToday;
   $('today-progress').textContent = total ? `${t.doneToday} of ${total} done` : '';
-  renderTodayCard(t.items[0], t.items.length);
+  // Stay on the same card after a reload; if it's gone (approved, skipped), show the one that took its place.
+  const keep = todayItems[todayPos]?.key;
+  todayItems = t.items;
+  const same = todayItems.findIndex((x) => x.key === keep);
+  todayPos = same >= 0 ? same : Math.min(todayPos, Math.max(todayItems.length - 1, 0));
+  showTodayCard();
   renderFolders(folders);
   publishers = await api('/api/publishers');
 }
 
-function renderTodayCard(item, left) {
+let todayItems = [];
+let todayPos = 0;
+
+/** Show the card at todayPos, with back / next arrows to move through every waiting card. */
+function showTodayCard() {
+  const n = todayItems.length;
+  const nav = $('today-nav');
+  nav.hidden = n < 2;
+  if (n > 1) {
+    nav.innerHTML = `<button class="secondary small-btn" id="t-prev" title="Previous (←)" ${todayPos === 0 ? 'disabled' : ''}>‹</button><span class="muted small">${todayPos + 1} of ${n}</span><button class="secondary small-btn" id="t-next" title="Next (→)" ${todayPos === n - 1 ? 'disabled' : ''}>›</button>`;
+    $('t-prev').onclick = () => moveToday(-1);
+    $('t-next').onclick = () => moveToday(1);
+  }
+  renderTodayCard(todayItems[todayPos]);
+}
+
+function moveToday(step) {
+  const to = todayPos + step;
+  if (to < 0 || to >= todayItems.length) return;
+  todayPos = to;
+  showTodayCard();
+}
+
+function renderTodayCard(item) {
   const box = $('today-card');
   if (!item) {
     box.innerHTML = `<div class="today empty">Nothing waiting. Agents put new drafts and fixes here as they finish.<br><small>Switch agents on under <a href="#logs">Timetable</a>, or use Quick actions.</small></div>`;
     return;
   }
-  const more = left > 1 ? `<span class="muted small">${left - 1} more after this</span>` : '';
   if (item.kind === 'draft') {
     const d = item.draft;
     box.innerHTML = `<div class="today">
@@ -371,7 +398,7 @@ function renderTodayCard(item, left) {
         <button id="t-approve">Approve</button>
         <a href="#draft/${d.id}"><button class="secondary">Read and edit</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button><button class="secondary" id="t-no">Not useful</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     const firstLive = fitting(d).find((p) => p.configured && p.id !== 'export');
     if (firstLive) $('t-target').value = firstLive.id;
     $('t-approve').onclick = act(async () => post(`/api/drafts/${d.id}/approve`, { target: $('t-target').value }));
@@ -394,7 +421,7 @@ function renderTodayCard(item, left) {
         ${f.snippet ? '<button class="secondary" id="t-copy">Copy code</button>' : ''}
         <span data-pr-issue="${esc(f.id)}"></span>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     if (window.plumeGeo) window.plumeGeo.wirePr(box);
     $('t-done').onclick = act(async () => post('/api/audit/done', { id: f.id }));
     if (f.snippet) $('t-copy').onclick = () => navigator.clipboard.writeText(f.snippet).then(() => ($('t-copy').textContent = 'Copied'));
@@ -407,7 +434,7 @@ function renderTodayCard(item, left) {
         <button id="t-send">Send to SEO agent</button>
         <a href="#speed"><button class="secondary">See details</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     $('t-send').onclick = act(async () => post('/api/speed/send', { strategy: item.strategy }));
   }
   else if (item.kind === 'watch') {
@@ -421,7 +448,7 @@ function renderTodayCard(item, left) {
         ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><button class="secondary">Open their site</button></a>` : ''}
         <a href="#competitor/${c.competitorId}"><button class="secondary">Notes on ${esc(c.name)}</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/changes/${c.id}/seen`));
   }
   else if (item.kind === 'rank') {
@@ -437,7 +464,7 @@ function renderTodayCard(item, left) {
         <button id="t-seen">Got it</button>
         <a href="#rankings"><button class="secondary">See rankings</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/rank-alerts/${a.id}/seen`));
   }
   else if (item.kind === 'ai-gap') {
@@ -450,7 +477,7 @@ function renderTodayCard(item, left) {
         <button id="t-seen">Got it</button>
         <a href="#ai"><button class="secondary">See all answers</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
-      </div>${more}</div>`;
+      </div></div>`;
     $('t-seen').onclick = act(async () => post('/api/ai-visibility/gaps/done', { runId: g.runId, questionId: g.questionId }));
   }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
@@ -1759,6 +1786,12 @@ $('activity').onclick = () => {
 };
 document.addEventListener('click', (e) => !e.target.closest('.activity-wrap') && closeActivity());
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeActivity());
+// Left / right arrows move between Today cards, unless you're typing somewhere.
+document.addEventListener('keydown', (e) => {
+  if ($('view-today').hidden || e.altKey || e.ctrlKey || e.metaKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') moveToday(-1);
+  else if (e.key === 'ArrowRight') moveToday(1);
+});
 $('tour-next').onclick = () => (tourStep + 1 < TOUR.length ? showTour(tourStep + 1) : endTour());
 $('tour-back').onclick = () => showTour(Math.max(0, tourStep - 1));
 $('tour-close').onclick = endTour;

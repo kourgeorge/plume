@@ -134,6 +134,9 @@ details > summary { cursor: pointer; }
 /* ---- today ---- */
 .today-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 14px; }
 .today-head h1 { font-size: 24px; }
+.today-right { display: flex; align-items: center; gap: 14px; }
+.today-nav { display: flex; align-items: center; gap: 6px; }
+.today-nav button { min-width: 30px; font-size: 16px; line-height: 1; }
 .today { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; box-shadow: var(--shadow); transition: box-shadow .2s; }
 .today:hover { box-shadow: var(--shadow-hover); }
 .today .kicker { font-size: 12px; font-weight: 500; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
