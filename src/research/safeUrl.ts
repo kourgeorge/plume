@@ -12,8 +12,14 @@ export function isPrivateAddress(ip: string): boolean {
   return v6 === '::' || v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
 }
 
+/** DNS used by the checks below. Tests swap it so fake public sites can run on a local test server. */
+let defaultLookup: typeof lookup = lookup;
+export function setLookupForTests(fn: typeof lookup | null): void {
+  defaultLookup = fn ?? lookup;
+}
+
 /** Refuse a URL that isn't plain http(s) or that points (by name or by DNS) at this machine or the local network. */
-export async function assertPublicUrl(url: string | URL, lookupFn = lookup): Promise<URL> {
+export async function assertPublicUrl(url: string | URL, lookupFn: typeof lookup = defaultLookup): Promise<URL> {
   const u = new URL(url);
   if (!/^https?:$/.test(u.protocol)) throw new Error('only http(s) pages can be read');
   const host = u.hostname.replace(/^\[|\]$/g, '');
@@ -27,13 +33,26 @@ export async function assertPublicUrl(url: string | URL, lookupFn = lookup): Pro
  * fetch() that re-checks every redirect hop, so a public page can't bounce us to localhost or the local network.
  * (A check made only on the first address is not enough: redirects are followed silently.)
  */
-export async function fetchPublic(url: string | URL, init: RequestInit = {}, maxHops = 5): Promise<Response> {
-  let current = await assertPublicUrl(url);
+export async function fetchPublic(
+  url: string | URL,
+  init: RequestInit = {},
+  { maxHops = 5, fetchFn = fetch, lookupFn = defaultLookup }: { maxHops?: number; fetchFn?: typeof fetch; lookupFn?: typeof lookup } = {},
+): Promise<Response> {
+  let current = await assertPublicUrl(url, lookupFn);
   for (let hop = 0; ; hop++) {
-    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const res = await fetchFn(current, { ...init, redirect: 'manual' });
     const loc = res.headers.get('location');
-    if (res.status < 300 || res.status >= 400 || !loc) return res;
+    if (res.status < 300 || res.status >= 400 || !loc) {
+      // Callers read res.url to know where they ended up; a manual redirect doesn't set it.
+      if (!res.url || hop > 0) Object.defineProperty(res, 'url', { value: current.toString() });
+      return res;
+    }
     if (hop >= maxHops) throw new Error('too many redirects');
-    current = await assertPublicUrl(new URL(loc, current));
+    current = await assertPublicUrl(new URL(loc, current), lookupFn);
   }
+}
+
+/** Wrap a fetch so every request and redirect hop it makes is checked as above. For pages that aren't the owner's own site. */
+export function publicOnly(fetchFn: typeof fetch = fetch): typeof fetch {
+  return ((url: any, init?: RequestInit) => fetchPublic(typeof url === 'string' || url instanceof URL ? url : url.url, init, { fetchFn })) as typeof fetch;
 }

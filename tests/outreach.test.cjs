@@ -39,6 +39,14 @@ test('emails on a page: mailto and written addresses, junk skipped, "[at]" under
   assert.deepEqual(creators.emailsOnPage(html), ['collab@creator.example', 'hello@creator.example']);
 });
 
+test('link pages: only the page owner\'s own address is used, never another business listed on it', async () => {
+  const page = '<html><body><h1>Top 10 bakeries</h1><a href="mailto:hello@rival-bakery.example">Rival</a><p>Write to us: editor@bestof.example</p></body></html>';
+  const fetchFn = async () => new Response(page, { status: 200, headers: { 'content-type': 'text/html' } });
+  assert.deepEqual(await creators.findEmail(['https://www.bestof.example/bakeries'], fetchFn, { ownDomainOnly: true }), { email: 'editor@bestof.example', source: 'https://www.bestof.example/bakeries' });
+  const onlyOthers = async () => new Response('<html><body><a href="mailto:hello@rival-bakery.example">Rival</a></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  assert.equal(await creators.findEmail(['https://bestof.example/bakeries'], onlyOthers, { ownDomainOnly: true }), null);
+});
+
 test('pages are read from the address as found, not the cleaned one used to spot duplicates', async () => {
   // This site only answers on http://www. — the cleaned https address would not load.
   const fetchFn = async (u) =>

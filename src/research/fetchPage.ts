@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { publicOnly } from './safeUrl';
 
 export const USER_AGENT = 'PlumeBot/0.1 (+local marketing assistant)';
 /** Real-browser identity for the fallback: some firewalls only let browsers through. */
@@ -185,10 +186,13 @@ export async function fetchBrowser(url: string, browserFn: BrowserFetch): Promis
  * Plain read first; a real browser only when that fails in a way a browser can fix
  * (bot blocks, JavaScript-built pages). Not for missing pages or dead addresses.
  */
-export async function fetchPage(url: string, opts: { fetchFn?: typeof fetch; browserFn?: BrowserFetch | null; preferBrowser?: boolean } = {}): Promise<FetchResult> {
+export async function fetchPage(
+  url: string,
+  opts: { fetchFn?: typeof fetch; browserFn?: BrowserFetch | null; preferBrowser?: boolean; /** Someone else's page found by the AI or search: never let it reach this machine or the local network. */ external?: boolean } = {},
+): Promise<FetchResult> {
   const browserFn = opts.browserFn === undefined ? chromeFetch : opts.browserFn;
   if (opts.preferBrowser && browserFn) return fetchBrowser(url, browserFn);
-  const first = await fetchHttp(url, opts.fetchFn);
+  const first = await fetchHttp(url, opts.external ? publicOnly(opts.fetchFn) : opts.fetchFn);
   const thin = (f: Failed): FetchResult | null =>
     f.kind === 'needs-js' && f.html && visibleWords(f.html) > 0 ? { ok: true, url: f.url, status: f.status ?? 200, html: f.html, via: 'http' } : null;
   if (first.ok) return first;

@@ -123,3 +123,20 @@ test('read_page refuses local and non-web addresses chosen by the model', async 
     await assert.rejects(readPage(u), /not allowed|only http/, u);
   }
 });
+
+test('read_page re-checks redirects, so a public page cannot bounce it to this machine', async () => {
+  const { fetchPublic, isPrivateAddress, assertPublicUrl } = require('../src/research/safeUrl');
+  for (const ip of ['127.0.0.1', '10.0.0.5', '192.168.1.1', '172.20.0.1', '169.254.169.254', '::1', '::ffff:127.0.0.1', 'fd00::1']) assert.ok(isPrivateAddress(ip), ip);
+  for (const ip of ['8.8.8.8', '1.1.1.1', '2606:4700::1111']) assert.ok(!isPrivateAddress(ip), ip);
+  const publicDns = async () => [{ address: '93.184.216.34', family: 4 }];
+  // A name that resolves to a local address is refused.
+  await assert.rejects(assertPublicUrl('http://evil.example/', async () => [{ address: '127.0.0.1', family: 4 }]), /not allowed/);
+  // A public page that redirects to localhost: the hop is refused before it is fetched.
+  const asked = [];
+  const fetchFn = async (u) => (asked.push(String(u)), String(u).includes('public.example') ? new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:4410/api/telegram' } }) : new Response('secret'));
+  await assert.rejects(fetchPublic('https://public.example/a', {}, { fetchFn, lookupFn: publicDns }), /not allowed/);
+  assert.deepEqual(asked, ['https://public.example/a']);
+  // Normal redirects between public pages still work.
+  const ok = async (u) => (String(u).endsWith('/a') ? new Response(null, { status: 301, headers: { location: '/b' } }) : new Response('fine'));
+  assert.equal(await (await fetchPublic('https://public.example/a', {}, { fetchFn: ok, lookupFn: publicDns })).text(), 'fine');
+});

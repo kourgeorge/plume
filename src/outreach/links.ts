@@ -136,7 +136,7 @@ async function discoverLinkPagesInner(onProgress: (m: string) => void = () => {}
     }
     if (known.has(url)) continue;
     onProgress(`Reading ${new URL(url).hostname} (${i + 1} of ${where.pages.length})`);
-    const r = await fetchPage(read, { fetchFn, browserFn: null });
+    const r = await fetchPage(read, { fetchFn, browserFn: null, external: true });
     checked++;
     if (!r.ok) {
       rejected.push({ url, reason: r.reason });
@@ -147,7 +147,8 @@ async function discoverLinkPagesInner(onProgress: (m: string) => void = () => {}
       rejected.push({ url, reason: c.reason });
       continue;
     }
-    const email = await findEmail([read], fetchFn).catch(() => null);
+    // Only the page owner's own address: a list page also shows other businesses' addresses.
+    const email = await findEmail([read], fetchFn, { ownDomainOnly: true }).catch(() => null);
     const why =
       c.opportunity === 'unlinked-mention'
         ? 'Mentions you but does not link to you.'
@@ -233,7 +234,7 @@ export async function verifyLink(contact: Contact, fetchFn: typeof fetch = fetch
   const site = siteUrl();
   if (!site) throw new Error('this website has no address yet');
   const url = absUrl(contact.deliverableUrl || contact.url);
-  const r = await fetchPage(url, { fetchFn, browserFn: null });
+  const r = await fetchPage(url, { fetchFn, browserFn: null, external: true });
   if (!r.ok) { saveVerification(contact.id, 'error', '', r.reason); return; }
   const $ = cheerio.load(r.html);
   let target = '';

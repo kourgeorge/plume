@@ -7,6 +7,7 @@ import { extractPage } from '../research/crawl';
 import { fetchHttp } from '../research/fetchPage';
 import { siteUrl } from '../sites';
 import { SerpResult, checkSerp, latestSerp, serpCreds } from './serp';
+import { publicOnly } from '../research/safeUrl';
 
 /**
  * A short plan written before an article: what kind of page Google shows for the search, what the pages already
@@ -126,7 +127,7 @@ export async function readCompetitors(results: SerpResult[], max = 4, fetchFn: t
   const picks = results.filter((r) => isCompetitor(r, siteUrl())).slice(0, max);
   const read = await Promise.all(
     picks.map(async (r) => {
-      const f = await fetchHttp(r.url, fetchFn);
+      const f = await fetchHttp(r.url, publicOnly(fetchFn));
       if (!f.ok) return null;
       const { page } = extractPage(f.url, f.status, f.html);
       return { url: r.url, position: r.position, title: page.title || r.title, words: page.wordCount, headings: page.headings.filter((h) => h.level <= 3).map((h) => `${'  '.repeat(h.level - 1)}${h.text}`).slice(0, 30) };

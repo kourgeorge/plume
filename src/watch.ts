@@ -5,6 +5,7 @@ import { askJson } from './llm/client';
 import { BudgetExceeded } from './llm/budget';
 import { Competitor, getCompetitor, listCompetitors, siteOrigin } from './context/extra';
 import { USER_AGENT, fetchPage } from './research/fetchPage';
+import { publicOnly } from './research/safeUrl';
 
 /**
  * Competitor watch. Two kinds of scan:
@@ -105,7 +106,8 @@ async function sitemapPaths(origin: string, fetchFn: typeof fetch): Promise<stri
 
 /** Read a competitor's site now. Uses the same reader as research, so blocked or JavaScript sites work too. */
 export async function takeSnapshot(origin: string, opts: { fetchFn?: typeof fetch; browserFn?: any } = {}): Promise<Snapshot> {
-  const fetchFn = opts.fetchFn ?? fetch;
+  // A competitor's site (possibly added by the AI): no request or redirect may reach this machine.
+  const fetchFn = publicOnly(opts.fetchFn ?? fetch);
   const home = await fetchPage(`${origin}/`, { fetchFn, browserFn: opts.browserFn });
   if (!home.ok) throw new Error(home.reason);
   const $ = cheerio.load(home.html);

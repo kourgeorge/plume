@@ -45,8 +45,19 @@ export function emailsOnPage(html: string): string[] {
   return [...new Set(found)].filter((e) => isEmail(e) && !JUNK_EMAIL.test(e)).slice(0, 5);
 }
 
-/** Look for a contact address on the creator's page and, if they have a website, its contact page. */
-export async function findEmail(urls: string[], fetchFn: typeof fetch = fetch): Promise<{ email: string; source: string } | null> {
+/** The site's own name without www or a common sub-address: blog.acme.co.uk and acme.co.uk both give "acme.co.uk". */
+function baseDomain(host: string): string {
+  const parts = host.toLowerCase().replace(/^www\./, '').split('.');
+  const twoPart = parts.length > 2 && /^(co|com|org|net|ac|gov|edu)$/.test(parts[parts.length - 2]);
+  return parts.slice(twoPart ? -3 : -2).join('.');
+}
+
+/**
+ * Look for a contact address on the creator's page and, if they have a website, its contact page.
+ * `ownDomainOnly`: only accept an address on the page's own domain. Used for link pages, which often list
+ * other businesses (directories, "best of" lists) — the first address there may be a competitor's.
+ */
+export async function findEmail(urls: string[], fetchFn: typeof fetch = fetch, opts: { ownDomainOnly?: boolean } = {}): Promise<{ email: string; source: string } | null> {
   const tries: string[] = [];
   for (const u of urls) {
     try {
@@ -60,9 +71,10 @@ export async function findEmail(urls: string[], fetchFn: typeof fetch = fetch): 
     }
   }
   for (const u of [...new Set(tries)].slice(0, 5)) {
-    const r = await fetchPage(u, { fetchFn, browserFn: null });
+    const r = await fetchPage(u, { fetchFn, browserFn: null, external: true });
     if (!r.ok) continue;
-    const e = emailsOnPage(r.html)[0];
+    const site = baseDomain(new URL(u).hostname);
+    const e = emailsOnPage(r.html).find((a) => !opts.ownDomainOnly || baseDomain(a.split('@')[1]) === site);
     if (e) return { email: e, source: u };
   }
   return null;
