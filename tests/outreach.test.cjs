@@ -225,3 +225,18 @@ test('manual send retires drafts and cannot race an already approved email', asy
   assert.equal(q.getDraft(queued.id).status, 'approved');
   await app.close();
 });
+
+test('email: Approve & send also respects the daily limit, and a draft is never sent twice at once', async () => {
+  const env = { ...SMTP, SMTP_DAILY_LIMIT: String(email.emailsSentToday()) };
+  const held = await approveSend(emailDraft('held@c.example'), env);
+  assert.equal(held.status, 'approved', 'over the limit: stays approved for a later day');
+  const d = emailDraft('once@d.example');
+  q.moveDraft(d.id, 'approved', { target: 'email' });
+  const before = sent.length;
+  const free = { ...SMTP, SMTP_DAILY_LIMIT: '100' };
+  const [first, second] = await Promise.allSettled([runner.publishOne(d.id, free), runner.publishDue(free)]);
+  assert.equal(first.status, 'fulfilled');
+  assert.equal(q.getDraft(d.id).status, 'published');
+  assert.equal(sent.filter((m, i) => i >= before && m.to === 'once@d.example').length, 1, 'sent exactly once');
+  assert.equal(second.status, 'fulfilled', 'the timer skips a draft that is already being sent');
+});

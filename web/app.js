@@ -884,7 +884,10 @@ function statusLine(d) {
     return `<p>${head}</p>${SHORT_KINDS.includes(d.kind) ? '' : downloadLinks(d)}`;
   }
   if (d.status === 'failed') return `<p><strong>Publishing failed.</strong> ${esc(d.error)}</p>`;
-  if (d.status === 'approved') return `<p>Scheduled for ${esc(when(d.scheduledFor))} on ${esc(targetName(d.target))}.</p>`;
+  if (d.status === 'approved')
+    return d.scheduledFor && new Date(d.scheduledFor) > new Date()
+      ? `<p>Scheduled for ${esc(when(d.scheduledFor))} on ${esc(targetName(d.target))}.</p>`
+      : `<p>Approved. It goes out on ${esc(targetName(d.target))} as soon as today's limit allows.</p>`;
   if (d.status === 'rejected') return '<p>Turned down.</p>';
   return '';
 }

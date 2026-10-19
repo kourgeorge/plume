@@ -68,7 +68,8 @@ export async function publishDue(env: NodeJS.ProcessEnv = siteEnv(), now = new D
   try {
     let sent = 0;
     for (const d of dueDrafts(now)) {
-      if (inFlight.has(`${currentSite()}:${d.id}`)) continue;
+      // The list goes stale while we wait on each send: skip anything published, moved or started elsewhere since.
+      if (inFlight.has(`${currentSite()}:${d.id}`) || getDraft(d.id)?.status !== 'approved') continue;
       const after = await publishOne(d.id, env, now);
       if (after.status !== 'approved') sent++;
     }
