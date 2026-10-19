@@ -7,7 +7,7 @@
   section.hidden = true;
   section.innerHTML = `
     <div class="view-head">
-      <a href="#today" class="back">← Today</a>
+      <a href="#dashboard" class="back">← Dashboard</a>
       <h1>AI visibility</h1>
       <span class="actions"><button id="ai-run">Check now</button></span>
     </div>
@@ -176,12 +176,12 @@
     }
   };
   $('ai-run').onclick = async () => {
-    if (!confirm(`Ask ${data.estimate.checks} question-and-assistant pairs now? It costs roughly $${data.estimate.usd.toFixed(2)} and takes a few minutes.`)) return;
+    if (!(await confirmBox(`Ask ${data.estimate.checks} question-and-assistant pairs now? It costs roughly $${data.estimate.usd.toFixed(2)} and takes a few minutes.`, { title: 'Check AI answers?', ok: 'Start' }))) return;
     try {
       await post('/api/ai-visibility/run');
       load();
     } catch (err) {
-      alert(err.message);
+      alertBox(err.message);
     }
   };
   $('ai-detect').onclick = async () => {
@@ -207,7 +207,7 @@
     $('ai-names-msg').textContent = 'Saved. They count from the next check.';
   };
 
-  // ---- "Fix with a pull request" on site fixes (Today card and the Site fixes view) ----
+  // ---- "Fix with a pull request" on site fixes (Dashboard card and the Site fixes view) ----
   let ghState = null;
   async function github() {
     ghState = ghState ?? (await api('/api/code-fixes').catch(() => ({ connected: false, fixes: {} })));
@@ -295,7 +295,7 @@
         } catch (err) {
           b.disabled = false;
           b.textContent = 'Fix with a pull request';
-          alert(err.message);
+          alertBox(err.message);
         }
       };
     }

@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { buildRobots, buildSchema, buildSitemap, buildUtm, checkMetaUrl, sitemapPages, toolDefaults } from '../tools';
+import {
+  analyzeAiMarkers, buildRobots, buildSchema, buildSitemap, buildUtm, checkMetaUrl,
+  humanizeText, sitemapPages, toolDefaults,
+} from '../tools';
 
-/** Free tools (no AI). Each returns text for the owner to copy. Registered from the main route file. */
+/** Tools & growth utilities. Registered from the main route file. */
 export function registerToolsRoutes(app: FastifyInstance): void {
   const tool = (fn: (b: any) => unknown) => async (req: any, reply: any) => {
     try {
@@ -20,4 +23,6 @@ export function registerToolsRoutes(app: FastifyInstance): void {
   }));
   app.post('/api/tools/utm', tool((b) => ({ text: buildUtm(b) })));
   app.post('/api/tools/schema', tool((b) => ({ text: buildSchema(b) })));
+  app.post('/api/tools/humanize-check', tool((b) => analyzeAiMarkers(String(b.text ?? ''))));
+  app.post('/api/tools/humanize', tool((b) => humanizeText({ text: String(b.text ?? ''), tone: b.tone, level: b.level })));
 }

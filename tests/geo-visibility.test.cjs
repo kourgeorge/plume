@@ -133,7 +133,7 @@ test('a check asks each assistant the bare question and records who it names', a
   assert.match(v.getAnswer(q1.cells.claude.answerId).answer, /Test4U has good videos/);
 });
 
-test('a question where nobody names us but they name others becomes a Today card', () => {
+test('a question where nobody names us but they name others becomes a Dashboard card', () => {
   const gaps = v.openGaps();
   assert.equal(gaps.length, 1);
   assert.equal(gaps[0].question, Q2);

@@ -6,11 +6,44 @@
   section.className = 'view';
   section.hidden = true;
   section.innerHTML = `
-    <div class="view-head"><a href="#today" class="back">← Today</a><h1>Tools</h1></div>
+    <div class="view-head"><a href="#dashboard" class="back">← Dashboard</a><h1>Tools</h1></div>
     <p class="muted">Free helpers — no AI, nothing is changed on your site. Each one gives you text to copy into your site or share. Your <a href="#llms">llms.txt</a> has its own page.</p>
     <div class="tabs" id="tl-tabs">
+      <button data-tool="humanizer">AI Humanizer</button>
       <button data-tool="meta">Meta tag checker</button><button data-tool="robots">robots.txt</button><button data-tool="sitemap">Sitemap</button>
       <button data-tool="utm">Campaign links (UTM)</button><button data-tool="schema">Structured data</button>
+    </div>
+
+    <div class="tool" data-tool="humanizer" hidden>
+      <p class="muted small">Rewrite AI-generated text to sound authentically human, dynamic, and engaging. Removes synthetic clichés, varies sentence burstiness, and bypasses AI detection patterns.</p>
+      <div class="form">
+        <label class="wide">Text to humanize
+          <textarea id="tl-h-input" rows="6" placeholder="Paste your AI-generated text or article draft here…" spellcheck="true"></textarea>
+        </label>
+        <div class="row-flex" style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label style="flex:1;min-width:180px;">Tone
+            <select id="tl-h-tone">
+              <option value="natural" selected>Natural (balanced & clear)</option>
+              <option value="conversational">Conversational (friendly & warm)</option>
+              <option value="professional">Professional (sharp & executive)</option>
+              <option value="casual">Casual (relaxed & idiomatic)</option>
+            </select>
+          </label>
+          <label style="flex:1;min-width:180px;">Intensity
+            <select id="tl-h-level">
+              <option value="mild">Mild (polish & remove clichés)</option>
+              <option value="moderate" selected>Moderate (balanced rewrite & varied rhythm)</option>
+              <option value="aggressive">Aggressive (deep restructure & fresh cadence)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <p class="actions-row">
+        <button id="tl-h-run">Humanize text</button>
+        <button id="tl-h-check" class="secondary">Check AI score</button>
+        <span id="tl-h-msg" class="small"></span>
+      </p>
+      <div id="tl-h-out"></div>
     </div>
 
     <div class="tool" data-tool="meta">
@@ -94,10 +127,85 @@
     $('tl-s-msg').textContent = defaults.sitemapPages ? `${defaults.sitemapPages} page(s) to list.` : 'Run the site check first, so Plume has read your pages.';
     $('tl-s-make').disabled = !defaults.sitemapPages;
     if (!$('tl-sc-form').innerHTML) schemaForm();
-    showTool(['meta', 'robots', 'sitemap', 'utm', 'schema'].includes(t) ? t : tool);
+    showTool(['humanizer', 'meta', 'robots', 'sitemap', 'utm', 'schema'].includes(t) ? t : tool);
   }
 
   for (const b of $('tl-tabs').querySelectorAll('button')) b.onclick = () => showTool(b.dataset.tool);
+
+  // ---- humanizer
+  function badge(score, label) {
+    const cls = score > 60 ? 'bad' : score > 30 ? 'warn' : 'good';
+    return `<span class="tag ${cls}" style="font-weight:600;font-size:12px;padding:3px 8px;">${esc(label)}: ${score}%</span>`;
+  }
+
+  $('tl-h-check').onclick = async () => {
+    const text = $('tl-h-input').value.trim();
+    if (!text) return fail('tl-h-msg', new Error('Paste some text first'));
+    ok('tl-h-msg', 'Analyzing synthetic markers…');
+    try {
+      const r = await post('/api/tools/humanize-check', { text });
+      ok('tl-h-msg');
+      $('tl-h-out').innerHTML = `
+        <div class="card" style="margin-top:12px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong>AI Likelihood Analysis</strong>
+            ${badge(r.score, 'Synthetic Score')}
+          </div>
+          <p class="small muted" style="margin:0 0 8px;">${r.wordCount} words · ${r.sentenceCount} sentences · Avg ${r.avgSentenceLength} words/sentence · Rhythm Variance (std dev): ${r.sentenceStdDev}</p>
+          ${r.clichesFound.length ? `<p class="small" style="margin:0;"><strong>AI Clichés detected:</strong> ${r.clichesFound.map((c) => `<span class="tag warn" style="margin:2px 4px 2px 0;">${esc(c)}</span>`).join(' ')}</p>` : '<p class="small good" style="margin:0;">✓ No obvious AI buzzwords detected.</p>'}
+        </div>`;
+    } catch (err) {
+      fail('tl-h-msg', err);
+    }
+  };
+
+  $('tl-h-run').onclick = async () => {
+    const text = $('tl-h-input').value.trim();
+    if (!text) return fail('tl-h-msg', new Error('Paste some text to humanize'));
+    ok('tl-h-msg', 'Humanizing text with AI…');
+    $('tl-h-out').innerHTML = '';
+    try {
+      const r = await post('/api/tools/humanize', {
+        text,
+        tone: $('tl-h-tone').value,
+        level: $('tl-h-level').value,
+      });
+      ok('tl-h-msg');
+      const diffClass = r.scoreBefore > r.scoreAfter ? 'good' : 'muted';
+      $('tl-h-out').innerHTML = `
+        <div class="card" style="margin-top:12px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span>AI Likelihood:</span>
+              ${badge(r.scoreBefore, 'Before')}
+              <span>→</span>
+              ${badge(r.scoreAfter, 'After')}
+            </div>
+            <span class="small muted">${r.stats.wordsAfter} words · ~${r.stats.readingTimeSec}s read</span>
+          </div>
+          ${r.clichesFound.length ? `<p class="small" style="margin:0 0 10px;"><strong>Eliminated Clichés:</strong> ${r.clichesFound.map((c) => `<span class="tag" style="margin:2px 4px 2px 0;text-decoration:line-through;opacity:0.8;">${esc(c)}</span>`).join(' ')}</p>` : ''}
+          <div class="tool-out">
+            <textarea readonly rows="${Math.min(18, r.humanized.split('\n').length + 2)}" spellcheck="false">${esc(r.humanized)}</textarea>
+            <p class="actions-row">
+              <button class="secondary" data-copy>Copy humanized text</button>
+              <button class="secondary" data-save>Download text</button>
+            </p>
+          </div>
+        </div>`;
+      const copyBtn = $('tl-h-out').querySelector('[data-copy]');
+      if (copyBtn) copyBtn.onclick = (e) => navigator.clipboard?.writeText(r.humanized).then(() => (e.target.textContent = 'Copied'));
+      const saveBtn = $('tl-h-out').querySelector('[data-save]');
+      if (saveBtn) saveBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([r.humanized], { type: 'text/plain' }));
+        a.download = 'humanized-content.txt';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+    } catch (err) {
+      fail('tl-h-msg', err);
+    }
+  };
 
   // ---- meta
   $('tl-meta').onsubmit = async (e) => {

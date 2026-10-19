@@ -88,7 +88,7 @@ test('competitor watch: first look is silent, then new pages, headline and price
 
   const feed = today.todayFeed(new Date('2026-10-19T09:00:00Z'));
   const card = feed.find((i) => i.kind === 'watch');
-  assert.ok(card, 'change should appear in Today');
+  assert.ok(card, 'change should appear on the Dashboard');
   assert.equal(card.change.name, 'Rival');
   today.changeSeen(card.change.id);
   assert.ok(!today.todayFeed(new Date('2026-10-19T09:00:00Z')).some((i) => i.kind === 'watch'));
@@ -138,7 +138,7 @@ test('news & social scan: links required, repeats dropped, first scan is a basel
   assert.deepEqual(first.findings.map((f) => f.kind), ['news', 'x']);
   assert.equal(first.suggested, 1);
   assert.match(prompt, /from the last 30 days/);
-  assert.ok(watch.openChanges().some((c) => c.changes.some((f) => f.url === 'https://news.example/rival-seed')), 'news shows in Today even on the first scan');
+  assert.ok(watch.openChanges().some((c) => c.changes.some((f) => f.url === 'https://news.example/rival-seed')), 'news shows on the Dashboard even on the first scan');
 
   const again = await watch.scanNewsSocial(rival, { ask, now: new Date('2026-10-27T06:00:00Z') });
   assert.equal(again.outcome, 'unchanged');

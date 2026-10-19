@@ -57,13 +57,15 @@ export async function pullSearchConsole(site: string, today = new Date()): Promi
   type Small = { rows?: { keys: string[]; clicks: number; impressions: number; position: number }[] };
   const report = (dimensions: string[]) =>
     googleApi<Small>(`${GOOGLE.gsc}/sites/${encodeURIComponent(site)}/searchAnalytics/query`, { startDate, endDate, dimensions, rowLimit: 25000 });
-  const [totals, countries] = [await report(['date']), await report(['date', 'country'])];
+  const [totals, countries, devices] = [await report(['date']), await report(['date', 'country']), await report(['date', 'device'])];
   const insTotal = db.prepare('INSERT OR REPLACE INTO gsc_site_daily VALUES (?, ?, ?, ?)');
   const insCountry = db.prepare('INSERT OR REPLACE INTO gsc_country VALUES (?, ?, ?, ?)');
+  const insDevice = db.prepare('INSERT OR REPLACE INTO gsc_device VALUES (?, ?, ?, ?, ?)');
   db.transaction(() => {
-    for (const t of ['gsc_site_daily', 'gsc_country']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(startDate, endDate);
+    for (const t of ['gsc_site_daily', 'gsc_country', 'gsc_device']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(startDate, endDate);
     for (const r of totals.rows ?? []) insTotal.run(r.keys[0], r.clicks, r.impressions, r.position);
     for (const r of countries.rows ?? []) insCountry.run(r.keys[0], r.keys[1], r.clicks, r.impressions);
+    for (const r of devices.rows ?? []) insDevice.run(r.keys[0], r.keys[1], r.clicks, r.impressions, r.position);
   })();
   return rows.length;
 }
@@ -97,11 +99,12 @@ export async function pullAnalytics(property: string, today = new Date()): Promi
   const sources = await gaReport(property, ['date', 'sessionDefaultChannelGroup'], ['totalUsers', 'sessions']);
   const detail = await gaReport(property, ['date', 'sessionDefaultChannelGroup', 'sessionSource'], ['totalUsers', 'sessions']);
   const landing = await gaReport(property, ['date', 'landingPage'], ['activeUsers', 'sessions']);
+  const devices = await gaReport(property, ['date', 'deviceCategory', 'operatingSystem'], ['activeUsers', 'sessions']);
   const db = getDb();
   const from = daysAgo(PULL_DAYS, today), to = daysAgo(1, today);
   const nums = (row: GaRow) => row.metricValues.map((m) => Number(m.value));
   db.transaction(() => {
-    for (const t of ['ga_daily', 'ga_site_daily', 'ga_sources', 'ga_source_detail', 'ga_landing']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(from, to);
+    for (const t of ['ga_daily', 'ga_site_daily', 'ga_sources', 'ga_source_detail', 'ga_landing', 'ga_device']) db.prepare(`DELETE FROM ${t} WHERE date BETWEEN ? AND ?`).run(from, to);
     const insPage = db.prepare('INSERT OR REPLACE INTO ga_daily VALUES (?, ?, ?, ?, ?, ?)');
     for (const row of pages) insPage.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value, ...nums(row));
     const insSite = db.prepare('INSERT OR REPLACE INTO ga_site_daily (date, users, sessions, revenue, key_events, engaged_sessions, avg_seconds, new_users) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -112,6 +115,8 @@ export async function pullAnalytics(property: string, today = new Date()): Promi
     for (const row of detail) insDetail.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || 'Unassigned', row.dimensionValues[2].value || '(not set)', ...nums(row));
     const insLanding = db.prepare('INSERT OR REPLACE INTO ga_landing VALUES (?, ?, ?, ?)');
     for (const row of landing) insLanding.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || '(not set)', ...nums(row));
+    const insDevice = db.prepare('INSERT OR REPLACE INTO ga_device VALUES (?, ?, ?, ?, ?)');
+    for (const row of devices) insDevice.run(gaDate(row.dimensionValues[0].value), row.dimensionValues[1].value || '(not set)', row.dimensionValues[2].value || '(not set)', ...nums(row));
   })();
   return pages.length;
 }

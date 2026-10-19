@@ -9,7 +9,14 @@ import { todayFeed } from './today';
 import { AGENTS, startAgentRun } from './agents';
 import { AuditResult } from './agents/seoAudit';
 import { lastSpeed } from './analytics/pagespeed';
-import { publishedResults, topQueries } from './analytics/results';
+import { deviceSplit, publishedResults, resultsSummary, topPages, topQueries } from './analytics/results';
+import { googleConnected } from './analytics/google';
+import { LIVE_BREAKDOWNS, LiveBreakdown, liveNow } from './analytics/live';
+import type { PullStatus } from './analytics/pull';
+import { describeIntegrations } from './integrations';
+import { openAlerts, rankingsTable } from './seo/rankings';
+import { openGaps, visibilitySummary } from './geo/visibility';
+import { STATUSES, listContacts, summary as outreachSummary } from './outreach/store';
 import { searchConsoleGaps } from './agents/seo';
 import { checkCompetitor, listScans, openChanges, openSuggestions, scanNewsSocial } from './watch';
 import { closeBrowser } from './research/fetchPage';
@@ -25,7 +32,7 @@ import { actionResults, auditHistory, describeResult, recordAction } from './act
  * The chat assistant: a conversation per thread, with tools that read the site's data and propose work.
  * Rules that keep it safe:
  * - it never changes a document itself — it proposes, the owner applies;
- * - drafts it writes go to Today for approval like any agent's;
+ * - drafts it writes go to the Dashboard for approval like any agent's;
  * - it starts paid agent runs only when the owner asked;
  * - the stored history is only ever appended to (newer models reject edited history), and the
  *   system prompt is frozen when the thread starts. Later facts reach the model as notes on the next message.
@@ -41,9 +48,10 @@ const ROLE = `You are the marketing lead for this business, talking with its own
 Be direct and practical; write in plain English unless the owner writes in another language. Keep answers short unless asked for depth.
 
 How to work:
-- Look things up with your tools instead of guessing (today's queue, Google results, site health, competitors, documents).
+- Look things up with your tools instead of guessing (today's queue, Google search results, visitors and devices, live visitors, rankings, AI visibility, outreach, site health, competitors, documents).
+- Never say something isn't connected without checking get_connections first.
 - To change a document, call propose_document_change with the complete new text. The owner sees the difference and applies it — never say a document is changed until they have applied it.
-- To produce a post or article, call create_draft. It goes to the owner's Today queue for approval; nothing is published by you.
+- To produce a post or article, call create_draft. It goes to the owner's Dashboard for approval; nothing is published by you.
 - Only call run_agent when the owner explicitly asks for an agent to run — runs cost money.
 - The owner may mention @seo, @writer (agents) or @doc:product, @doc:voice, … (documents); treat these as pointers to what they mean.
 - Messages that start with ${NOTE_TAG} are facts from Plume about what happened since your last turn (applied changes, finished jobs). Trust them over your earlier assumptions.`;
@@ -72,7 +80,7 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: 'create_draft',
-    description: "Put a finished piece of writing into the owner's Today queue for approval.",
+    description: "Put a finished piece of writing onto the owner's Dashboard for approval.",
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -101,12 +109,27 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     description: "Re-read the website's pages now (up to 40) and re-run the site check. Free, runs in the background. Pages that no longer exist are removed from the saved copy.",
     input_schema: { type: 'object', additionalProperties: false, properties: {} },
   },
-  { name: 'get_today', description: "What is waiting in the owner's Today queue: drafts, site fixes, speed problems, competitor changes.", input_schema: { type: 'object', additionalProperties: false, properties: {} } },
+  { name: 'get_today', description: "What is waiting on the owner's Dashboard: drafts, site fixes, speed problems, competitor changes.", input_schema: { type: 'object', additionalProperties: false, properties: {} } },
   {
     name: 'get_results',
     description: 'Google Search Console and Analytics results: top searches, searches close to page one, how published work is doing.',
     input_schema: { type: 'object', additionalProperties: false, properties: { days: { type: 'integer', enum: [7, 30] } } },
   },
+  {
+    name: 'get_traffic',
+    description:
+      'Google Analytics and Search Console totals for the site: visitors, sessions, views, clicks, compared with the period before; channels and sites that sent visitors; top pages and landing pages; countries; and devices (search clicks by mobile/desktop/tablet, visitors by device and system such as Android, iOS, Windows).',
+    input_schema: { type: 'object', additionalProperties: false, properties: { days: { type: 'integer', enum: [7, 30] } } },
+  },
+  {
+    name: 'get_live_visitors',
+    description: 'People on the site in the last hour (or 30 minutes), from Google Analytics realtime, split by page, country or device.',
+    input_schema: { type: 'object', additionalProperties: false, properties: { by: { type: 'string', enum: Object.keys(LIVE_BREAKDOWNS) } } },
+  },
+  { name: 'get_rankings', description: 'Tracked Google searches: our position each week, the change, clicks, who ranks above us, and big moves.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
+  { name: 'get_ai_visibility', description: 'Whether AI assistants (ChatGPT, Claude, Gemini) name us when asked our questions, who they name instead, and the gaps.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
+  { name: 'get_outreach', description: 'Outreach lists: creators and link opportunities, how many are at each step, and the latest ones.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
+  { name: 'get_connections', description: 'Which services this website is connected to (Google Search Console and Analytics with the chosen site/property and last data pull, publishing, social, phone, outreach).', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
   { name: 'get_site_health', description: 'Latest site check (score, top problems) and page speed for phones and computers.', input_schema: { type: 'object', additionalProperties: false, properties: {} } },
   {
     name: 'list_competitors',
@@ -161,6 +184,19 @@ function docTitle(doc: ChatDoc): string {
 
 const str = (v: unknown, max = 200_000) => (typeof v === 'string' ? v.slice(0, max) : '');
 
+/** Why there are no Google numbers, in the owner's words: not signed in, nothing picked, or the last pull failed. */
+function googleMissing(need: 'search' | 'any'): string {
+  if (!googleConnected()) return 'Google is not connected for this website, so there is no Search Console or Analytics data.';
+  const site = getSetting<string | null>('gscSite', null);
+  const property = getSetting<string | null>('ga4Property', null);
+  const last = getSetting<PullStatus | null>('lastPull', null);
+  if (!site && (need === 'search' || !property)) return 'Google is connected, but no Search Console site is picked for this website yet (Results page).';
+  const err = last?.searchConsole.error ?? last?.analytics.error;
+  if (err) return `Google is connected, but the last data pull failed: ${err}`;
+  if (!last?.at) return 'Google is connected, but no data has been pulled yet. It is pulled once a day, or now from the Results page.';
+  return 'Google is connected and pulled, but there are no rows for this period.';
+}
+
 /** Run one of the chat's own tools. Returns text for the model; never throws. */
 export async function runChatTool(threadId: number, name: string, input: any, toolUseId: string): Promise<{ content: string; isError: boolean }> {
   try {
@@ -188,14 +224,14 @@ export async function runChatTool(threadId: number, name: string, input: any, to
         const channel = kind === 'social_post' && ['x', 'linkedin', 'facebook'].includes(input?.channel) ? input.channel : undefined;
         const d = createDraft({ agent: 'chat', kind, title, body, meta: { reason: str(input?.reason, 500) || 'Written in chat', channel, chatThread: threadId } });
         createAction(threadId, 'draft', { draftId: d.id, title, toolUseId }, 'done');
-        return { content: `Draft #${d.id} is in the owner's Today queue for approval.`, isError: false };
+        return { content: `Draft #${d.id} is on the owner's Dashboard for approval.`, isError: false };
       }
       case 'run_agent': {
         const agent = String(input?.agent ?? '');
         const n = Math.min(5, Math.max(1, Number(input?.how_many) || 1));
         const jobId = startAgentRun(agent, n); // throws a plain reason when it can't start
         createAction(threadId, 'job', { jobId, agent, howMany: n, toolUseId }, 'done');
-        return { content: `Started the ${agent} agent (job ${jobId}, up to ${n} draft(s)). Its drafts will appear in Today when it finishes.`, isError: false };
+        return { content: `Started the ${agent} agent (job ${jobId}, up to ${n} draft(s)). Its drafts will appear on the Dashboard when it finishes.`, isError: false };
       }
       case 'refresh_pages': {
         const jobId = startPageRefresh(); // throws a plain reason when it can't start
@@ -215,7 +251,9 @@ export async function runChatTool(threadId: number, name: string, input: any, to
                   : i.kind === 'speed'
                     ? `- Speed (${i.strategy}, score ${i.performance}): ${i.headline}`
                     : i.kind === 'rank'
-                      ? `- Ranking move: "${i.alert.keyword}" went from position ${i.alert.from} to ${i.alert.to} (week of ${i.alert.week})`
+                      ? `- Ranking move: "${i.alert.keyword}" went from position ${i.alert.from} to ${i.alert.to} (week of ${i.alert.week})${i.googleUpdates.length ? `; Google was rolling out ${i.googleUpdates.map((u) => `the ${u.name} (${u.date})`).join(' and ')} then` : ''}`
+                      : i.kind === 'page-change'
+                        ? `- Our own pages changed since the last read: ${i.change.changes.map((c) => `${c.url}: ${c.text}`).join('; ')}`
                       : i.kind === 'ai-gap'
                         ? `- AI gap: asked "${i.gap.question}", ${i.gap.engines} AI assistant(s) recommended ${i.gap.namedInstead.join(', ')} and not us`
                         : `- Competitor change: ${i.change.name} ${i.change.changes.map((c) => c.text).join('; ')}`,
@@ -227,7 +265,7 @@ export async function runChatTool(threadId: number, name: string, input: any, to
       case 'get_results': {
         const days = input?.days === 7 ? 7 : 30;
         const q = topQueries(30, days);
-        if (!q.length) return { content: 'No Google data yet (Search Console is not connected or has not been pulled).', isError: false };
+        if (!q.length) return { content: googleMissing('search'), isError: false };
         const near = searchConsoleGaps(topQueries(500, days), days === 7 ? 15 : 50).slice(0, 10);
         const mine = publishedResults(new Date(), days).slice(0, 10);
         const done = actionResults(15);
@@ -246,6 +284,96 @@ export async function runChatTool(threadId: number, name: string, input: any, to
             .join('\n'),
           isError: false,
         };
+      }
+      case 'get_traffic': {
+        const days = input?.days === 7 ? 7 : 30;
+        const s = resultsSummary(days);
+        const dev = deviceSplit(days);
+        if (!s.from && !dev.search.length && !dev.visits.length) return { content: googleMissing('any'), isError: false };
+        const n = (v: number | null | undefined) => (v == null ? 'n/a' : Math.round(v).toLocaleString('en-US'));
+        const vs = (a: number | null, b: number | null, ok: boolean) => (ok && a != null && b ? ` (before: ${n(b)}, ${a >= b ? '+' : ''}${Math.round(((a - b) / b) * 100)}%)` : '');
+        const pct = (part: number, all: number) => (all ? `${Math.round((100 * part) / all)}%` : '');
+        const clicks = dev.search.reduce((t, r) => t + r.clicks, 0);
+        const users = dev.visits.reduce((t, r) => t + r.users, 0);
+        const lines = [
+          `Last ${days} days${s.from ? ` (${s.from} to ${s.to})` : ''}.`,
+          `Search: ${n(s.now.clicks)} clicks${vs(s.now.clicks, s.before.clicks, s.compare.search)}, ${n(s.now.impressions)} impressions, average position ${s.now.position?.toFixed(1) ?? 'n/a'}.`,
+          s.now.users != null || s.now.views != null
+            ? `Visits: ${n(s.now.users)} visitors${vs(s.now.users, s.before.users, s.compare.visits)}, ${n(s.now.sessions)} sessions, ${n(s.now.views)} page views${s.now.engagement != null ? `, ${Math.round(s.now.engagement * 100)}% engaged` : ''}${s.now.keyEvents != null ? `, ${s.now.keyEvents} key events` : ''}.`
+            : 'Visits: no Analytics data.',
+          ...(dev.search.length ? ['Search clicks by device:', ...dev.search.map((r) => `- ${r.device}: ${n(r.clicks)} clicks (${pct(r.clicks, clicks)}), ${n(r.impressions)} impressions, position ${r.position?.toFixed(1) ?? 'n/a'}`)] : []),
+          ...(dev.visits.length ? ['Visitors by device and system:', ...dev.visits.map((r) => `- ${r.device} / ${r.os}: ${n(r.users)} visitors (${pct(r.users, users)})`)] : []),
+          ...(s.channels.length ? ['Visitors by channel:', ...s.channels.map((c) => `- ${c.label}: ${n(c.users)}`)] : []),
+          ...(s.topSources.length ? ['Sites that sent visitors:', ...s.topSources.map((c) => `- ${c.label}: ${n(c.users)}`)] : []),
+          ...(s.landing.length ? ['First page of the visit:', ...s.landing.map((c) => `- ${c.label}: ${n(c.users)} visitors`)] : []),
+          ...(s.pages.length ? ['Most viewed pages:', ...s.pages.map((p) => `- ${p.page}: ${n(p.views)} views`)] : []),
+          ...(s.countries.length ? ['Search clicks by country:', ...s.countries.map((c) => `- ${c.country}: ${n(c.clicks)}`)] : []),
+        ];
+        const top = topPages(10, days).filter((p) => p.clicks > 0);
+        if (top.length) lines.push('Pages by search clicks:', ...top.map((p) => `- ${p.page}: ${p.clicks} clicks, ${p.impressions} impressions`));
+        if (!dev.search.length && !dev.visits.length) lines.push('No device data yet: it arrives with the next Google pull.');
+        return { content: lines.join('\n'), isError: false };
+      }
+      case 'get_live_visitors': {
+        const by = (input?.by in LIVE_BREAKDOWNS ? input.by : 'page') as LiveBreakdown;
+        const live = await liveNow(by);
+        if (live.missing === 'google') return { content: 'Google is not connected for this website.', isError: false };
+        if (live.missing === 'property') return { content: 'Google is connected, but no Analytics property is picked for this website (Results page).', isError: false };
+        if (live.missing === 'error') return { content: `Google refused the realtime report: ${live.error}`, isError: false };
+        return {
+          content: [`${live.total} people on the site in the last ${live.minutes} minutes.`, ...live.rows.map((r) => `- ${r.label}: ${r.users}`)].join('\n'),
+          isError: false,
+        };
+      }
+      case 'get_rankings': {
+        const rows = rankingsTable(8);
+        if (!rows.length) return { content: 'No searches are tracked yet (Rankings page).', isError: false };
+        const alerts = openAlerts();
+        return {
+          content: [
+            'Tracked searches (position: smaller is better; change: positive moved up):',
+            ...rows.map((r) => `- "${r.keyword}": ${r.current?.position != null ? `position ${r.current.position.toFixed(1)} (week of ${r.current.week})` : 'no impressions yet'}${r.change != null ? `, change ${r.change > 0 ? '+' : ''}${r.change}` : ''}, ${r.clicks} clicks over 8 weeks${r.serp?.above.length ? `; above us: ${r.serp.above.join(', ')}` : ''}`),
+            ...(alerts.length ? ['Big moves:', ...alerts.map((a) => `- "${a.keyword}" from ${a.from} to ${a.to} (week of ${a.week})`)] : []),
+          ].join('\n'),
+          isError: false,
+        };
+      }
+      case 'get_ai_visibility': {
+        const v = visibilitySummary();
+        if (!v) return { content: 'No AI visibility check has run yet (AI visibility page).', isError: false };
+        const gaps = openGaps();
+        return {
+          content: [
+            `Latest check ${v.at.slice(0, 10)}: named in ${v.overall.mentioned} of ${v.overall.answered} answers (${v.overall.score}%)${v.overall.avgPosition != null ? `, average position ${v.overall.avgPosition}` : ''}.`,
+            ...v.perEngine.map((e) => `- ${e.label}: ${e.mentioned}/${e.answered}`),
+            'Named most often:',
+            ...v.shareOfVoice.map((x) => `- ${x.name}: ${x.answers} answers`),
+            ...(gaps.length ? ['Questions where others were named and we were not:', ...gaps.map((g) => `- "${g.question}": ${g.namedInstead.join(', ')}`)] : []),
+          ].join('\n'),
+          isError: false,
+        };
+      }
+      case 'get_outreach': {
+        const lines: string[] = [];
+        for (const kind of Object.keys(STATUSES) as (keyof typeof STATUSES)[]) {
+          const counts = outreachSummary(kind);
+          const total = Object.values(counts).reduce((a, b) => a + b, 0);
+          lines.push(`${kind === 'creator' ? 'Creators' : 'Link opportunities'}: ${total}${total ? ` (${Object.entries(counts).filter(([, c]) => c).map(([st, c]) => `${c} ${st}`).join(', ')})` : ''}`);
+          lines.push(...listContacts(kind).slice(0, 8).map((c) => `- ${c.name} (${c.status})${c.url ? ` ${c.url}` : ''}${c.why ? `: ${c.why.slice(0, 120)}` : ''}`));
+        }
+        return { content: lines.join('\n'), isError: false };
+      }
+      case 'get_connections': {
+        const last = getSetting<PullStatus | null>('lastPull', null);
+        const site = getSetting<string | null>('gscSite', null);
+        const property = getSetting<string | null>('ga4Property', null);
+        const lines = [
+          `Google: ${googleConnected() ? 'signed in' : 'not connected'}. Search Console site: ${site ?? 'none picked'}. Analytics property: ${property ?? 'none picked'}.`,
+          last?.at ? `Last Google pull ${last.at.slice(0, 16).replace('T', ' ')}: Search Console ${last.searchConsole.error ? `failed (${last.searchConsole.error})` : `${last.searchConsole.rows} rows`}, Analytics ${last.analytics.error ? `failed (${last.analytics.error})` : `${last.analytics.rows} rows`}.` : 'Google data has never been pulled.',
+          'Other connections:',
+          ...describeIntegrations().filter((i) => i.id !== 'google').map((i) => `- ${i.label}: ${i.connected ? 'connected' : 'not connected'}`),
+        ];
+        return { content: lines.join('\n'), isError: false };
       }
       case 'get_site_health': {
         const audit = getSetting<AuditResult | null>('lastAudit', null);
@@ -319,8 +447,8 @@ export async function runChatTool(threadId: number, name: string, input: any, to
             await closeBrowser();
           }
         })();
-        createAction(threadId, 'job', { jobId, label: `Competitor scan (${targets.map((c) => c.name).join(', ')})`, doneText: 'finished — findings are in Today and on each competitor', toolUseId }, 'done');
-        return { content: `Started scanning ${targets.map((c) => c.name).join(', ')} (job ${jobId})${news ? ', including news and social' : ', website only'}. Results go to Today; call list_competitors afterwards to read them.`, isError: false };
+        createAction(threadId, 'job', { jobId, label: `Competitor scan (${targets.map((c) => c.name).join(', ')})`, doneText: 'finished — findings are on the Dashboard and on each competitor', toolUseId }, 'done');
+        return { content: `Started scanning ${targets.map((c) => c.name).join(', ')} (job ${jobId})${news ? ', including news and social' : ', website only'}. Results go to the Dashboard; call list_competitors afterwards to read them.`, isError: false };
       }
       case 'add_competitor': {
         const c = addCompetitor({ name: str(input?.name, 200), url: str(input?.website, 300) || null, notes: str(input?.notes, 1000), source: 'user' });
@@ -545,7 +673,7 @@ export interface ShownItem {
   role: 'you' | 'assistant';
   html?: string;
   text?: string;
-  /** Plain labels for what the assistant looked at ("Looked at Today"). */
+  /** Plain labels for what the assistant looked at ("Looked at the Dashboard"). */
   steps?: string[];
   actions?: ShownAction[];
   at: string;
@@ -557,9 +685,15 @@ const STEP_LABEL: Record<string, string> = {
   create_draft: 'Wrote a draft',
   run_agent: 'Started an agent',
   refresh_pages: 'Re-read the site',
-  get_today: 'Looked at Today',
+  get_today: 'Looked at the Dashboard',
   get_results: 'Looked at Google results',
   get_site_health: 'Checked site health',
+  get_traffic: 'Looked at visitors and devices',
+  get_live_visitors: 'Looked at live visitors',
+  get_rankings: 'Looked at rankings',
+  get_ai_visibility: 'Looked at AI visibility',
+  get_outreach: 'Looked at outreach',
+  get_connections: 'Checked connections',
   list_competitors: 'Looked at competitors',
   add_competitor: 'Added a competitor',
   web_search: 'Searched the web',

@@ -57,20 +57,20 @@ function takeFlash() {
 let publishers = [];
 let folderStatus = 'draft';
 let currentDraft = null;
-let draftBack = '#today';
+let draftBack = '#dashboard';
 let speedDevice = pref.get('speedDevice', 'mobile');
 let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['today', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'analytics', 'logs', 'usage', 'settings', 'rankings', 'ai', 'outreach', 'tools'];
+const VIEWS = ['dashboard', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'report', 'analytics', 'logs', 'usage', 'settings', 'ai', 'outreach', 'tools'];
 
 function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
   for (const v of VIEWS) if ($(`view-${v}`)) $(`view-${v}`).hidden = v !== id;
   for (const a of document.querySelectorAll('.nav-list a')) a.classList.toggle('active', a.getAttribute('href') === location.hash);
-  // Top bar: mark the page you're on. Today and everything opened from it count as the Dashboard.
-  const page = { today: '#today', analytics: '#analytics', results: '#results', outreach: '#outreach', tools: '#tools', logs: '#logs', usage: '#usage', settings: '#settings' }[id] ?? '#today';
+  // Top bar: mark the page you're on. The Dashboard and everything opened from it count as the Dashboard.
+  const page = { dashboard: '#dashboard', analytics: '#analytics', results: '#results', report: '#report', outreach: '#outreach', tools: '#tools', logs: '#logs', usage: '#usage', settings: '#settings' }[id] ?? '#dashboard';
   for (const a of document.querySelectorAll('.bar-links a')) a.classList.toggle('on', a.getAttribute('href') === page);
   $('col-center').scrollTop = 0;
 }
@@ -85,7 +85,7 @@ async function route() {
     if (research) {
       $('onboard').hidden = true;
       $('workspace').hidden = false;
-      waitForJob(research.id, 'Researching your site…').catch((err) => alert(`Research stopped: ${err.message}`)).then(() => ((location.hash = '#doc/product'), route()));
+      waitForJob(research.id, 'Researching your site…').catch((err) => alertBox(err.message, { title: 'Research stopped' })).then(() => ((location.hash = '#doc/product'), route()));
       return;
     }
     $('workspace').hidden = true;
@@ -96,7 +96,7 @@ async function route() {
   $('onboard').hidden = true;
   $('workspace').hidden = false;
   renderChrome();
-  const [page, arg] = (location.hash.slice(1) || 'today').split(/[/?]/);
+  const [page, arg] = (location.hash.slice(1) || 'dashboard').split(/[/?]/);
   switch (page) {
     case 'doc': return loadDoc(arg);
     case 'competitor': return loadCompetitor(arg);
@@ -110,7 +110,8 @@ async function route() {
     case 'speed': return loadSpeed();
     case 'analytics': return loadAnalytics(arg);
     case 'results': return loadResults();
-    case 'rankings': return window.plumeRankings ? window.plumeRankings.load() : loadToday();
+    case 'report': return window.plumeReport ? window.plumeReport.load() : loadToday();
+    case 'rankings': return loadAnalytics('rankings');
     case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
     case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(location.hash.slice('#outreach/'.length)) : loadToday();
     case 'tools': return window.plumeTools ? window.plumeTools.load(arg) : loadToday();
@@ -142,13 +143,13 @@ async function renderChrome() {
       : `Agents write in ${esc(lang.name)}, the language of your site.`) + ' <a href="#" id="lang-change">Change</a>';
   $('lang-change').onclick = async (e) => {
     e.preventDefault();
-    const typed = prompt('Which languages is your site in? Two-letter codes, main language first, e.g. "he, en".', lang.all.join(', '));
+    const typed = await promptBox('Which languages is your site in? Two-letter codes, main language first.', { title: 'Site languages', value: lang.all.join(', '), placeholder: 'e.g. he, en', ok: 'Save' });
     if (typed === null) return;
     try {
       await post('/api/language', { languages: typed.split(/[\s,]+/).filter(Boolean) });
       location.reload();
     } catch (err) {
-      alert(err.message);
+      alertBox(err.message);
     }
   };
 
@@ -162,7 +163,7 @@ async function renderChrome() {
       ? c.competitors
           .map((x) => {
             const ico = x.url ? `<img class="nav-fav" alt="" loading="lazy" src="https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(new URL(x.url).hostname)}">` : `<span class="nav-ico">${esc(x.name[0] ?? '?')}</span>`;
-            const tag = x.unseen ? `<span class="tag new" title="${x.unseen} finding(s) waiting in Today">${x.unseen} new</span>` : x.watch ? '<span class="tag" title="Scanned every week"><span class="dot"></span>watching</span>' : '<span class="tag"></span>';
+            const tag = x.unseen ? `<span class="tag new" title="${x.unseen} finding(s) waiting on the Dashboard">${x.unseen} new</span>` : x.watch ? '<span class="tag" title="Scanned every week"><span class="dot"></span>watching</span>' : '<span class="tag"></span>';
             return `<li><a href="#competitor/${x.id}" dir="auto"><span class="nav-label">${ico}${esc(x.name)}</span>${tag}</a></li>`;
           })
           .join('')
@@ -178,7 +179,7 @@ async function renderChrome() {
       b.onclick = async () => {
         b.disabled = true;
         const add = b.dataset.sgAdd;
-        await post(`/api/competitor-suggestions/${add ?? b.dataset.sgDismiss}/${add ? 'add' : 'dismiss'}`).catch((err) => alert(err.message));
+        await post(`/api/competitor-suggestions/${add ?? b.dataset.sgDismiss}/${add ? 'add' : 'dismiss'}`).catch((err) => alertBox(err.message));
         context = null;
         renderChrome();
       };
@@ -218,10 +219,10 @@ function renderQuick() {
     ['Check my site', async () => ((location.hash = '#check'), await runAudit())],
     ['Check page speed', async () => ((location.hash = '#speed'), await runSpeed())],
     ['Get latest Google data', async () => ((location.hash = '#results'), await pullGoogle())],
-    ['Research my site again', () => confirm('Research the whole site again? This replaces all the documents, including your edits.') && runResearch({})],
+    ['Research my site again', async () => (await confirmBox('Research the whole site again? This replaces all the documents, including your edits.', { title: 'Research again?', ok: 'Research again' })) && runResearch({})],
   ];
   $('quick').innerHTML = actions.map(([label], i) => `<button class="secondary" data-q="${i}">${esc(label)}</button>`).join('');
-  for (const b of $('quick').querySelectorAll('button')) b.onclick = () => actions[Number(b.dataset.q)][1]().catch?.((e) => alert(e.message));
+  for (const b of $('quick').querySelectorAll('button')) b.onclick = () => actions[Number(b.dataset.q)][1]().catch?.((e) => alertBox(e.message));
 }
 
 // ---------------------------------------------------------------- jobs
@@ -244,7 +245,7 @@ async function runResearch(body) {
   try {
     await waitForJob(jobId, 'Researching your site…');
   } catch (err) {
-    alert(`Research stopped: ${err.message}`);
+    alertBox(err.message, { title: 'Research stopped' });
   }
   location.hash = '#doc/product';
   route();
@@ -258,19 +259,19 @@ async function runAgentNow(id) {
     pollActivity();
     await route();
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   }
 }
 
 async function runAllAgents() {
-  if (!confirm('Start every agent at the same time? Each one looks for work and writes drafts, which uses AI.')) return;
+  if (!(await confirmBox('Start every agent at the same time? Each one looks for work and writes drafts, which uses AI.', { title: 'Run all agents?', ok: 'Run all' }))) return;
   try {
     const { started } = await post('/api/agents/run', {});
-    flash = `${started.length} agents started. They work side by side; drafts arrive in Today as each one finishes.`;
+    flash = `${started.length} agents started. They work side by side; drafts arrive on the Dashboard as each one finishes.`;
     pollActivity();
-    await goTo('#today');
+    await goTo('#dashboard');
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   }
 }
 
@@ -332,7 +333,7 @@ async function pollActivity() {
     if (runningIds && ids !== runningIds && $('view-job').hidden) {
       const before = runningIds.split(',');
       // Only on pages that just show results, so nobody loses half-typed edits.
-      const safe = /^#?(today|folder\/|check|speed)?$/.test(location.hash.split('?')[0]) || location.hash.startsWith('#folder/') || (location.hash.startsWith('#doc/') && $('doc-edit-actions').hidden);
+      const safe = /^#?(dashboard|today|folder\/|check|speed)?$/.test(location.hash.split('?')[0]) || location.hash.startsWith('#folder/') || (location.hash.startsWith('#doc/') && $('doc-edit-actions').hidden);
       if (safe && before.some((id) => !ids.split(',').includes(id))) route();
     }
     runningIds = ids;
@@ -342,7 +343,7 @@ async function pollActivity() {
   }
 }
 
-// ---------------------------------------------------------------- Today
+// ---------------------------------------------------------------- Dashboard
 
 /** Show a one-off message (like "SEO agent started") in a note box, or hide the box when there's none. */
 function showFlash(id) {
@@ -352,9 +353,11 @@ function showFlash(id) {
 }
 
 async function loadToday() {
-  showView('today');
+  showView('dashboard');
   showFlash('today-flash');
-  const [t, folders] = await Promise.all([api('/api/today'), api('/api/agents')]);
+  // Publishers first: the card's "Post to" list is built from them.
+  const [t, folders, pubs] = await Promise.all([api('/api/today'), api('/api/agents'), api('/api/publishers')]);
+  publishers = pubs;
   const total = t.left + t.doneToday;
   $('today-progress').textContent = total ? `${t.doneToday} of ${total} done` : '';
   // Stay on the same card after a reload; if it's gone (approved, skipped), show the one that took its place.
@@ -364,7 +367,6 @@ async function loadToday() {
   todayPos = same >= 0 ? same : Math.min(todayPos, Math.max(todayItems.length - 1, 0));
   showTodayCard();
   renderFolders(folders);
-  publishers = await api('/api/publishers');
 }
 
 let todayItems = [];
@@ -414,7 +416,7 @@ function renderTodayCard(item) {
     if (firstLive) $('t-target').value = firstLive.id;
     $('t-approve').onclick = act(async () => post(`/api/drafts/${d.id}/approve`, { target: $('t-target').value }));
     $('t-no').onclick = act(async () => {
-      const reason = prompt('What was wrong with it? (optional — the agent will learn from this)');
+      const reason = await promptBox('What was wrong with it? The agent will learn from this.', { title: 'Not useful', placeholder: 'Optional', ok: 'Send' });
       if (reason === null) return 'cancel';
       await post(`/api/drafts/${d.id}/not-useful`, { reason });
     });
@@ -471,12 +473,33 @@ function renderTodayCard(item) {
       <p class="why">${down
         ? 'A drop this size usually means a competitor published something better, or your page changed. Check who is ahead now and whether your page still answers the search.'
         : 'Worth knowing what worked, so you can do more of it.'}</p>
+      ${googleUpdateNote(item.googleUpdates, down)}
       <div class="acts">
         <button id="t-seen">Got it</button>
         <a href="#rankings"><button class="secondary">See rankings</button></a>
         <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
       </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/rank-alerts/${a.id}/seen`));
+  }
+  else if (item.kind === 'page-change') {
+    const c = item.change;
+    const serious = c.worst === 'critical';
+    const pages = new Set(c.changes.map((x) => x.url)).size;
+    box.innerHTML = `<div class="today">
+      <div class="kicker"><span class="sev ${c.worst}">${serious ? 'Check now' : 'Your site changed'}</span><span>·</span><span>found ${esc(when(c.at))}</span></div>
+      <h2>${serious ? 'A change on your site can hurt it in Google' : `${c.changes.length} change${c.changes.length > 1 ? 's' : ''} on ${pages} page${pages > 1 ? 's' : ''} since the last check`}</h2>
+      <p class="why">${serious
+        ? 'Plume compares your pages every day. If you didn’t make this change on purpose (a theme update, a plugin or a new page builder can do it), fix it before Google notices.'
+        : 'If you made these changes, there is nothing to do. They are listed so nothing changes without you knowing.'}</p>
+      <ul class="change-list">${c.changes.slice(0, 8).map((x) => `<li dir="auto"><span class="sev ${x.severity}">${x.severity === 'critical' ? 'serious' : x.severity === 'high' ? 'check' : 'note'}</span> <a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(sourceName(x.url))}</a>: ${esc(x.text)}${
+        x.before || x.after ? `<br><small class="muted">${x.before ? `Was: <code>${esc(x.before.slice(0, 120))}</code>` : ''}${x.before && x.after ? ' · ' : ''}${x.after ? `Now: <code>${esc(x.after.slice(0, 120))}</code>` : ''}</small>` : ''}</li>`).join('')}
+        ${c.changes.length > 8 ? `<li class="muted">…and ${c.changes.length - 8} more</li>` : ''}</ul>
+      <div class="acts">
+        <button id="t-seen">${serious ? 'Checked it' : 'Got it'}</button>
+        <a href="#analytics"><button class="secondary">See the site check</button></a>
+        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+      </div></div>`;
+    $('t-seen').onclick = act(async () => post(`/api/page-changes/${c.id}/seen`));
   }
   else if (item.kind === 'ai-gap') {
     const g = item.gap;
@@ -492,6 +515,15 @@ function renderTodayCard(item) {
     $('t-seen').onclick = act(async () => post('/api/ai-visibility/gaps/done', { runId: g.runId, questionId: g.questionId }));
   }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
+}
+
+/** A ranking move in the weeks of a Google update: say so, with Google's own announcement. */
+function googleUpdateNote(updates, down) {
+  if (!updates?.length) return '';
+  const names = updates.map((u) => `<a href="${esc(u.source)}" target="_blank" rel="noopener">${esc(u.name)}</a> (${esc(fmtDay(u.date))})`).join(' and ');
+  return `<p class="small google-update">Google was rolling out the ${names} around then. ${down
+    ? 'Updates like this re-weigh every site, so the drop may not be about your page. Wait two weeks for it to settle before rewriting anything.'
+    : 'Google’s update may have favoured your page.'}</p>`;
 }
 
 const FINDING_AREA = { linkedin: 'LinkedIn', x: 'X', news: 'News' };
@@ -525,7 +557,7 @@ function act(fn) {
     try {
       if ((await fn()) !== 'cancel') await loadToday();
     } catch (err) {
-      alert(err.message);
+      alertBox(err.message);
     } finally {
       e.target.disabled = false;
     }
@@ -613,7 +645,7 @@ async function ensureContext() {
 async function loadCompetitor(id) {
   showView('competitor');
   const c = id === 'new' ? null : (await ensureContext()).competitors.find((x) => x.id === Number(id));
-  if (id !== 'new' && !c) return (location.hash = '#today');
+  if (id !== 'new' && !c) return (location.hash = '#dashboard');
   $('comp-title').textContent = c ? c.name : 'Add a competitor';
   $('comp-name').value = c?.name ?? '';
   $('comp-url').value = c?.url ?? '';
@@ -652,10 +684,10 @@ async function loadCompetitor(id) {
     }
   };
   $('comp-delete').onclick = async () => {
-    if (!confirm(`Remove ${c.name} from your competitors? Their watch history goes too.`)) return;
+    if (!(await confirmBox(`Remove ${c.name} from your competitors? Their watch history goes too.`, { title: 'Remove competitor?', ok: 'Remove', danger: true }))) return;
     await api(`/api/competitors/${c.id}`, { method: 'DELETE' });
     context = null;
-    location.hash = '#today';
+    location.hash = '#dashboard';
   };
   $('comp-news').onclick = async () => {
     $('comp-news').disabled = true;
@@ -691,7 +723,7 @@ async function loadCompetitor(id) {
 async function loadPerson(id) {
   showView('person');
   const p = id === 'new' ? null : (await ensureContext()).people.find((x) => x.id === Number(id));
-  if (id !== 'new' && !p) return (location.hash = '#today');
+  if (id !== 'new' && !p) return (location.hash = '#dashboard');
   $('person-title').textContent = p ? p.name : 'Add a person';
   $('person-name').value = p?.name ?? '';
   $('person-role').value = p?.role ?? '';
@@ -710,10 +742,10 @@ async function loadPerson(id) {
     }
   };
   $('person-delete').onclick = async () => {
-    if (!confirm(`Remove ${p.name}?`)) return;
+    if (!(await confirmBox(`Remove ${p.name}?`, { title: 'Remove person?', ok: 'Remove', danger: true }))) return;
     await api(`/api/people/${p.id}`, { method: 'DELETE' });
     context = null;
-    location.hash = '#today';
+    location.hash = '#dashboard';
   };
 }
 
@@ -747,7 +779,7 @@ async function loadFolder(id) {
   showView('folder');
   const folders = await api('/api/agents');
   const f = folders.find((x) => x.id === id);
-  if (!f) return (location.hash = '#today');
+  if (!f) return (location.hash = '#dashboard');
   $('folder-title').textContent = f.label;
   $('folder-desc').textContent = f.description;
   showFlash('folder-flash');
@@ -790,9 +822,9 @@ async function loadDraft(id) {
   publishers = publishers.length ? publishers : await api('/api/publishers');
   const d = await api(`/api/drafts/${id}`);
   $('draft-back').href = draftBack;
-  $('draft-back').textContent = draftBack === '#today' ? '← Today' : `← ${agentLabel(d.agent)}`;
+  $('draft-back').textContent = draftBack === '#dashboard' ? '← Dashboard' : `← ${agentLabel(d.agent)}`;
   // The back link already names the agent, so the header only says what this is.
-  $('draft-agent').textContent = draftBack === '#today' ? `${agentLabel(d.agent)} · ${kindLabel(d.kind)}` : kindLabel(d.kind);
+  $('draft-agent').textContent = draftBack === '#dashboard' ? `${agentLabel(d.agent)} · ${kindLabel(d.kind)}` : kindLabel(d.kind);
   $('draft-title').value = d.title;
   $('draft-reason').hidden = !d.meta.reason;
   $('draft-reason-text').textContent = d.meta.reason ?? '';
@@ -830,6 +862,13 @@ async function loadDraft(id) {
   $('draft-status').innerHTML = statusLine(d);
   $('draft-status').hidden = !$('draft-status').innerHTML;
   $('draft-events').innerHTML = d.events.map((e) => `<li>${esc(when(e.at))}: ${esc(e.to_status)}${e.note ? ` — ${esc(e.note)}` : ''}</li>`).join('');
+  const b = d.meta.brief;
+  $('draft-brief-box').hidden = !b;
+  if (b)
+    $('draft-brief').innerHTML = `<p class="small">Searchers want: <b>${esc(b.intent)}</b> · Google shows: <b>${esc(b.pageType)}</b> · about ${n(b.targetWords)} words</p>
+      <p class="small" dir="auto">${esc(b.angle)}</p>
+      ${b.gaps?.length ? `<p class="small muted">What the pages on top miss:</p><ul class="small">${b.gaps.map((g) => `<li dir="auto">${esc(g)}</li>`).join('')}</ul>` : ''}
+      ${b.competitors?.length ? `<p class="small muted">Pages it was compared with:</p><ul class="small">${b.competitors.map((c) => `<li>#${c.position} <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(sourceName(c.url))}</a> · ${n(c.words)} words</li>`).join('')}</ul>` : ''}`;
   $('draft-sources').innerHTML = (d.meta.sources ?? []).map((s) => `<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a></li>`).join('');
   if (window.plumeOutreach) window.plumeOutreach.wireDraft(d);
 }
@@ -961,7 +1000,7 @@ async function loadPhotos(d) {
     for (const b of $('photos-list').querySelectorAll('[data-remove]'))
       b.onclick = async () => {
         const what = b.dataset.remove;
-        if (what === 'video' && !confirm('Remove the video from this post?')) return;
+        if (what === 'video' && !(await confirmBox('Remove the video from this post?', { title: 'Remove video?', ok: 'Remove', danger: true }))) return;
         try {
           render(await api(what === 'video' ? `/api/drafts/${d.id}/video` : `/api/drafts/${d.id}/images/${encodeURIComponent(what)}`, { method: 'DELETE' }));
           msg('');
@@ -1063,7 +1102,7 @@ async function runAudit() {
   try {
     renderAudit(await post('/api/audit'));
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   } finally {
     $('audit-run').disabled = false;
   }
@@ -1110,7 +1149,7 @@ async function runSpeed() {
     renderSpeed(await post('/api/speed'));
     renderChrome();
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   } finally {
     $('speed-run').disabled = false;
     $('speed-run').textContent = 'Check speed now';
@@ -1137,7 +1176,7 @@ function renderSpeed(all) {
         $('speed-send').textContent = 'Added to today’s fixes';
         $('speed-send').disabled = true;
       } catch (err) {
-        alert(err.message);
+        alertBox(err.message);
       }
     };
   const labels = { performance: 'Performance', accessibility: 'Accessibility', bestPractices: 'Best practices', seo: 'SEO' };
@@ -1225,7 +1264,7 @@ async function loadLogs() {
       <td><button class="secondary" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>Run now</button></td></tr>`)
     .join('');
   $('log-rows').innerHTML = logs.map((l) => `<tr class="level-${esc(l.level)}"><td><small>${when(l.at)}</small></td><td>${esc(l.source)}</td><td dir="auto">${esc(l.message)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Nothing has happened on this website yet.</td></tr>';
-  const put = (id, body) => api(`/api/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }).then(loadLogs, (e) => (alert(e.message), loadLogs()));
+  const put = (id, body) => api(`/api/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }).then(loadLogs, (e) => (alertBox(e.message), loadLogs()));
   for (const el of document.querySelectorAll('[data-toggle]')) el.onchange = () => put(el.dataset.toggle, { enabled: el.checked });
   for (const el of document.querySelectorAll('[data-cron]')) el.onchange = () => put(el.dataset.cron, { cron: el.value.trim() });
   for (const el of document.querySelectorAll('[data-limit]')) el.onchange = () => put(el.dataset.limit, { limit: Number(el.value) });
@@ -1234,7 +1273,7 @@ async function loadLogs() {
       el.disabled = true;
       el.textContent = 'Running…';
       const r = await post(`/api/tasks/${encodeURIComponent(el.dataset.run)}/run`);
-      if (r.status === 'failed') alert(r.message);
+      if (r.status === 'failed') alertBox(r.message);
       loadLogs();
     };
 }
@@ -1265,7 +1304,18 @@ async function loadUsage() {
 // ---------------------------------------------------------------- top-bar numbers and the Analytics column
 
 let summary = null;
-let detailsTab = pref.get('analyticsTab', 'traffic');
+/** The Analytics tabs, one level only, each with a line saying what it shows. Old `seo` links open Google search. */
+const AN_TABS = {
+  traffic: 'Who visited your site, what they did there, and where they came from. From Google Analytics.',
+  search: 'How your site shows up in Google search: how often it appears, gets clicked, and for which searches. From Google Search Console.',
+  rankings: 'Your Google position, week by week, for the searches you choose to track. Lower is better; 1–10 is page one.',
+  speed: 'How fast your pages load on phones and computers, scored by Google Lighthouse.',
+  onpage: 'Problems Plume found on your pages: titles, descriptions, headings, images and links.',
+  links: 'Other websites that could link to you, and the link requests you’ve sent.',
+  geo: 'Whether ChatGPT, Claude and Gemini name you when people ask about what you offer.',
+};
+const anTab = (t) => (t === 'seo' ? 'search' : AN_TABS[t] ? t : 'traffic');
+let detailsTab = anTab(pref.get('analyticsTab', 'traffic'));
 
 /** Percent change, or null when there's nothing to compare against. */
 const change = (now, before) => (now == null || !before ? null : ((now - before) / before) * 100);
@@ -1301,7 +1351,7 @@ function renderBarNumbers() {
   // Visitors when Analytics has them, else page views, else Google clicks.
   const [label, key] = s.now.users != null ? ['Visitors', 'users'] : s.now.views != null ? ['Views', 'views'] : ['Clicks', 'clicks'];
   $('bar-numbers').innerHTML = `
-    <a href="#analytics/${key === 'clicks' ? 'seo' : 'traffic'}" class="bar-stat" title="${label}, last ${s.days} days"><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}</a>
+    <a href="#analytics/${key === 'clicks' ? 'search' : 'traffic'}" class="bar-stat" title="${label}, last ${s.days} days"><span class="lbl">${label}</span><b>${n(s.now[key])}</b>${delta(change(s.now[key], s.before[key]))}</a>
     ${s.now.revenue != null ? `<a href="#analytics/traffic" class="bar-stat" title="GA4 conversion value, last ${s.days} days"><span class="lbl">Revenue</span><b>${money(s.now.revenue)}</b></a>` : ''}`;
 }
 
@@ -1335,7 +1385,7 @@ function renderLive() {
   if (btn.hidden) return closeLive();
   const failed = live.missing === 'error';
   btn.classList.toggle('off', failed || !live.now);
-  btn.title = failed ? `Live visitors are unavailable: ${live.error}` : 'People on the site in the last 30 minutes';
+  btn.title = failed ? `Live visitors are unavailable: ${live.error}` : `People on the site in the last ${live.minutes >= 60 ? 'hour' : `${live.minutes} minutes`}`;
   btn.innerHTML = `<span class="live-dot"></span><b>${failed ? '—' : n(live.now)}</b><span class="lbl">active now</span>${failed ? '' : liveBars(live.perMinute.slice(-15), 'spark-bars')}`;
   if (!$('live-panel').hidden) renderLivePanel();
 }
@@ -1354,7 +1404,7 @@ function renderLivePanel() {
   // An hour when Google keeps it (GA4 360); standard properties stop at 30 minutes.
   const span = l.minutes >= 60 ? '1 hour' : `${l.minutes} minutes`;
   $('live-panel').innerHTML = `
-    <p class="lp-head">Active users in last 30 minutes${host ? ` · ${esc(host)}` : ''}</p>
+    <p class="lp-head">Active users in last ${span}${host ? ` · ${esc(host)}` : ''}</p>
     <p class="lp-big">${n(l.now)}</p>
     <p class="lp-head">Active users, last ${span} <span class="faint">${n(l.total)}</span></p>
     ${liveBars(l.perMinute, 'lp-bars')}
@@ -1381,9 +1431,9 @@ document.addEventListener('click', (e) => !e.target.closest('.live-wrap') && clo
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeLive());
 document.addEventListener('visibilitychange', () => !document.hidden && live && !live.missing && pollLive());
 
-/** The Analytics page. `#analytics/seo` opens a tab directly. */
+/** The Analytics page. `#analytics/search` opens a tab directly. */
 async function loadAnalytics(tab) {
-  if (['traffic', 'seo', 'links', 'geo'].includes(tab)) detailsTab = tab;
+  if (tab) detailsTab = anTab(tab);
   showView('analytics');
   if (!summary) await loadBarNumbers();
   renderDetails();
@@ -1423,15 +1473,26 @@ async function renderDetails() {
   for (const b of $('details-tabs').querySelectorAll('button')) b.classList.toggle('on', b.dataset.tab === detailsTab);
   for (const b of $('an-range').querySelectorAll('button')) b.classList.toggle('on', Number(b.dataset.days) === days);
   const s = summary;
-  // Links and GEO aren't tied to the 7/30-day period, so the switch hides there.
-  const dated = detailsTab === 'traffic' || detailsTab === 'seo';
+  $('details-intro').textContent = AN_TABS[detailsTab];
+  // Only visitors and search are tied to the 7/30-day period, so the switch hides elsewhere.
+  const dated = detailsTab === 'traffic' || detailsTab === 'search';
   $('an-range').hidden = !dated;
   history.replaceState(null, '', `#analytics/${detailsTab}`);
   $('details-range').textContent = s?.from && dated ? `${fmtDay(s.from)} – ${fmtDay(s.to)}` : '';
   const tab = detailsTab;
   const body = $('details-body');
+  // Rankings is built by rankings.js as its own section: lend it to this tab, and take it back before another tab draws.
+  const rk = $('view-rankings');
+  if (rk && body.contains(rk)) ((rk.hidden = true), $('col-center').appendChild(rk));
+  if (tab === 'rankings') {
+    if (!rk) return (body.innerHTML = emptyNote('Rankings could not load.'));
+    body.innerHTML = '';
+    body.appendChild(rk);
+    rk.hidden = false;
+    return window.plumeRankings.load();
+  }
   if (tab === 'traffic') return renderTraffic(body, s);
-  if (tab === 'seo') return renderSeo(body, s);
+  if (tab === 'search' || tab === 'speed' || tab === 'onpage') return renderSeo(body, s, tab);
   if (tab === 'links') return renderLinks(body);
   return renderGeo(body);
 }
@@ -1511,35 +1572,23 @@ function drawPeriodChart(box, label, rows, prior, key, s, comparable) {
   }] : [];
   if (previous.length) previous[0].label += ` (${range(previous[0].points)})`;
   drawChart(box, label, points, null, {
-    label: `${label}, current ${s.days} days (${range(points)})`, previous,
+    label: `${label}, current ${s.days} days (${range(points)})`, previous, markers: s.googleUpdates ?? [],
     comparisonNote: comparable ? '' : `Previous-period lines appear once the earlier ${s.days} days have been collected.`,
   });
 }
 
-/** SEO has three parts, one at a time: how Google search is going, how fast pages load, and what the on-page check found. */
-let seoView = pref.get('seoView', 'search');
 let searchKind = pref.get('searchKind', 'all');
 
-async function renderSeo(body, s) {
-  const [speed, check, res] = await Promise.all([
-    api('/api/speed').catch(() => ({})),
-    api('/api/audit').catch(() => ({})),
-    s?.from ? api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null) : null,
-  ]);
-  if (detailsTab !== 'seo' || summary !== s) return;
-  const audit = check.audit;
-  const slow = ['mobile', 'desktop'].some((d) => speed[d]?.headline);
-  const views = [
-    ['search', 'Search'],
-    ['speed', `Speed${slow ? ' <span class="dot-bad"></span>' : ''}`],
-    ['onpage', `On-page${audit ? ` · ${audit.score}` : ''}`],
-  ];
-  body.innerHTML = `<div class="sub-tabs">${seg('seo-view', views, seoView)}</div><div id="seo-main"></div>`;
-  onSeg('seo-view', (v) => ((seoView = v), pref.set('seoView', v), renderSeo(body, s)));
-  const main = $('seo-main');
-  if (seoView === 'speed') return seoSpeed(main, speed, () => renderSeo(body, s));
-  if (seoView === 'onpage') return seoOnPage(main, audit);
-  seoSearch(main, s, res, () => renderSeo(body, s));
+/** Google search, Speed and Page check: each its own tab, fetching only what it shows. */
+async function renderSeo(body, s, tab) {
+  const again = () => renderSeo(body, s, tab);
+  const data = await (tab === 'speed' ? api('/api/speed').catch(() => ({}))
+    : tab === 'onpage' ? api('/api/audit').catch(() => ({}))
+    : s?.from ? api(`/api/results?days=${s.days === 7 ? 7 : 30}`).catch(() => null) : null);
+  if (detailsTab !== tab || summary !== s) return;
+  if (tab === 'speed') return seoSpeed(body, data, again);
+  if (tab === 'onpage') return seoOnPage(body, data.audit);
+  seoSearch(body, s, data, again);
 }
 
 function seoSearch(main, s, res, again) {
@@ -1620,11 +1669,11 @@ function seoSpeed(main, speed, again) {
         $('seo-send').textContent = 'Added to today’s fixes';
         $('seo-send').disabled = true;
       } catch (err) {
-        alert(err.message);
+        alertBox(err.message);
       }
     };
   onSeg('seo-device', (v) => {
-    if (!speed[v]) return alert(`No ${v === 'desktop' ? 'computer' : 'phone'} speed check yet.`);
+    if (!speed[v]) return alertBox(`No ${v === 'desktop' ? 'computer' : 'phone'} speed check yet.`, { title: 'Nothing to show yet' });
     speedDevice = v;
     pref.set('speedDevice', v);
     again();
@@ -1649,7 +1698,6 @@ function seoOnPage(main, audit) {
   const count = (label, v, cls) => `<div class="op-row"><span>${label}</span><span class="chip ${cls}">${v}</span></div>`;
   main.innerHTML = `<div class="chart-card op-card">
     <div class="op-score"><b class="${band(audit.score)}">${audit.score}</b><span class="muted">On-page health · checked ${shortDay(audit.at)} · ${audit.pagesChecked} pages</span></div>
-    <p class="muted small">Checks titles, descriptions, headings, images and links on your pages. Speed is under Speed.</p>
     ${count('Critical', audit.counts.critical, 'bad')}${count('Warnings', audit.counts.warnings, 'mid')}${count('Passed', audit.counts.passed, 'good')}
     <h4 class="op-sub">Top issues</h4>
     ${rows.map(([check, g]) => `<div class="op-row"><span>${esc(NAME[check] ?? g.title)} <span class="muted small">· ${g.pages.size} ${g.pages.size === 1 ? 'page' : 'pages'}</span></span><span class="chip ${g.severity === 'critical' ? 'bad' : g.severity === 'low' ? 'muted' : 'mid'}">${LABEL[g.severity]}</span></div>`).join('') || '<p class="muted small">No problems found.</p>'}
@@ -1739,17 +1787,21 @@ function drawChart(box, title, points, avg, opts = {}) {
   }).join('');
   const step = Math.ceil(points.length / 8);
   const last = points[points.length - 1];
+  // Google updates: a thin line on the day, with the name on hover.
+  const marks = (opts.markers ?? []).map((m) => ({ ...m, i: points.findIndex((p) => p.x === m.date) })).filter((m) => m.i >= 0);
+  const markLines = marks.map((m) => `<g class="g-update"><title>${esc(m.name)} (${esc(fmtDay(m.date))})</title><line x1="${x(m.i)}" x2="${x(m.i)}" y1="${T}" y2="${y(0)}"/><text x="${x(m.i) + 3}" y="${T + 9}" class="axis">G</text></g>`).join('');
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="line-chart" role="img" aria-label="${esc(title)}">
     ${(top < 2 ? [0, 1] : [0, 0.5, 1]).map((f) => `<line x1="${L}" x2="${W}" y1="${y(top * f)}" y2="${y(top * f)}" class="grid"/><text x="${L - 6}" y="${y(top * f) + 4}" class="axis" text-anchor="end">${Math.round(top * f).toLocaleString()}</text>`).join('')}
     ${avg != null ? `<line x1="${L}" x2="${W - 8}" y1="${y(avg)}" y2="${y(avg)}" class="avg"/>` : ''}
     <path d="${area}" class="area"/><path d="${path}" class="line"/>
     ${path2 ? `<path d="${path2}" class="line second"/>` : ''}
     ${previousPaths}
+    ${markLines}
     <circle cx="${x(points.length - 1)}" cy="${y(last.y)}" r="4" class="dot"/>
     <text x="${x(points.length - 1)}" y="${y(last.y) - 9}" class="axis strong" text-anchor="end">${fmtDay(last.x)} · ${n(last.y)}</text>
     ${points.map((p, i) => ((i % step === 0 && points.length - 1 - i >= step / 2) || i === points.length - 1 ? `<text x="${x(i)}" y="${H - 4}" class="axis" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${p.x.slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/')}</text>` : '')).join('')}
   </svg>
-  <div class="chart-legend muted small"><span><span class="lg-line"></span>${esc(opts.label ?? 'This period')}</span>${opts.other ? `<span><span class="lg-line second"></span>${esc(opts.other.label)}</span>` : ''}${previous.map((s) => `<span><span class="lg-line previous${s.second ? ' second' : ''}"></span>${esc(s.label)}</span>`).join('')}${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}</div>
+  <div class="chart-legend muted small"><span><span class="lg-line"></span>${esc(opts.label ?? 'This period')}</span>${opts.other ? `<span><span class="lg-line second"></span>${esc(opts.other.label)}</span>` : ''}${previous.map((s) => `<span><span class="lg-line previous${s.second ? ' second' : ''}"></span>${esc(s.label)}</span>`).join('')}${avg != null ? `<span><span class="lg-dash"></span>Previous ${summary.days}-day average</span>` : ''}${marks.length ? `<span><span class="lg-update"></span>Google update: ${marks.map((m) => `<a href="${esc(m.source)}" target="_blank" rel="noopener">${esc(m.name)}</a>`).join(', ')}</span>` : ''}</div>
   ${opts.comparisonNote ? `<p class="muted small">${esc(opts.comparisonNote)}</p>` : ''}`;
 }
 
@@ -1762,15 +1814,15 @@ for (const b of $('an-range').querySelectorAll('button'))
   };
 // The window is resized: redraw so the charts keep their width.
 let resizeTimer;
-window.addEventListener('resize', () => (clearTimeout(resizeTimer), (resizeTimer = setTimeout(() => location.hash.startsWith('#analytics') && ['traffic', 'seo'].includes(detailsTab) && renderDetails(), 150))));
+window.addEventListener('resize', () => (clearTimeout(resizeTimer), (resizeTimer = setTimeout(() => location.hash.startsWith('#analytics') && ['traffic', 'search'].includes(detailsTab) && renderDetails(), 150))));
 
 // ---------------------------------------------------------------- tour
 
 const TOUR = [
   { el: 'col-left', title: 'What your agents know', text: 'Every agent reads these documents before it writes anything. Correct something here once and every agent gets it right from then on.' },
-  { el: 'today-card', title: 'Today', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Approve, edit, skip it for today, or mark it not useful so the agent learns.' },
+  { el: 'today-card', title: 'Dashboard', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Approve, edit, skip it for today, or mark it not useful so the agent learns.' },
   { el: 'folders', title: 'Agents', text: 'One folder per agent. “Ready” means work is waiting for you, a pulsing dot means it is working right now. Open a folder to see everything it has made.' },
-  { el: 'col-right', title: 'Ask Plume', text: 'Ask anything in plain words, or have it write something. It knows your documents, results and competitors. Changes it suggests wait for you to apply them, and anything it writes goes to Today first. Type @ to point at an agent or document.' },
+  { el: 'col-right', title: 'Ask Plume', text: 'Ask anything in plain words, or have it write something. It knows your documents, results and competitors. Changes it suggests wait for you to apply them, and anything it writes goes to the Dashboard first. Type @ to point at an agent or document.' },
   { el: 'cost-link', title: 'Cost and safety', text: 'See exactly what the AI has cost this month and set a monthly limit. Nothing is ever published until you approve it.' },
 ];
 let tourStep = 0;
@@ -1810,10 +1862,10 @@ $('onboard-form').onsubmit = (e) => {
   e.preventDefault();
   $('onboard').hidden = true;
   $('workspace').hidden = false;
-  runResearch({}).catch((err) => alert(err.message));
+  runResearch({}).catch((err) => alertBox(err.message));
 };
 $('llms-download').href = withSite('/api/llms-txt/download');
-$('regen').onclick = () => confirm('Rewrite this document from scratch? Your edits to it will be replaced.') && runResearch({ only: $('doc-body').dataset.id });
+$('regen').onclick = async () => (await confirmBox('Rewrite this document from scratch? Your edits to it will be replaced.', { title: 'Rewrite document?', ok: 'Rewrite' })) && runResearch({ only: $('doc-body').dataset.id });
 $('save').onclick = async () => {
   await api(`/api/profile/${$('doc-body').dataset.id}`, { method: 'PUT', body: JSON.stringify({ body: $('doc-body').value }) });
   await loadDoc($('doc-body').dataset.id);
@@ -1857,20 +1909,20 @@ $('draft-approve').onclick = async () => {
     await post(`/api/drafts/${currentDraft}/approve`, { target: $('draft-target').value, when: at });
     await loadDraft(currentDraft);
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   }
 };
 $('draft-reject').onclick = async () => {
   try {
     if ($('draft-reject').textContent === 'Reopen') await post(`/api/drafts/${currentDraft}/reopen`);
     else {
-      const reason = prompt('What was wrong with it? (optional — the agent will learn from this)');
+      const reason = await promptBox('What was wrong with it? The agent will learn from this.', { title: 'Not useful', placeholder: 'Optional', ok: 'Send' });
       if (reason === null) return;
       await post(`/api/drafts/${currentDraft}/not-useful`, { reason });
     }
     await loadDraft(currentDraft);
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   }
 };
 $('audit-run').onclick = runAudit;
@@ -1881,7 +1933,7 @@ $('budget-save').onclick = async () => {
     loadUsage();
     renderChrome();
   } catch (err) {
-    alert(err.message);
+    alertBox(err.message);
   }
 };
 $('tour-btn').onclick = () => showTour(0);
@@ -1893,9 +1945,9 @@ $('activity').onclick = () => {
 };
 document.addEventListener('click', (e) => !e.target.closest('.activity-wrap') && closeActivity());
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeActivity());
-// Left / right arrows move between Today cards, unless you're typing somewhere.
+// Left / right arrows move between Dashboard cards, unless you're typing somewhere.
 document.addEventListener('keydown', (e) => {
-  if ($('view-today').hidden || e.altKey || e.ctrlKey || e.metaKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if ($('view-dashboard').hidden || e.altKey || e.ctrlKey || e.metaKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
   if (e.key === 'ArrowLeft') moveToday(-1);
   else if (e.key === 'ArrowRight') moveToday(1);
 });
@@ -1905,15 +1957,15 @@ $('tour-close').onclick = endTour;
 document.addEventListener('keydown', (e) => e.key === 'Escape' && !$('tour').hidden && endTour());
 
 window.onhashchange = () => {
-  if (location.hash === '#today') draftBack = '#today';
-  route().catch((err) => alert(err.message));
+  if (location.hash === '#dashboard' || location.hash === '#today') draftBack = '#dashboard';
+  route().catch((err) => alertBox(err.message));
 };
 pollActivity();
 route()
   .then(() => {
     if (state?.site && !pref.get('tourDone', false)) setTimeout(() => showTour(0), 600);
   })
-  .catch((err) => alert(err.message));
+  .catch((err) => alertBox(err.message));
 
 // ---------------------------------------------------------------- company settings window
 
@@ -1942,8 +1994,8 @@ $('company-save').onclick = async () => {
     $('company-msg').textContent = err.message;
   }
 };
-$('company-sync').onclick = () => {
-  if (!confirm(`Re-scan ${state.site} and rewrite all product documents? Edits you made to them will be replaced.`)) return;
+$('company-sync').onclick = async () => {
+  if (!(await confirmBox(`Re-scan ${state.site} and rewrite all product documents? Edits you made to them will be replaced.`, { title: 'Sync from website?', ok: 'Sync website' }))) return;
   $('company').close();
   runResearch({});
 };
@@ -2035,7 +2087,7 @@ async function loadSettings() {
       $('g-msg').textContent = err.message;
     }
   };
-  if ($('g-out')) $('g-out').onclick = async () => confirm('Sign out of Google for this website? Saved data stays.') && (await post('/api/google/disconnect'), goTo('#settings'));
+  if ($('g-out')) $('g-out').onclick = async () => (await confirmBox('Sign out of Google for this website? Saved data stays.', { title: 'Sign out of Google?', ok: 'Sign out', danger: true })) && (await post('/api/google/disconnect'), goTo('#settings'));
 }
 
 // Which Search Console site and Analytics property this website reads from.
@@ -2101,7 +2153,7 @@ function wireIntegration(card) {
   };
   const rm = card.querySelector('[data-act="remove"]');
   if (rm) rm.onclick = async () => {
-    if (!confirm('Disconnect? The saved details are deleted from this computer.')) return;
+    if (!(await confirmBox('The saved details are deleted from this computer.', { title: 'Disconnect?', ok: 'Disconnect', danger: true }))) return;
     await api(`/api/integrations/${id}`, { method: 'DELETE' });
     publishers = [];
     await goTo('#settings');
@@ -2118,9 +2170,9 @@ $('set-name-save').onclick = async () => {
   }
 };
 $('set-remove').onclick = async () => {
-  const typed = prompt(`This deletes ${SITE}'s folder: documents, drafts, results and saved connections. AI cost records stay.\n\nType this to confirm:\n\n${SITE}`);
+  const typed = await promptBox(`This deletes ${SITE}'s folder: documents, drafts, results and saved connections. AI cost records stay.\n\nType ${SITE} below to confirm.`, { title: 'Remove this website?', placeholder: SITE, mustMatch: SITE, ok: 'Remove website', danger: true });
   if (typed === null) return;
-  if (typed.trim() !== SITE) return alert('That did not match, so nothing was removed.');
+  if (typed.trim() !== SITE) return alertBox('That did not match, so nothing was removed.', { title: 'Nothing removed' });
   await api(`/api/sites/${encodeURIComponent(SITE)}`, { method: 'DELETE' });
   location.href = '/';
 };

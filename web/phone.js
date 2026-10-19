@@ -36,7 +36,7 @@
         }
       };
       $('tg-unlink').onclick = async () => {
-        if (!confirm('Unlink this chat? Drafts stop arriving until you link again.')) return;
+        if (!(await confirmBox('Drafts stop arriving until you link again.', { title: 'Unlink this chat?', ok: 'Unlink', danger: true }))) return;
         await post('/api/telegram/unlink');
         linkCard();
       };

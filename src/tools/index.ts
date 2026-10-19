@@ -5,10 +5,12 @@ import { getSite, siteUrl } from '../sites';
 import { currentSite } from '../site';
 import { AI_CRAWLERS } from '../research/aiCrawlers';
 import { fetchPage } from '../research/fetchPage';
+import { MODELS } from '../config';
+import { ask } from '../llm/client';
 
 /**
- * Free tools: no AI, nothing saved, nothing published. Each one builds or checks something the owner then
- * copies to their site. Pre-filled from what Plume already knows about this website.
+ * Free tools & growth utilities: meta tag checker, robots.txt, sitemap, UTM links, structured data, and AI humanizer.
+ * Each one builds or checks something the owner then copies to their site or uses in their workflow.
  */
 
 // ---------------------------------------------------------------- meta tag checker
@@ -206,6 +208,169 @@ export function buildSchema(i: SchemaInput): string {
   }
   // "</" inside a script block would end it early; JSON allows the escaped form.
   return `<script type="application/ld+json">\n${JSON.stringify(data, null, 2).replace(/<\//g, '<\\/')}\n</script>\n`;
+}
+
+// ---------------------------------------------------------------- AI Humanizer
+
+export const AI_CLICHES = [
+  'delve', 'delving', 'testament', 'tapestry', 'in conclusion', 'moreover', 'furthermore',
+  'realm', 'crucial', 'beacon', 'game-changer', 'dive in', 'dive into', 'unwavering',
+  'pivotal', "in today's fast-paced world", "in today's digital landscape", "in today's world",
+  "it's important to remember", "it is crucial to", "let's explore", "seamlessly",
+  'elevate', 'foster', 'fostering', 'harness the power', 'harnessing the power',
+  'unlock the potential', 'unlocking the potential', 'embark on', 'a testament to',
+  'realm of', 'symphony', 'plethora', 'crucible', 'nestled', 'at the forefront',
+  'groundbreaking', 'revolutionize', 'paramount', 'bustling', 'vibrant', 'ever-evolving',
+];
+
+export interface AiMarkerAnalysis {
+  clichesFound: string[];
+  clicheCount: number;
+  wordCount: number;
+  sentenceCount: number;
+  avgSentenceLength: number;
+  sentenceStdDev: number;
+  /** Estimated likelihood (0–100) that the text exhibits synthetic / AI characteristics. */
+  score: number;
+}
+
+export function analyzeAiMarkers(text: string): AiMarkerAnalysis {
+  const raw = text.trim();
+  if (!raw) {
+    return { clichesFound: [], clicheCount: 0, wordCount: 0, sentenceCount: 0, avgSentenceLength: 0, sentenceStdDev: 0, score: 0 };
+  }
+  const lower = raw.toLowerCase();
+  const clichesFound = AI_CLICHES.filter((c) => {
+    const esc = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${esc}\\b`, 'i').test(lower);
+  });
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 0);
+  const sentenceCount = Math.max(1, sentences.length);
+  const sentenceLengths = sentences.map((s) => s.split(/\s+/).filter(Boolean).length);
+  const avgSentenceLength = wordCount / sentenceCount;
+
+  const variance = sentenceLengths.reduce((acc, len) => acc + Math.pow(len - avgSentenceLength, 2), 0) / sentenceCount;
+  const sentenceStdDev = Math.sqrt(variance);
+
+  // Heuristic calculation:
+  // 1. Cliché density: each cliché adds significant synthetic weight
+  const clicheWeight = Math.min(50, (clichesFound.length / Math.max(1, wordCount / 50)) * 25);
+  // 2. Uniformity penalty: low standard deviation of sentence lengths indicates robotic cadence
+  let uniformityScore = 0;
+  if (sentenceCount > 2) {
+    if (sentenceStdDev < 3) uniformityScore = 30;
+    else if (sentenceStdDev < 5) uniformityScore = 20;
+    else if (sentenceStdDev < 7) uniformityScore = 10;
+  }
+  // 3. Average sentence length penalty: AI often generates 18-28 word balanced sentences
+  let cadenceScore = 0;
+  if (avgSentenceLength >= 18 && avgSentenceLength <= 26) cadenceScore = 15;
+
+  const rawScore = Math.min(100, Math.round(clicheWeight + uniformityScore + cadenceScore));
+  const score = wordCount < 10 ? Math.min(rawScore, 30) : rawScore;
+
+  return {
+    clichesFound,
+    clicheCount: clichesFound.length,
+    wordCount,
+    sentenceCount,
+    avgSentenceLength: Math.round(avgSentenceLength * 10) / 10,
+    sentenceStdDev: Math.round(sentenceStdDev * 10) / 10,
+    score,
+  };
+}
+
+export type HumanizeTone = 'natural' | 'conversational' | 'professional' | 'casual';
+export type HumanizeLevel = 'mild' | 'moderate' | 'aggressive';
+
+export interface HumanizeInput {
+  text: string;
+  tone?: HumanizeTone;
+  level?: HumanizeLevel;
+}
+
+export interface HumanizeResult {
+  original: string;
+  humanized: string;
+  scoreBefore: number;
+  scoreAfter: number;
+  clichesFound: string[];
+  stats: {
+    wordsBefore: number;
+    wordsAfter: number;
+    sentencesBefore: number;
+    sentencesAfter: number;
+    readingTimeSec: number;
+  };
+}
+
+export async function humanizeText(input: HumanizeInput): Promise<HumanizeResult> {
+  const text = (input.text ?? '').trim();
+  if (!text) throw new Error('please enter some text to humanize');
+  if (text.length > 20000) throw new Error('text is too long (keep under 20,000 characters)');
+
+  const beforeAnalysis = analyzeAiMarkers(text);
+  const tone = input.tone ?? 'natural';
+  const level = input.level ?? 'moderate';
+
+  const toneInstructions: Record<HumanizeTone, string> = {
+    natural: 'Natural, balanced, and direct. Sounds like a thoughtful human writer communicating clearly.',
+    conversational: 'Warm, personable, and approachable. Uses conversational flow, contractions, and natural transitions.',
+    professional: 'Sharp, executive, and credible. Uses active voice and precise industry vocabulary without corporate jargon.',
+    casual: 'Relaxed, friendly, and authentic. Uses conversational phrasing, lively rhythm, and approachable idioms.',
+  };
+
+  const levelInstructions: Record<HumanizeLevel, string> = {
+    mild: 'Light touch: Remove AI clichés, smoothen transitions, and keep the existing structure mostly intact.',
+    moderate: 'Standard rewrite: Eliminate all synthetic markers, vary sentence lengths (mix punchy short sentences with natural longer ones), and replace formulaic vocabulary.',
+    aggressive: 'Deep humanization: Restructure sentences and paragraphs freely, inject varied cadence, authentic idiom, and organic rhythm to sound unmistakably human.',
+  };
+
+  const prompt = `You are a master human editor. Rewrite the following text to make it sound completely authentic, dynamic, and written by a real human, eliminating all synthetic AI markers and predictable patterns.
+
+Tone: ${toneInstructions[tone]}
+Intensity: ${levelInstructions[level]}
+
+Specific Rules:
+1. Eliminate all AI clichés and buzzwords (e.g. delve, testament, tapestry, in conclusion, furthermore, moreover, crucial, beacon, game-changer, pivotal, in today's fast-paced world, seamlessly, elevate, foster).
+2. Create dynamic burstiness: combine very short punchy statements with rhythmic compound sentences. Avoid monotonous sentence lengths.
+3. Use active voice and concrete verbs instead of passive, abstract phrasing.
+4. Preserve all original facts, data points, core message, and meaning accurately.
+5. Return ONLY the humanized text with no conversational intro, commentary, or quotes.
+
+--- TEXT TO HUMANIZE ---
+${text}`;
+
+  const res = await ask({
+    purpose: 'tools:humanizer',
+    model: MODELS.draft,
+    maxTokens: Math.max(1500, Math.ceil(text.length / 2)),
+    system: 'You are an expert human copy editor who specializes in rewriting robotic AI text into lively, natural, human prose.',
+    prompt,
+  });
+
+  const humanized = res.text.trim();
+  const afterAnalysis = analyzeAiMarkers(humanized);
+  const readingTimeSec = Math.max(1, Math.round((afterAnalysis.wordCount / 200) * 60));
+
+  return {
+    original: text,
+    humanized,
+    scoreBefore: beforeAnalysis.score,
+    scoreAfter: afterAnalysis.score,
+    clichesFound: beforeAnalysis.clichesFound,
+    stats: {
+      wordsBefore: beforeAnalysis.wordCount,
+      wordsAfter: afterAnalysis.wordCount,
+      sentencesBefore: beforeAnalysis.sentenceCount,
+      sentencesAfter: afterAnalysis.sentenceCount,
+      readingTimeSec,
+    },
+  };
 }
 
 // ---------------------------------------------------------------- what the page starts with

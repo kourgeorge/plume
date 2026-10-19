@@ -3,6 +3,7 @@ import { escapeHtml } from '../publish';
 import { aiAccess, unblockSnippet } from '../research/aiCrawlers';
 import { saveAuditHistory } from '../actions';
 import { BusinessFacts, IDENTITY_TYPES, RETIRED_RICH_RESULTS, identitySchema } from '../research/schema';
+import type { PageRow } from '../research/pageChanges';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 export type Area = 'technical' | 'on-page' | 'content' | 'performance' | 'ai-search';
@@ -29,13 +30,6 @@ export interface AuditResult {
   at: string;
 }
 
-interface PageRow {
-  url: string; status: number; title: string; meta_description: string; canonical: string;
-  h1: string; headings: string; images_missing_alt: number; has_schema: number; word_count: number;
-  /** JSON array; missing on rows from before it was recorded. */
-  schema_types?: string;
-  page_date?: string | null;
-}
 
 /** What the site check knows beyond the pages themselves. Everything is optional: a missing fact skips its check. */
 export interface SiteFacts {
@@ -51,6 +45,10 @@ export interface SiteFacts {
   business?: BusinessFacts;
   /** For the "old page" check; defaults to now. */
   now?: Date;
+  /** The whole site was read (no page limit hit), so "no page links here" can be trusted. */
+  crawlComplete?: boolean;
+  /** Does the http:// address send visitors on to https://? undefined = not checked. */
+  httpsRedirect?: boolean;
 }
 
 /** Where each builder lets the owner edit robots.txt. */
@@ -198,6 +196,52 @@ export function auditPages(pages: PageRow[], site: SiteFacts = {}): AuditResult 
       }
     }
 
+    // ---- checks on columns newer crawls record; rows from older crawls skip them ----
+    if (p.meta_robots != null) {
+      if (/noindex|\bnone\b/i.test(p.meta_robots)) {
+        add({ check: 'noindex', severity: path === '/' ? 'critical' : 'high', area: 'technical', url: p.url, title: 'Page is hidden from Google',
+          why: `This page tells Google not to list it ("${p.meta_robots}"). That is right for thank-you pages, logins and drafts, but on a page you want people to find, it can't rank at all.`,
+          steps: [
+            'If this page should be found in Google, remove the "noindex" setting.',
+            site.builder === 'WordPress' ? 'In WordPress, check the page\'s SEO box (Yoast or Rank Math → Advanced → "Allow search engines to show this page") and Settings → Reading → "Discourage search engines" (must be off).' : 'Your site builder usually calls it "Hide from search engines" in the page\'s SEO settings.',
+            'If it is meant to be hidden, mark this as fixed and it won\'t come back.',
+          ] });
+      } else passed++;
+    }
+
+    if (p.og != null) {
+      const og = JSON.parse(p.og || '{}') as { title?: string; description?: string; image?: string };
+      if (!og.title || !og.image) {
+        const missing = [!og.title && 'og:title', !og.image && 'og:image', !og.description && 'og:description'].filter(Boolean);
+        add({ check: 'missing-social-preview', severity: path === '/' ? 'medium' : 'low', area: 'on-page', url: p.url,
+          title: og.image ? 'No title for social previews' : 'No social preview image',
+          why: 'When someone shares this page on WhatsApp, Facebook, LinkedIn or X, these tags choose the picture and headline. Without them the share is a plain link, and fewer people click.',
+          steps: [`Add the missing tags (${missing.join(', ')}) to the page <head>. Many builders have a "Social share" or "Open Graph" box in the page settings.`, 'Use an image of at least 1200×630 pixels.', 'Check it at https://www.opengraph.xyz/'],
+          snippet: [
+            `<meta property="og:title" content="${escapeHtml(og.title || p.title || p.h1)}">`,
+            `<meta property="og:description" content="${escapeHtml(og.description || p.meta_description)}">`,
+            `<meta property="og:image" content="${escapeHtml(og.image || `${new URL(p.url).origin}/social-preview.jpg`)}">`,
+            `<meta property="og:url" content="${escapeHtml(p.url)}">`,
+          ].join('\n') });
+      } else passed++;
+    }
+
+    if (p.hero_lazy) {
+      add({ check: 'hero-image-lazy', severity: 'medium', area: 'performance', url: p.url, title: 'Main image loads late',
+        why: 'The first big image on the page is set to load "lazily" — only once the browser is sure it is needed. For the image visitors see first, that adds a delay before the page looks ready, and Google counts that in its speed score.',
+        steps: ['Remove loading="lazy" from the first image on the page (keep it on images further down).', 'Optionally add fetchpriority="high" to that image.'],
+        snippet: '<img src="…" alt="…" fetchpriority="high">' });
+    } else if (p.hero_lazy != null) passed++;
+
+    if (p.images_no_size != null) {
+      if (p.images_no_size >= 3) {
+        add({ check: 'images-no-size', severity: 'low', area: 'performance', url: p.url, title: `${p.images_no_size} images without a set size`,
+          why: 'Images without a width and height make the page jump as they load: the text moves while people are reading or about to tap. Google measures this as "layout shift".',
+          steps: ['Give each image its width and height (the size of the original file is fine; CSS can still resize it).'],
+          snippet: '<img src="photo.jpg" alt="…" width="1200" height="800">' });
+      } else passed++;
+    }
+
     if (p.word_count < 250 && path !== '/') {
       add({ check: 'thin-content', severity: 'low', area: 'content', url: p.url, title: `Only ${p.word_count} words`,
         why: 'Very short pages rarely rank, because they rarely answer a question fully.',
@@ -224,6 +268,51 @@ export function auditPages(pages: PageRow[], site: SiteFacts = {}): AuditResult 
         steps: ['Give each page its own title describing what is unique about it.'] });
     }
   }
+
+  // ---- pages nothing links to: Google finds them late and treats them as unimportant ----
+  if (site.crawlComplete && pages.some((p) => p.links_out != null)) {
+    const linked = new Set<string>();
+    for (const p of pages) for (const l of JSON.parse(p.links_out || '[]') as string[]) linked.add(l);
+    const live = pages.filter((p) => p.status < 400 && new URL(p.url).pathname !== '/' && !/noindex/i.test(p.meta_robots ?? ''));
+    const orphans = live.filter((p) => !linked.has(p.url));
+    for (const p of orphans.slice(0, 10)) {
+      add({ check: 'orphan-page', severity: 'medium', area: 'technical', url: p.url, title: 'No other page links here',
+        why: 'Plume only found this page through the sitemap. Pages without links from the rest of the site are found late by Google, rank as less important, and visitors can\'t reach them.',
+        steps: ['Link to it from a related page, the menu or the footer, with words that say what it is about.', 'If it is an old page nobody needs, remove it from the sitemap or redirect it.'] });
+    }
+    if (!orphans.length) passed++;
+  }
+
+  // ---- language versions (hreflang) must point at each other ----
+  const byUrl = new Map(pages.map((p) => [p.url.replace(/\/$/, ''), p]));
+  for (const p of pages) {
+    const links = JSON.parse(p.hreflang || '[]') as { lang: string; href: string }[];
+    if (!links.length) continue;
+    const problems: string[] = [];
+    const bad = links.filter((l) => l.lang.toLowerCase() !== 'x-default' && !/^[a-z]{2,3}(-([a-z]{2}|\d{3}|[a-z]{4}))?$/i.test(l.lang));
+    if (bad.length) problems.push(`Language codes Google doesn't understand: ${bad.map((l) => `"${l.lang}"`).join(', ')} (use codes like "en", "he" or "en-GB"; "uk" is Ukrainian, Britain is "en-GB").`);
+    if (!links.some((l) => l.href.replace(/\/$/, '') === p.url.replace(/\/$/, '')))
+      problems.push('The page does not list itself among its language versions — Google needs each version to include its own address too.');
+    for (const l of links) {
+      const other = byUrl.get(l.href.replace(/\/$/, ''));
+      if (!other || other.url === p.url || other.hreflang == null) continue;
+      const back = JSON.parse(other.hreflang || '[]') as { href: string }[];
+      if (!back.some((b) => b.href.replace(/\/$/, '') === p.url.replace(/\/$/, '')))
+        problems.push(`${other.url} (${l.lang}) doesn't link back to this page, so Google ignores the pair.`);
+    }
+    if (problems.length) {
+      add({ check: 'hreflang-errors', severity: 'medium', area: 'technical', url: p.url, title: 'Language versions are not linked correctly',
+        why: 'The "hreflang" tags tell Google which language version to show to whom. When they are wrong, Google may show the English page to Hebrew speakers, or ignore the tags altogether.',
+        steps: [...problems, 'Most multilingual plugins (WPML, Polylang, Weglot) and builders write these for you — check their settings rather than editing by hand.'] });
+    } else passed++;
+  }
+
+  if (site.httpsRedirect === false && pages[0]) {
+    const host = new URL(pages[0].url).host;
+    add({ check: 'no-https-redirect', severity: 'high', area: 'technical', url: `http://${host}/`, title: 'The http:// address does not move visitors to https://',
+      why: 'Old links and people typing the address can land on the unsafe http:// version. Browsers mark it "Not secure", and Google may see two copies of the site.',
+      steps: ['Turn on "Always use HTTPS" (or "Force HTTPS") in your host or site builder settings.', 'On Cloudflare: SSL/TLS → Edge Certificates → Always Use HTTPS.', `Then open http://${host}/ and check it switches to https://.`] });
+  } else if (site.httpsRedirect) passed++;
 
   if (site.robotsOk === false) {
     add({ check: 'missing-robots', severity: 'low', area: 'technical', url: pages[0]?.url ?? '', title: 'No robots.txt',
@@ -289,6 +378,16 @@ async function exists(url: string): Promise<boolean> {
   }
 }
 
+/** Does http://host/ end up on https://? Undefined when the http address can't be reached at all (nothing to fix then). */
+async function redirectsToHttps(origin: string): Promise<boolean | undefined> {
+  try {
+    const res = await fetch(origin.replace(/^https:/, 'http:'), { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+    return res.url.startsWith('https://');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Audit the latest crawl, save it, and return it. */
 export async function runAudit(origin?: string): Promise<AuditResult> {
   const pages = getDb().prepare('SELECT * FROM pages').all() as PageRow[];
@@ -299,6 +398,8 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
   const tech = getSetting<{ list: { name: string; kind: string }[] }>('techSignals', { list: [] }).list ?? [];
   site.cloudflare = tech.some((t) => t.name === 'Cloudflare');
   site.builder = tech.find((t) => t.kind === 'builder' && t.name in HEAD_CODE)?.name;
+  site.crawlComplete = getSetting<boolean>('crawlComplete', false);
+  if (origin?.startsWith('https://')) site.httpsRedirect = await redirectsToHttps(origin);
   if (origin) site.business = businessFacts(origin, pages);
   const result = auditPages(pages, site);
   setSetting('lastAudit', result);

@@ -102,7 +102,7 @@ export function registerOutreachRoutes(app: FastifyInstance): void {
     catch (err) { return bad(reply, err); }
   });
 
-  /** Write the first message for one contact now. It lands in Today for approval. */
+  /** Write the first message for one contact now. It lands on the Dashboard for approval. */
   app.post<{ Params: { id: string } }>('/api/outreach/:id/draft', async (req, reply) => {
     const c = getContact(Number(req.params.id));
     if (!c) return reply.code(404).send({ error: 'no such contact' });

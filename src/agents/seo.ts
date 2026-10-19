@@ -4,6 +4,9 @@ import { agentSystem } from '../context/profile';
 import { askJson } from '../llm/client';
 import { createDraft, usedKeywords } from '../queue';
 import { topQueries } from '../analytics/results';
+import { describeMetrics, keywordGaps, keywordMetrics, winnable, KeywordGap, KeywordMetrics } from '../seo/keywordData';
+import { log } from '../log';
+import { briefPrompt, writeBrief } from '../seo/brief';
 import type { Agent, Opportunity } from './types';
 
 const SEO_ROLE = `You are the SEO lead. You find search terms real buyers type that this business could rank for,
@@ -93,6 +96,8 @@ function sitePages(): { url: string; title: string }[] {
 
 export async function writeArticle(agent: string, opp: Opportunity, role: string, extra = '') {
   const pages = sitePages();
+  // Look at what already ranks first, so the draft fills the gap instead of repeating the top results.
+  const brief = opp.keyword ? await writeBrief(agent, opp.keyword, opp.kind) : null;
   const art = await askJson<{ title: string; slug: string; metaDescription: string; body: string }>({
     purpose: `${agent}:draft`,
     model: MODELS.draft,
@@ -104,6 +109,7 @@ export async function writeArticle(agent: string, opp: Opportunity, role: string
     prompt:
       `Write a ${opp.kind === 'landing_page' ? 'landing page' : 'blog post'} targeting "${opp.keyword ?? opp.title}".\n` +
       `Working title: ${opp.title}\nWhy: ${opp.reason}\n${extra}\n` +
+      (brief ? `${briefPrompt(brief)}\n\n` : '') +
       `${QUOTABLE_RULES}\n\n` +
       `Link to 2–4 of our own pages where it genuinely helps the reader (use these exact URLs):\n` +
       pages.map((p) => `- ${p.title}: ${p.url}`).join('\n') +
@@ -114,8 +120,44 @@ export async function writeArticle(agent: string, opp: Opportunity, role: string
     kind: opp.kind,
     title: art.title,
     body: art.body,
-    meta: { slug: art.slug, metaDescription: art.metaDescription, keyword: opp.keyword, reason: opp.reason, sources: art._sources },
+    meta: {
+      slug: art.slug, metaDescription: art.metaDescription, keyword: opp.keyword, reason: opp.reason, sources: art._sources,
+      ...(brief ? { brief: { intent: brief.intent, pageType: brief.pageType, targetWords: brief.targetWords, gaps: brief.gaps, angle: brief.angle, competitors: brief.competitors.map(({ url, position, words }) => ({ url, position, words })) } } : {}),
+    },
   });
+}
+
+/** A search competitors are on page one for and we have no page about, as something to write. */
+export function gapOpportunity(g: KeywordGap): Opportunity {
+  const who = g.competitors.slice(0, 3).map((c) => `${c.name} (#${c.position})`).join(', ');
+  const nums = describeMetrics({ keyword: g.keyword, volume: g.volume, difficulty: g.difficulty, intent: null, cpc: null });
+  return {
+    keyword: g.keyword,
+    title: g.keyword,
+    kind: 'blog_post',
+    reason: `${who} ${g.competitors.length > 1 ? 'are' : 'is'} on Google's first page for "${g.keyword}" and you don't show up at all${nums ? ` (${nums})` : ''}.`,
+    source: 'competitor-gap',
+    volume: g.volume,
+    difficulty: g.difficulty,
+  };
+}
+
+/**
+ * Check the AI's ideas against real search numbers: drop the ones nobody searches for or that are too hard
+ * for a small site, put the most searched first, and say the numbers in the reason. Without a DataForSEO
+ * login (or when the lookup fails) the ideas pass through unchanged.
+ */
+export function applyMetrics(opps: Opportunity[], metrics: Map<string, KeywordMetrics>): Opportunity[] {
+  const m = (o: Opportunity) => metrics.get(String(o.keyword ?? '').toLowerCase().trim());
+  return opps
+    .filter((o) => winnable(m(o)))
+    .map((o, i) => ({ o, i, v: m(o)?.volume ?? null }))
+    // Known volumes, largest first; unknown ones keep the AI's order after them.
+    .sort((a, b) => (a.v === null ? 1 : 0) - (b.v === null ? 1 : 0) || (b.v ?? 0) - (a.v ?? 0) || a.i - b.i)
+    .map(({ o }) => {
+      const nums = describeMetrics(m(o));
+      return nums ? { ...o, reason: `${o.reason} (${nums})`, volume: m(o)!.volume, difficulty: m(o)!.difficulty } : o;
+    });
 }
 
 export const seoAgent: Agent = {
@@ -124,8 +166,15 @@ export const seoAgent: Agent = {
   description: 'Finds search terms you can win and drafts posts and landing pages for them. Also runs the daily site check.',
   async findOpportunities({ limit = 3, onProgress }) {
     // Real data first: terms Google already shows us for, just not on page one.
-    const fromData = filterNew(searchConsoleGaps(topQueries(500)), usedKeywords(), sitePages().map((p) => p.title));
+    const titles = sitePages().map((p) => p.title);
+    const fromData = filterNew(searchConsoleGaps(topQueries(500)), usedKeywords(), titles);
     if (fromData.length >= limit) return fromData.slice(0, limit);
+    // Then what competitors rank for and we don't (filled in monthly when DataForSEO is connected).
+    const used = new Set([...usedKeywords(), ...fromData.map((o) => o.keyword!.toLowerCase())]);
+    const fromGaps = filterNew(keywordGaps(limit * 3).map(gapOpportunity), used, titles);
+    const found = [...fromData, ...fromGaps];
+    if (found.length >= limit) return found.slice(0, limit);
+    for (const o of fromGaps) used.add(o.keyword!.toLowerCase());
     onProgress?.('Looking for search terms you could rank for');
     const res = await askJson<{ opportunities: Opportunity[] }>({
       purpose: 'seo:opportunities',
@@ -139,8 +188,13 @@ export const seoAgent: Agent = {
         `and at questions buyers ask before buying. Our existing pages:\n` +
         sitePages().map((p) => `- ${p.title} (${p.url})`).join('\n'),
     });
-    const used = new Set([...usedKeywords(), ...fromData.map((o) => o.keyword!.toLowerCase())]);
-    return [...fromData, ...filterNew(res.opportunities, used, sitePages().map((p) => p.title))].slice(0, limit);
+    let ideas = filterNew(res.opportunities, used, titles);
+    try {
+      ideas = applyMetrics(ideas, (await keywordMetrics(ideas.map((o) => o.keyword ?? ''))).metrics);
+    } catch (err: any) {
+      log('warn', 'seo', `search numbers unavailable, using the ideas unchecked: ${err?.message ?? err}`);
+    }
+    return [...found, ...ideas].slice(0, limit);
   },
   draft: (opp) => writeArticle('seo', opp, SEO_ROLE),
 };

@@ -414,6 +414,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .msg { font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; animation: rise .2s ease-out; }
 .msg.you { background: var(--pill); border: 1px solid var(--line-soft); border-radius: 16px 16px 4px 16px; padding: 9px 14px; align-self: flex-end; max-width: 85%; white-space: pre-wrap; }
 .msg.assistant { padding: 0 2px; }
+.msg.no-rise { animation: none; }
 .msg.error { border: 1px solid var(--bad); border-radius: 10px; padding: 8px 12px; color: var(--bad); font-size: 13px; }
 .msg-body.doc { background: none; border: 0; border-radius: 0; box-shadow: none; padding: 0; max-width: none; line-height: 1.65; color: var(--ink); }
 .msg-body.doc > :first-child { margin-top: 0; } .msg-body.doc > :last-child { margin-bottom: 0; }
@@ -441,6 +442,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .chip-btn { background: var(--panel); color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--radius-control); font-weight: 400; font-size: 12.5px; padding: 7px 11px; text-align: left; line-height: 1.4; }
 .chip-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--faint); color: var(--ink); }
 #rk-suggest .chip-btn, .rk-form + * .chip-btn { border-radius: 999px; }
+#rk-suggest { flex-direction: row; flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .chat-form { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-2); box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
 .chat-form:focus-within { border-color: var(--faint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--line) 60%, transparent); }
 .chat-form textarea { width: 100%; resize: none; min-height: 56px; max-height: 200px; font-size: 14px; border: 0; background: transparent; padding: 14px 16px 4px; box-shadow: none !important; }
@@ -625,6 +627,10 @@ body.chat-resizing { cursor: col-resize; user-select: none; }
 /* ---- Analytics page: Traffic, SEO, Links, GEO ---- */
 .an-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 4px 0 18px; }
 .an-tabbar .tabs { margin: 0; }
+.an-intro { margin: -8px 2px 18px; font-size: 13px; }
+/* Rankings shown inside Analytics: the tab bar is its heading, so only the weeks picker stays. */
+#details-body #view-rankings .view-head .back, #details-body #view-rankings .view-head h1 { display: none; }
+#details-body #view-rankings .view-head { justify-content: flex-end; margin-top: -6px; }
 #an-range[hidden] { display: none; }
 .analytics { max-width: 1100px; }
 .analytics .stat-cards { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
@@ -683,12 +689,15 @@ body.chat-resizing { cursor: col-resize; user-select: none; }
 .funnel-arrow { color: var(--faint); font-size: 18px; }
 .bars-table td.cut { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .bars-table .flag { font-size: 15px; }
+.line-chart .g-update line { stroke: #a855f7; stroke-width: 1; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.line-chart .g-update text { fill: #a855f7; font-weight: 600; }
+.lg-update { display: inline-block; width: 0; height: 12px; border-left: 2px dotted #a855f7; margin-inline: 12px 6px; vertical-align: middle; }
+.google-update { border-inline-start: 3px solid #a855f7; padding-inline-start: 10px; }
 .line-chart .dot { fill: #3b82f6; stroke: var(--panel); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .line-chart .axis { fill: var(--muted); font-size: 11px; font-family: var(--font); }
 .details-empty { padding: 4px 2px; }
 .tabs.seg { margin: 0; }
 /* SEO's three parts: a quieter row of tabs under the main one. */
-.sub-tabs { margin: -4px 0 16px; }
 .card-note { margin: 0 0 8px; }
 .card-foot { margin: 10px 0 2px; }
 .card-foot a { color: var(--muted); text-decoration: none; } .card-foot a:hover { color: var(--ink); }
@@ -734,7 +743,7 @@ body.chat-resizing { cursor: col-resize; user-select: none; }
 }
 
 @media (max-width: 900px) {
-  .bar-links a:not(#cost-link):not([href="#settings"]):not([href="#today"]) { display: none; }
+  .bar-links a:not(#cost-link):not([href="#settings"]):not([href="#dashboard"]) { display: none; }
 }
 @media (max-width: 760px) {
   .topbar { padding: 0 10px; gap: 2px; }
@@ -936,3 +945,38 @@ label.small-btn { white-space: nowrap; }
   .link-workspace .view-head button { padding: 6px 10px; font-size: 12px; }
   .link-workspace .link-empty { padding: 18px; }
 }
+
+/* ---- one look for every pop-up ----
+   Windows (.modal: Manage Company and the alert / confirm / question boxes from dialog.js) and
+   floating panels (tour, live visitors, running now, @-mentions) share the same surface, edge, corners and shadow. */
+:root { --pop-shadow: 0 20px 50px -12px rgba(0,0,0,.3), 0 2px 6px rgba(0,0,0,.05); }
+:root[data-theme="dark"] { --pop-shadow: 0 20px 50px -12px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.03); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --pop-shadow: 0 20px 50px -12px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.03); } }
+.modal, .tour-box, .live-panel, .activity-list, .mention-box { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--pop-shadow); }
+.modal { overflow: hidden; }
+.modal[open] { animation: pop-in .18s ease-out; }
+.modal::backdrop { background: rgba(17,15,14,.4); backdrop-filter: blur(2px); animation: fade-in .18s ease-out; }
+.live-panel:not([hidden]), .activity-list:not([hidden]), .mention-box:not([hidden]) { animation: rise .16s ease-out; }
+@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .modal[open], .modal::backdrop, .tour-box, .live-panel, .activity-list, .mention-box { animation: none !important; } }
+
+/* Title bar and close button: the same in every window and the tour */
+.modal-head { padding: 12px 14px 12px 20px; }
+.modal-head h2, .tour-box h3 { font: 600 15px/1.3 var(--font-head); letter-spacing: -.01em; color: var(--ink); }
+.modal-x, .tour-x { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; opacity: 1; }
+.modal-x:hover:not(:disabled), .tour-x:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.tour-box { padding: 18px 20px 14px; }
+.tour-x { top: 10px; right: 10px; }
+
+/* Small windows: alert, confirm and "type something" boxes */
+.modal-small { width: min(440px, calc(100vw - 32px)); }
+.modal-small form { margin: 0; }
+.modal-text { color: var(--ink-2); line-height: 1.55; overflow-wrap: anywhere; }
+.modal-text p { margin: 0; } .modal-text p + p { margin-top: 10px; }
+.modal-input { width: 100%; margin-top: 14px; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: var(--panel-2); border-top: 1px solid var(--line-soft); }
+
+/* Buttons for actions that delete or disconnect something */
+button.danger { background: #c93b2c; color: #fff; }
+button.danger:hover:not(:disabled) { background: #a92f22; }

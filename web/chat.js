@@ -56,7 +56,10 @@
     }
     $('chat-title').textContent = t.thread.title || 'Ask Plume';
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-    log.innerHTML = t.items.map(renderItem).join('') + (t.thread.running ? '<div class="msg assistant thinking"><span class="dot-anim"></span> Working…</div>' : '') + (t.thread.error ? `<div class="msg error">${esc(t.thread.error)}</div>` : '');
+    const parts = t.items.map(renderItem);
+    if (t.thread.running) parts.push('<div class="msg assistant thinking"><span class="dot-anim"></span> Working…</div>');
+    if (t.thread.error) parts.push(`<div class="msg error">${esc(t.thread.error)}</div>`);
+    patchLog(parts);
     wireActions();
     if (atBottom || t.items.length !== shownCount) log.scrollTop = log.scrollHeight;
     shownCount = t.items.length;
@@ -66,6 +69,26 @@
     // Keep checking while it's answering, or while an agent it started is still working.
     const jobRunning = t.items.some((i) => (i.actions ?? []).some((a) => a.kind === 'job' && a.job?.status === 'running'));
     if (t.thread.running || jobRunning) polling = setTimeout(refreshThread, t.thread.running ? 1200 : 4000);
+  }
+
+  // Polling redraws every second or so, so only touch messages that changed. Rebuilding
+  // the whole list replays every message's fade-in and makes the chat flicker.
+  function patchLog(parts) {
+    if (log.querySelector('.chat-empty')) log.innerHTML = '';
+    const kids = log.children;
+    parts.forEach((html, i) => {
+      const old = kids[i];
+      if (old && old.dataset.html === html) return;
+      const tpl = document.createElement('template');
+      tpl.innerHTML = html.trim();
+      const node = tpl.content.firstElementChild;
+      node.dataset.html = html;
+      if (old) {
+        node.classList.add('no-rise'); // an update to a message already on screen, not a new one
+        old.replaceWith(node);
+      } else log.appendChild(node);
+    });
+    while (kids.length > parts.length) log.lastElementChild.remove();
   }
 
   const COPY_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V6a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
@@ -98,12 +121,12 @@
         <div class="act-foot">${state}</div></div>`;
     }
     if (a.kind === 'draft') {
-      const where = !a.draft ? 'removed' : a.draft.status === 'draft' ? 'waiting in Today' : a.draft.status;
+      const where = !a.draft ? 'removed' : a.draft.status === 'draft' ? 'waiting on the Dashboard' : a.draft.status;
       return `<div class="act"><div class="act-head">Draft: <a href="#draft/${a.draft?.id ?? ''}" dir="auto">${esc(a.title)}</a></div><div class="muted small">${esc(where)}</div></div>`;
     }
     if (a.kind === 'job') {
       const j = a.job;
-      const status = !j ? 'gone' : j.status === 'running' ? `working: ${j.progress ?? ''}` : j.status === 'done' ? (a.doneText ?? 'finished — new drafts are in Today') : `stopped: ${j.error ?? ''}`;
+      const status = !j ? 'gone' : j.status === 'running' ? `working: ${j.progress ?? ''}` : j.status === 'done' ? (a.doneText ?? 'finished — new drafts are on the Dashboard') : `stopped: ${j.error ?? ''}`;
       return `<div class="act"><div class="act-head">${esc(a.title)}${a.doneText ? '' : ' run'}</div><div class="muted small ${j?.status === 'running' ? 'pulse-text' : ''}">${esc(status)}</div></div>`;
     }
     if (a.kind === 'competitor')
@@ -128,7 +151,7 @@
             await refreshThread();
             if (verb === 'apply' || verb === 'undo') renderChrome(); // documents and competitors in the left column
           } catch (err) {
-            alert(err.message);
+            alertBox(err.message);
             b.disabled = false;
           }
         };
@@ -152,7 +175,7 @@
       }
       await refreshThread();
     } catch (err) {
-      alert(err.message);
+      alertBox(err.message);
       input.disabled = $('chat-send').disabled = false;
     }
   }

@@ -117,7 +117,7 @@ test('the next message tells the model what the owner did, and a stale change ca
   assert.equal(profile.readDoc('voice'), '# Brand voice\n\nEdited by hand meanwhile.\n');
 });
 
-test('drafts written in chat land in Today; added competitors can be undone', async () => {
+test('drafts written in chat land on the Dashboard; added competitors can be undone', async () => {
   script.push(
     {
       blocks: [
@@ -192,4 +192,31 @@ test('line diff collapses long unchanged runs and keeps context', () => {
   assert.equal(d[0].line, '13 unchanged lines');
   assert.deepEqual(lineDiff('a\nb', 'a\nb').map((l) => l.t), ['gap']);
   assert.deepEqual(lineDiff('', 'new').map((l) => `${l.t}:${l.line}`), ['del:', 'add:new']);
+});
+
+test('data tools read each source and say exactly what is missing', async () => {
+  const { getDb, setSetting } = require('../src/db');
+  const run = (name, input = {}) => chat.runChatTool(0, name, input, `tu_${name}`);
+  assert.match((await run('get_traffic')).content, /Google is not connected/);
+  assert.match((await run('get_connections')).content, /Google: not connected/);
+  assert.match((await run('get_rankings')).content, /No searches are tracked/);
+  assert.match((await run('get_ai_visibility')).content, /No AI visibility check/);
+  assert.match((await run('get_outreach')).content, /Creators: 0/);
+
+  // Signed in with data pulled: devices, channels and visitors come through.
+  const tokenFile = path.join(process.env.DATA_DIR, 'sites', 'test.example', 'google-token.json');
+  fs.writeFileSync(tokenFile, '{}');
+  setSetting('gscSite', 'sc-domain:test.example');
+  setSetting('lastPull', { at: '2026-10-16T00:00:00Z', searchConsole: { site: 'sc-domain:test.example', rows: 2 }, analytics: { property: null, rows: 0 } });
+  const db = getDb();
+  db.prepare('INSERT INTO gsc_device VALUES (?, ?, ?, ?, ?)').run('2026-10-14', 'MOBILE', 40, 900, 7);
+  db.prepare('INSERT INTO gsc_device VALUES (?, ?, ?, ?, ?)').run('2026-10-14', 'DESKTOP', 10, 300, 5);
+  db.prepare('INSERT INTO ga_device VALUES (?, ?, ?, ?, ?)').run('2026-10-15', 'mobile', 'Android', 70, 80);
+  db.prepare('INSERT INTO ga_device VALUES (?, ?, ?, ?, ?)').run('2026-10-15', 'desktop', 'Windows', 30, 35);
+  const traffic = (await run('get_traffic')).content;
+  assert.match(traffic, /mobile: 40 clicks \(80%\)/);
+  assert.match(traffic, /mobile \/ Android: 70 visitors \(70%\)/);
+  assert.match((await run('get_connections')).content, /signed in.*sc-domain:test\.example/);
+  assert.match((await run('get_live_visitors')).content, /no Analytics property is picked/);
+  fs.rmSync(tokenFile);
 });

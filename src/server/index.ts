@@ -30,7 +30,8 @@ import { TaskSetting, reschedule, runTask, taskDefs, taskOverview, taskSetting, 
 import {
   MENTIONS, applyAction, createThread, deleteThread, discardAction, getThread, isThreadRunning, listThreads, sendMessage, showThread, suggestions, undoAction,
 } from '../chat';
-import { rankAlertSeen } from '../today';
+import { pageChangeSeen, rankAlertSeen } from '../today';
+import { updatesBetween } from '../seo/googleUpdates';
 import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
@@ -48,8 +49,10 @@ import { actionResults, actionsNote, auditHistory, recordAction } from '../actio
 import { registerOutreachRoutes } from './outreachRoutes';
 import { registerPhoneRoutes } from './phoneRoutes';
 import { registerToolsRoutes } from './toolsRoutes';
+import { registerReportRoutes } from './reportRoutes';
 import { MAX_TRACKED, completeWeeks, listTracked, normalizeKeyword, rankingsTable, suggestKeywords, trackKeyword, untrackKeyword } from '../seo/rankings';
-import { checkSerp, clearSerpCreds, describeSerp, latestSerp, saveSerpCreds, setSerpLocation } from '../seo/serp';
+import { checkSerp, clearSerpCreds, describeSerp, latestSerp, saveSerpCreds, serpCreds, setSerpLocation } from '../seo/serp';
+import { competitorKeywordsCheckedAt, keywordGaps, keywordMetrics, refreshCompetitorKeywords, savedMetrics } from '../seo/keywordData';
 
 /** Only this machine may talk to the API: reject other Host headers (DNS rebinding) and cross-site Origins. */
 function localOnly(port: number) {
@@ -464,7 +467,10 @@ export function buildServer(port: number): FastifyInstance {
   app.get<{ Querystring: { days?: string } }>('/api/results/summary', async (req) => {
     // Lets the page say why visits are missing: not picked, or the last fetch failed.
     const last = getSetting<PullStatus | null>('lastPull', null);
-    return { ...resultsSummary(req.query.days === '30' ? 30 : 7), analytics: { property: getSetting<string | null>('ga4Property', null), error: last?.analytics?.error ?? null } };
+    const summary = resultsSummary(req.query.days === '30' ? 30 : 7);
+    // Marked on the charts, so a sudden change can be read against what Google did that day.
+    const googleUpdates = summary.from && summary.to ? updatesBetween(summary.from, summary.to) : [];
+    return { ...summary, googleUpdates, analytics: { property: getSetting<string | null>('ga4Property', null), error: last?.analytics?.error ?? null } };
   });
 
   // People on the site right now (GA4 realtime), for the top bar.
@@ -652,7 +658,36 @@ export function buildServer(port: number): FastifyInstance {
   // ---- rankings ----
   app.get<{ Querystring: { weeks?: string } }>('/api/rankings', async (req) => {
     const weeks = Math.min(52, Math.max(4, Number(req.query.weeks) || 12));
-    return { rows: rankingsTable(weeks), suggestions: suggestKeywords(10), serp: describeSerp(), hasData: completeWeeks(1).length > 0, max: MAX_TRACKED };
+    const rows = rankingsTable(weeks);
+    const metrics = savedMetrics(rows.map((r) => r.keyword));
+    return {
+      rows: rows.map((r) => ({ ...r, volume: metrics.get(r.keyword)?.volume ?? null, difficulty: metrics.get(r.keyword)?.difficulty ?? null })),
+      suggestions: suggestKeywords(10),
+      serp: describeSerp(),
+      hasData: completeWeeks(1).length > 0,
+      max: MAX_TRACKED,
+      gaps: keywordGaps(15, listTracked().map((t) => t.keyword)),
+      gapsAt: competitorKeywordsCheckedAt(),
+      hasCompetitorSites: listCompetitors().some((c) => c.url),
+    };
+  });
+  // Monthly searches and difficulty for every tracked search not looked up in the last month.
+  app.post('/api/rankings/metrics', async (_req, reply) => {
+    if (!serpCreds()) return reply.code(400).send({ error: 'add a DataForSEO login below first' });
+    try {
+      const { metrics, cost } = await keywordMetrics(listTracked().map((t) => t.keyword));
+      return { looked: metrics.size, cost };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  // What the listed competitors are on page one for.
+  app.post('/api/rankings/gaps', async (_req, reply) => {
+    if (!serpCreds()) return reply.code(400).send({ error: 'add a DataForSEO login below first' });
+    if (!listCompetitors().some((c) => c.url)) return reply.code(400).send({ error: 'add a website to at least one competitor first' });
+    const r = await refreshCompetitorKeywords();
+    if (r.failed && !r.checked) return reply.code(400).send({ error: r.failed });
+    return r;
   });
   app.post<{ Body: { keyword?: string; keywords?: string[]; source?: 'user' | 'suggested' } }>('/api/rankings', async (req, reply) => {
     const list = req.body?.keywords ?? (req.body?.keyword !== undefined ? [req.body.keyword] : []);
@@ -698,9 +733,10 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
   app.delete('/api/serp', async () => (clearSerpCreds(), describeSerp()));
+  app.post<{ Params: { id: string } }>('/api/page-changes/:id/seen', async (req) => (pageChangeSeen(Number(req.params.id)), { ok: true }));
   app.post<{ Params: { id: string } }>('/api/rank-alerts/:id/seen', async (req) => (rankAlertSeen(Number(req.params.id)), { ok: true }));
 
-  // ---- Today ----
+  // ---- Dashboard ----
   app.get('/api/today', async () => ({ items: todayFeed(), ...todayProgress() }));
   app.post<{ Params: { id: string } }>('/api/changes/:id/seen', async (req) => (changeSeen(Number(req.params.id)), { ok: true }));
   app.post<{ Body: { key?: string } }>('/api/today/skip', async (req, reply) => {
@@ -741,6 +777,7 @@ export function buildServer(port: number): FastifyInstance {
   registerOutreachRoutes(app);
   registerPhoneRoutes(app);
   registerToolsRoutes(app);
+  registerReportRoutes(app);
 
   return app;
 }

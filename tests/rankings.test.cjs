@@ -73,7 +73,7 @@ test('table shows current position and movement (positive = moved up)', () => {
   assert.equal(rows['modular desk'].serp, null);
 });
 
-test('big moves become one alert each, ignore thin data, and show in Today with drops first', () => {
+test('big moves become one alert each, ignore thin data, and show on the Dashboard with drops first', () => {
   assert.equal(r.detectMoves(), 2);
   assert.equal(r.detectMoves(), 0, 'running again must not repeat alerts');
   const alerts = r.openAlerts();

@@ -93,3 +93,17 @@ test('the page starts filled in from the site', () => {
   assert.equal(d.sitemapPages, 2);
   assert.ok(d.aiCrawlers.some((c) => c.agent === 'GPTBot'));
 });
+
+test('AI Humanizer: marker analysis detects synthetic clichés and computes score', () => {
+  const roboticText = `In today's fast-paced world, it's crucial to delve into the realm of marketing. Furthermore, this is a testament to the tapestry of innovation. Moreover, let's explore how we seamlessly elevate productivity. In conclusion, it is pivotal.`;
+  const analysis = tools.analyzeAiMarkers(roboticText);
+  assert.ok(analysis.clichesFound.length >= 4);
+  assert.ok(analysis.score > 50, `score should be high for robotic text, got ${analysis.score}`);
+  assert.ok(analysis.clichesFound.includes('delve'));
+  assert.ok(analysis.clichesFound.includes('testament'));
+
+  const humanText = `We built this tool because traditional analytics were too slow. Our team tested five approaches last month. Two worked really well. The rest failed immediately.`;
+  const humanAnalysis = tools.analyzeAiMarkers(humanText);
+  assert.equal(humanAnalysis.clichesFound.length, 0);
+  assert.ok(humanAnalysis.score < 35, `score should be low for human text, got ${humanAnalysis.score}`);
+});

@@ -12,6 +12,8 @@ import { BudgetExceeded } from './llm/budget';
 import { checkWatched, scanWatchedNews } from './watch';
 import { detectMoves, listTracked } from './seo/rankings';
 import { checkAllSerps, serpCreds } from './seo/serp';
+import { keywordMetrics, refreshCompetitorKeywords } from './seo/keywordData';
+import { listCompetitors } from './context/extra';
 import { listQuestions, runVisibilityCheck, visibilitySummary } from './geo/visibility';
 import { finishJob, startJob } from './jobs';
 import { followUpFixes } from './geo/codefix';
@@ -150,6 +152,20 @@ export function taskDefs(): TaskDef[] {
         const r = await checkAllSerps();
         if (r.failed) throw new Error(`checked ${r.checked}, then stopped: ${r.failed}`);
         return `checked ${r.checked} search(es) for $${r.cost.toFixed(3)}`;
+      },
+    },
+    {
+      id: 'keyword-data',
+      label: 'Get monthly searches and difficulty for tracked searches, and what competitors rank for (DataForSEO, about $0.03 per competitor)',
+      cron: '13 8 1 * *',
+      costsMoney: true,
+      run: async () => {
+        if (!serpCreds()) return 'skipped: DataForSEO is not connected';
+        const m = listTracked().length ? await keywordMetrics(listTracked().map((t) => t.keyword)) : { cost: 0 };
+        if (!listCompetitors().some((c) => c.url)) return `search numbers updated for $${m.cost.toFixed(3)}; no competitor websites to check`;
+        const r = await refreshCompetitorKeywords();
+        if (r.failed) throw new Error(`checked ${r.checked} competitor(s), then stopped: ${r.failed}`);
+        return `${r.keywords} competitor search(es) from ${r.checked} competitor(s), $${(m.cost + r.cost).toFixed(3)} in all`;
       },
     },
     {

@@ -7,7 +7,7 @@
   section.hidden = true;
   section.innerHTML = `
     <div class="view-head">
-      <a href="#today" class="back">← Today</a>
+      <a href="#dashboard" class="back">← Dashboard</a>
       <h1>Outreach</h1>
       <span class="actions"><button id="or-add-shortcut" class="secondary" hidden>Add page</button><button id="or-find">Find creators</button></span>
     </div>
@@ -118,12 +118,12 @@
         await api(`/api/outreach/${id}`, { method: 'PUT', body: JSON.stringify({ status: e.target.value }) });
         await refresh();
       } catch (err) {
-        alert(err.message);
+        alertBox(err.message);
       }
     };
     li.querySelector('.or-edit').onclick = () => (li.querySelector('.or-details').hidden = !li.querySelector('.or-details').hidden);
     li.querySelector('.or-remove').onclick = async () => {
-      if (!confirm('Remove from the list? Plume may find them again later.')) return;
+      if (!(await confirmBox('Plume may find them again later.', { title: 'Remove from the list?', ok: 'Remove', danger: true }))) return;
       await api(`/api/outreach/${id}`, { method: 'DELETE' });
       await refresh();
     };
@@ -135,7 +135,7 @@
         const { draftId } = await post(`/api/outreach/${id}/draft`);
         location.hash = `#draft/${draftId}`;
       } catch (err) {
-        alert(err.message);
+        alertBox(err.message);
         await refresh();
       }
     };
@@ -295,7 +295,7 @@
       ${d.meta.contactUrl ? `<p class="small muted">About: <a href="${esc(d.meta.contactUrl)}" target="_blank" rel="noopener">${esc(d.meta.contactUrl)}</a> · <a href="#outreach">Outreach list</a></p>` : ''}`;
       const s = $('draft-subject');
       // Saved on its own as it changes; the main Save button keeps the body and title.
-      if (s) s.onchange = () => api(`/api/drafts/${d.id}`, { method: 'PUT', body: JSON.stringify({ meta: { subject: s.value } }) }).catch((err) => alert(err.message));
+      if (s) s.onchange = () => api(`/api/drafts/${d.id}`, { method: 'PUT', body: JSON.stringify({ meta: { subject: s.value } }) }).catch((err) => alertBox(err.message));
       return;
     }
     if (d.kind !== 'video_script') return;

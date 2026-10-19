@@ -10,6 +10,7 @@ import { countDone, notUseful, preview } from '../today';
 import { checkTarget, getPublisher, targetsFor } from '../publish';
 import { publishOne } from '../publish/runner';
 import { PORT } from '../config';
+import { PageChangeCard, markPageChangeSent, unsentSerious } from '../research/pageChanges';
 
 /**
  * Approve drafts from your phone with a Telegram bot. Each website can have its own bot (BotFather token,
@@ -17,7 +18,7 @@ import { PORT } from '../config';
  * needs no public address — it works on a laptop.
  *
  * Safety: the bot answers one chat only — the one that sent the one-time link code shown in Settings.
- * Everyone else is ignored. Approving does exactly what the Today card does: publish to the first
+ * Everyone else is ignored. Approving does exactly what the Dashboard card does: publish to the first
  * connected place that fits the draft, or save files when none is connected.
  */
 
@@ -108,14 +109,14 @@ const KIND: Record<string, string> = {
   linkedin_post: 'LinkedIn post', facebook_post: 'Facebook post', reddit_reply: 'Reddit reply', reddit_post: 'Reddit post', outreach_email: 'Email', outreach_message: 'Message', video_script: 'Video script',
 };
 
-/** Where Approve sends a draft: the first connected place that fits, as the Today card picks; else files. */
+/** Where Approve sends a draft: the first connected place that fits, as the Dashboard card picks; else files. */
 export function defaultTarget(d: Draft, env = siteEnv()): string {
   const fits = targetsFor(d.kind);
   return fits.find((id) => id !== 'export' && getPublisher(id)?.configured(env)) ?? 'export';
 }
 
 export function dashboardUrl(draftId?: number): string {
-  return `http://127.0.0.1:${PORT}/s/${encodeURIComponent(currentSite())}/${draftId ? `#draft/${draftId}` : '#today'}`;
+  return `http://127.0.0.1:${PORT}/s/${encodeURIComponent(currentSite())}/${draftId ? `#draft/${draftId}` : '#dashboard'}`;
 }
 
 /** The text of a draft message. Short posts in full; articles as a preview — Telegram caps a message at 4096 characters. */
@@ -167,6 +168,34 @@ export async function sendNewDrafts(env = siteEnv(), max = 5): Promise<number> {
   for (const d of todo) {
     const msg = await tg(token, 'sendMessage', { chat_id: chat, text: draftMessage(d, env), parse_mode: 'HTML', reply_markup: buttons(d), link_preview_options: { is_disabled: true } });
     tdb().prepare('INSERT OR IGNORE INTO telegram_sent (draft_id, chat_id, message_id, sent_at) VALUES (?, ?, ?, ?)').run(d.id, String(chat), msg.message_id, new Date().toISOString());
+  }
+  return todo.length;
+}
+
+/** The phone message for a serious change on the site's own pages. */
+export function pageChangeMessage(c: PageChangeCard): string {
+  const serious = c.changes.filter((x) => x.severity === 'critical');
+  const site = getSite(currentSite())?.name ?? currentSite();
+  return [
+    `<b>⚠️ ${esc(site)}: something changed on your site that can hurt it in Google</b>`,
+    ...serious.slice(0, 5).map((x) => `• ${esc(new URL(x.url).pathname)} — ${esc(x.text)}`),
+    serious.length > 5 ? `…and ${serious.length - 5} more.` : '',
+    c.changes.length > serious.length ? `${c.changes.length - serious.length} smaller change(s) are on the Dashboard.` : '',
+    `If you didn't do this on purpose, check the page now: ${dashboardUrl()}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Serious page changes go to the phone once, right after the read that found them. */
+export async function sendPageChanges(env = siteEnv()): Promise<number> {
+  const token = telegramToken(env);
+  const chat = getSetting<Link | null>('telegramLink', null)?.chatId;
+  if (!token || !chat) return 0;
+  const todo = unsentSerious();
+  for (const c of todo) {
+    await tg(token, 'sendMessage', { chat_id: chat, text: pageChangeMessage(c), parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+    markPageChangeSent(c.id);
   }
   return todo.length;
 }
@@ -327,6 +356,7 @@ export async function pollOnce(waitS = 0, stop?: AbortSignal): Promise<void> {
     }
   }
   await sendNewDrafts(env);
+  await sendPageChanges(env);
   const now = new Date();
   if (now.getDay() === 1 && now.getHours() >= 8) await sendWeeklyReport(env, now);
 }

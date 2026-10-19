@@ -3,14 +3,32 @@ import { getPublisher, publishDraft } from './index';
 import { siteEnv } from '../integrations';
 import { recordAction } from '../actions';
 import { emailDailyLimit, emailsSentToday } from '../outreach/email';
+import { currentSite } from '../site';
 
 let busy = false;
+/** Drafts being published right now (site + id), so the Approve button and the minute timer never send one twice. */
+const inFlight = new Set<string>();
 
-/** Publish one approved draft to its target. Failures land in the inbox with the reason, never thrown away. */
-export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv()): Promise<Draft> {
+/** How many more posts each limited target may send today, or Infinity when it has no limit (or no login, so it's a dry run). */
+function leftToday(target: string | null, env: NodeJS.ProcessEnv, now: Date): number {
+  if (!target || !getPublisher(target)?.configured(env)) return Infinity;
+  if (target === 'reddit') return redditDailyLimit(env) - redditPostedToday(now);
+  if (target === 'email') return emailDailyLimit(env) - emailsSentToday(now);
+  return Infinity;
+}
+
+/**
+ * Publish one approved draft to its target. Failures land in the inbox with the reason, never thrown away.
+ * Reddit posts and emails over today's limit stay approved and go out on a later day.
+ */
+export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv(), now = new Date()): Promise<Draft> {
   const d = getDraft(id);
   if (!d) throw new Error(`no draft ${id}`);
   if (d.status !== 'approved') throw new Error(`draft ${id} is ${d.status}, not approved`);
+  const key = `${currentSite()}:${id}`;
+  if (inFlight.has(key)) throw new Error(`draft ${id} is already being published`);
+  if (leftToday(d.target, env, now) <= 0) return d;
+  inFlight.add(key);
   try {
     const r = await publishDraft(d, d.target ?? 'export', env);
     // Only a live page can be measured later; file exports and dry runs are not on the site.
@@ -23,6 +41,8 @@ export async function publishOne(id: number, env: NodeJS.ProcessEnv = siteEnv())
     });
   } catch (err: any) {
     return moveDraft(id, 'failed', { error: String(err?.message ?? err) });
+  } finally {
+    inFlight.delete(key);
   }
 }
 
@@ -40,24 +60,17 @@ export function redditPostedToday(now = new Date()): number {
 
 /**
  * Publish everything that is approved and due. Called every minute.
- * Approved Reddit posts and outreach emails over their daily limits stay approved and go out on a later
- * day — they don't fail. Dry runs (no credentials) don't count against the limits.
+ * Drafts over a daily limit stay approved (see `publishOne`); drafts already being published are skipped.
  */
 export async function publishDue(env: NodeJS.ProcessEnv = siteEnv(), now = new Date()): Promise<number> {
   if (busy) return 0;
   busy = true;
   try {
-    const left: Record<string, number> = {
-      reddit: redditDailyLimit(env) - redditPostedToday(now),
-      email: emailDailyLimit(env) - emailsSentToday(now),
-    };
     let sent = 0;
     for (const d of dueDrafts(now)) {
-      const capped = d.target && d.target in left && getPublisher(d.target)!.configured(env) ? d.target : null;
-      if (capped && left[capped] <= 0) continue;
-      const after = await publishOne(d.id, env);
-      if (capped && after.status === 'published') left[capped]--;
-      sent++;
+      if (inFlight.has(`${currentSite()}:${d.id}`)) continue;
+      const after = await publishOne(d.id, env, now);
+      if (after.status !== 'approved') sent++;
     }
     return sent;
   } finally {

@@ -19,7 +19,21 @@ CREATE TABLE IF NOT EXISTS pages (
   text TEXT,
   crawled_at TEXT,
   schema_types TEXT NOT NULL DEFAULT '[]', -- JSON array of structured-data @types found on the page
-  page_date TEXT          -- newest date the page states about itself (published/updated); null = none
+  page_date TEXT,         -- newest date the page states about itself (published/updated); null = none
+  meta_robots TEXT,       -- robots meta tag(s); null = not recorded (older crawl)
+  og TEXT,                -- JSON {title, description, image}
+  links_out TEXT,         -- JSON array of same-site pages it links to
+  images_no_size INTEGER,
+  hero_lazy INTEGER,
+  hreflang TEXT           -- JSON array of {lang, href}
+);
+-- What changed on the site's own pages between two reads: one row per read that found something.
+CREATE TABLE IF NOT EXISTS page_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  changes TEXT NOT NULL,  -- JSON array of {url, check, severity, text, before, after}
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  sent INTEGER NOT NULL DEFAULT 0 -- serious ones go to Telegram once
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +122,21 @@ CREATE TABLE IF NOT EXISTS gsc_country (
   country TEXT NOT NULL,
   clicks INTEGER, impressions INTEGER,
   PRIMARY KEY (date, country)
+);
+-- Google search clicks by the searcher's device: MOBILE, DESKTOP or TABLET.
+CREATE TABLE IF NOT EXISTS gsc_device (
+  date TEXT NOT NULL,
+  device TEXT NOT NULL,
+  clicks INTEGER, impressions INTEGER, position REAL,
+  PRIMARY KEY (date, device)
+);
+-- Visitors by device and system (mobile + Android, desktop + Windows, ...). Search Console can't tell Android from iPhone.
+CREATE TABLE IF NOT EXISTS ga_device (
+  date TEXT NOT NULL,
+  device TEXT NOT NULL,
+  os TEXT NOT NULL,
+  users INTEGER, sessions INTEGER,
+  PRIMARY KEY (date, device, os)
 );
 CREATE TABLE IF NOT EXISTS task_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -306,6 +335,12 @@ const siteDbs = new Map<string, Database.Database>();
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'pages', column: 'schema_types', type: "TEXT NOT NULL DEFAULT '[]'" },
   { table: 'pages', column: 'page_date', type: 'TEXT' },
+  { table: 'pages', column: 'meta_robots', type: 'TEXT' },
+  { table: 'pages', column: 'og', type: 'TEXT' },
+  { table: 'pages', column: 'links_out', type: 'TEXT' },
+  { table: 'pages', column: 'images_no_size', type: 'INTEGER' },
+  { table: 'pages', column: 'hero_lazy', type: 'INTEGER' },
+  { table: 'pages', column: 'hreflang', type: 'TEXT' },
   { table: 'competitors', column: 'socials', type: "TEXT NOT NULL DEFAULT '{}'" },
   { table: 'ga_site_daily', column: 'key_events', type: 'INTEGER' },
   { table: 'ga_site_daily', column: 'engaged_sessions', type: 'INTEGER' },

@@ -340,3 +340,31 @@ export function resultsSummary(days = 7): Summary {
   }
   return { days, from, to: from ? shift(from, days - 1) : null, now, before, daily, visits, previousDaily, previousVisits, sources, pages, compare, channels, topSources, landing, countries };
 }
+
+export interface DeviceSplit {
+  /** Search clicks by device (Search Console: mobile, desktop, tablet). Empty when not pulled yet. */
+  search: { device: string; clicks: number; impressions: number; position: number | null }[];
+  /** Visitors by device and system (Analytics: mobile + Android, desktop + Windows, ...). */
+  visits: { device: string; os: string; users: number; sessions: number }[];
+}
+
+/** Where clicks and visits come from by device, over the last `days` days each source has. */
+export function deviceSplit(days = 30): DeviceSplit {
+  const db = getDb();
+  const latest = (table: string) => (db.prepare(`SELECT MAX(date) d FROM ${table}`).get() as { d: string | null }).d;
+  const start = (table: string) => {
+    const last = latest(table);
+    return last ? shift(last, -(days - 1)) : null;
+  };
+  const gscFrom = start('gsc_device');
+  const gaFrom = start('ga_device');
+  return {
+    search: gscFrom
+      ? (db.prepare(`SELECT LOWER(device) device, SUM(clicks) clicks, SUM(impressions) impressions, SUM(position * impressions) / NULLIF(SUM(impressions), 0) position
+          FROM gsc_device WHERE date >= ? GROUP BY device ORDER BY clicks DESC`).all(gscFrom) as DeviceSplit['search'])
+      : [],
+    visits: gaFrom
+      ? (db.prepare(`SELECT device, os, SUM(users) users, SUM(sessions) sessions FROM ga_device WHERE date >= ? GROUP BY device, os ORDER BY users DESC LIMIT 15`).all(gaFrom) as DeviceSplit['visits'])
+      : [],
+  };
+}

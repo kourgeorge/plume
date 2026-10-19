@@ -419,7 +419,7 @@ export function closeStaleRuns(): void {
   db().prepare(`UPDATE ai_runs SET status = 'failed', error = 'stopped because Plume was restarted' WHERE status = 'running'`).run();
 }
 
-// ---------------------------------------------------------------- gaps → Today
+// ---------------------------------------------------------------- gaps → Dashboard
 
 export interface Gap {
   runId: number;

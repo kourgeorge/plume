@@ -64,3 +64,64 @@ test('searchConsoleGaps picks page-2 terms with real impressions', () => {
   ]);
   assert.deepEqual(out.map((o) => o.keyword), ['d', 'a']);
 });
+
+test('new checks: hidden from Google, social preview, late main image, unsized images', () => {
+  const r = auditPages([
+    page({ meta_robots: 'noindex', og: '{"title":"A"}', hero_lazy: 1, images_no_size: 4 }),
+    page({ url: 'https://a.com/b', title: 'Another good page title', canonical: 'https://a.com/b', meta_robots: '', og: '{"title":"B","image":"/i.jpg"}', hero_lazy: 0, images_no_size: 0 }),
+  ]);
+  const by = (c) => r.issues.filter((i) => i.check === c);
+  assert.equal(by('noindex')[0].severity, 'critical', 'a hidden home page is critical');
+  assert.equal(by('missing-social-preview').length, 1);
+  assert.match(by('missing-social-preview')[0].snippet, /og:image/);
+  assert.equal(by('hero-image-lazy').length, 1);
+  assert.equal(by('images-no-size').length, 1);
+  // Rows from an older crawl (no new columns) skip these checks instead of failing them.
+  assert.equal(auditPages([page()]).issues.length, 0);
+});
+
+test('pages nothing links to are reported only after a complete read', () => {
+  const pages = [
+    page({ links_out: '["https://a.com/b"]' }),
+    page({ url: 'https://a.com/b', title: 'Linked page title here', canonical: 'https://a.com/b', links_out: '[]' }),
+    page({ url: 'https://a.com/lost', title: 'Lost page title here', canonical: 'https://a.com/lost', links_out: '[]' }),
+  ];
+  assert.deepEqual(auditPages(pages, { crawlComplete: true }).issues.filter((i) => i.check === 'orphan-page').map((i) => i.url), ['https://a.com/lost']);
+  assert.equal(auditPages(pages, { crawlComplete: false }).issues.filter((i) => i.check === 'orphan-page').length, 0);
+});
+
+test('language links: a bad code and a version that does not link back are reported', () => {
+  const en = page({ hreflang: JSON.stringify([{ lang: 'en', href: 'https://a.com/' }, { lang: 'he', href: 'https://a.com/he' }, { lang: 'uk_UK', href: 'https://a.com/uk' }]) });
+  const he = page({ url: 'https://a.com/he', title: 'Hebrew page title here', canonical: 'https://a.com/he', hreflang: JSON.stringify([{ lang: 'he', href: 'https://a.com/he' }]) });
+  const issue = auditPages([en, he]).issues.find((i) => i.check === 'hreflang-errors' && i.url === 'https://a.com/');
+  assert.ok(issue);
+  assert.ok(issue.steps.some((s) => s.includes('"uk_UK"')));
+  assert.ok(issue.steps.some((s) => s.includes("doesn't link back")));
+  assert.equal(auditPages([page({ hreflang: JSON.stringify([{ lang: 'en', href: 'https://a.com/' }, { lang: 'x-default', href: 'https://a.com/' }]) })]).issues.length, 0);
+});
+
+test('http that does not move to https is reported', () => {
+  assert.ok(auditPages([page()], { httpsRedirect: false }).issues.some((i) => i.check === 'no-https-redirect'));
+  assert.equal(auditPages([page()], { httpsRedirect: true }).issues.length, 0);
+});
+
+test('brief: directories and own site are not competitors; competitor pages are read for headings', async () => {
+  const { isCompetitor, readCompetitors, briefPrompt } = require('../src/seo/brief');
+  assert.equal(isCompetitor({ url: 'https://en.wikipedia.org/x', domain: 'en.wikipedia.org' }, null), false);
+  assert.equal(isCompetitor({ url: 'https://www.amazon.co.uk/x', domain: 'www.amazon.co.uk' }, null), false);
+  assert.equal(isCompetitor({ url: 'https://dmv.ca.gov/x', domain: 'dmv.ca.gov' }, null), false);
+  assert.equal(isCompetitor({ url: 'https://a.com/x', domain: 'a.com' }, 'https://www.a.com'), false);
+  assert.equal(isCompetitor({ url: 'https://rival.com/x', domain: 'rival.com' }, null), true);
+  const html = `<html><head><title>Rival guide</title></head><body><h1>Guide</h1><h2>Step one</h2><p>${'word '.repeat(300)}</p></body></html>`;
+  const fakeFetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+  const got = await readCompetitors([
+    { position: 1, url: 'https://en.wikipedia.org/x', domain: 'en.wikipedia.org', title: 'W' },
+    { position: 2, url: 'https://rival.com/guide', domain: 'rival.com', title: 'R' },
+  ], 4, fakeFetch);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].position, 2);
+  assert.deepEqual(got[0].headings, ['Guide', '  Step one']);
+  const prompt = briefPrompt({ keyword: 'k', intent: 'informational', pageType: 'step-by-step guide', targetWords: 1200, covered: ['steps'], gaps: ['local prices'], outline: ['How long does it take?'], angle: 'First-hand.', competitors: got });
+  assert.match(prompt, /step-by-step guide/);
+  assert.match(prompt, /local prices/);
+});

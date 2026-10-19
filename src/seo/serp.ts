@@ -108,21 +108,31 @@ export function keywordLanguage(keyword: string): string {
   return byScript && contentLanguages().includes(byScript) ? byScript : contentLanguage();
 }
 
-/** One live lookup for one search. Saves the snapshot and returns it. */
-export async function checkSerp(keyword: string, fetchFn: typeof fetch = fetch): Promise<{ results: SerpResult[]; ourPosition: number | null; cost: number }> {
+/**
+ * One call to DataForSEO with the saved login. Account problems (wrong login, no money) become plain errors;
+ * a problem with the request itself is left to the caller, which reads the task status.
+ */
+export async function dfsPost(apiPath: string, task: Record<string, unknown>, fetchFn: typeof fetch = fetch): Promise<any> {
   const c = serpCreds();
-  if (!c) throw new Error('add a DataForSEO login under Rankings to see who outranks you');
+  if (!c) throw new Error('add a DataForSEO login under Rankings first');
   const auth = Buffer.from(`${c.login}:${c.password}`).toString('base64');
-  const res = await fetchFn(`${SERP_API.base}/v3/serp/google/organic/live/advanced`, {
+  const res = await fetchFn(`${SERP_API.base}${apiPath}`, {
     method: 'POST',
     headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' },
-    body: JSON.stringify([{ keyword, location_name: serpLocation(), language_code: keywordLanguage(keyword), depth: 20 }]),
+    body: JSON.stringify([task]),
     signal: AbortSignal.timeout(60_000),
   });
   const data: any = await res.json().catch(() => ({}));
   if (res.status === 401) throw new Error('DataForSEO refused the login — check the email and API password');
   if (res.status === 402 || data?.status_code === 40200) throw new Error('the DataForSEO account is out of money — top it up to keep checking');
   if (!res.ok) throw new Error(`DataForSEO said ${res.status}: ${data?.status_message ?? res.statusText}`);
+  return data;
+}
+
+/** One live lookup for one search. Saves the snapshot and returns it. */
+export async function checkSerp(keyword: string, fetchFn: typeof fetch = fetch): Promise<{ results: SerpResult[]; ourPosition: number | null; cost: number }> {
+  if (!serpCreds()) throw new Error('add a DataForSEO login under Rankings to see who outranks you');
+  const data = await dfsPost('/v3/serp/google/organic/live/advanced', { keyword, location_name: serpLocation(), language_code: keywordLanguage(keyword), depth: 20 }, fetchFn);
   const { results, cost } = parseSerp(data);
   const pos = ourPosition(results, siteUrl());
   getDb()

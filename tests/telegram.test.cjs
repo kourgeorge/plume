@@ -74,7 +74,7 @@ test('only drafts made after linking are sent, each once, with buttons', async (
   assert.deepEqual(sent.reply_markup.inline_keyboard[0].map((b) => b.callback_data), [`a:${d.id}`, `n:${d.id}`]);
 });
 
-test('a reply replaces the draft text; Approve publishes as the Today card would', async () => {
+test('a reply replaces the draft text; Approve publishes as the Dashboard card would', async () => {
   const d = q.listDrafts({ status: 'draft' }).find((x) => x.title === 'Launch day');
   const row = require('../src/db').getDb().prepare('SELECT message_id FROM telegram_sent WHERE draft_id = ?').get(d.id);
   assert.equal(await t.handleUpdate(msg(42, 'Shorter: we launch today.', { reply_to_message: { message_id: row.message_id } }), ENV), `edited draft ${d.id}`);

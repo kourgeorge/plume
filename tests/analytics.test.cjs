@@ -42,6 +42,11 @@ const server = http.createServer((req, res) => {
         { keys: ['2026-10-12'], clicks: 3, impressions: 400, position: 14 },
         { keys: ['2026-09-20'], clicks: 10, impressions: 200, position: 4 },
       ] });
+    if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query') && body.includes('"device"'))
+      return json(200, { rows: [
+        { keys: ['2026-10-13', 'MOBILE'], clicks: 25, impressions: 1000, position: 6 },
+        { keys: ['2026-10-13', 'DESKTOP'], clicks: 8, impressions: 300, position: 4 },
+      ] });
     if (req.url.startsWith('/gsc/sites/sc-domain%3Aacme.com/searchAnalytics/query') && body.includes('country'))
       return json(200, { rows: [
         { keys: ['2026-10-13', 'isr'], clicks: 18, impressions: 700 },
@@ -66,6 +71,12 @@ const server = http.createServer((req, res) => {
       if (dim) return json(200, { rows: [{ dimensionValues: [{ value: '/pricing' }], metricValues: [{ value: '2' }] }, { dimensionValues: [{ value: '/' }], metricValues: [{ value: '6' }] }] });
       return json(200, { rows: [{ metricValues: [{ value: b.minuteRanges[0].startMinutesAgo === 29 ? '3' : '8' }] }] });
     }
+    if (req.url === '/data/properties/123:runReport' && body.includes('operatingSystem'))
+      return json(200, { rows: [
+        { dimensionValues: [{ value: '20261015' }, { value: 'mobile' }, { value: 'Android' }], metricValues: [{ value: '200' }, { value: '240' }] },
+        { dimensionValues: [{ value: '20261015' }, { value: 'mobile' }, { value: 'iOS' }], metricValues: [{ value: '60' }, { value: '70' }] },
+        { dimensionValues: [{ value: '20261014' }, { value: 'desktop' }, { value: 'Windows' }], metricValues: [{ value: '90' }, { value: '100' }] },
+      ] });
     if (req.url === '/data/properties/123:runReport' && body.includes('sessionSource'))
       return json(200, { rows: [
         { dimensionValues: [{ value: '20261015' }, { value: 'Organic Search' }, { value: 'google' }], metricValues: [{ value: '280' }, { value: '330' }] },
@@ -284,7 +295,7 @@ test('SEO opportunities start from Search Console near-misses', async () => {
   assert.equal(opps[0].source, 'search-console');
 });
 
-test('live visitors: last 30 minutes, per-minute bars oldest first, busiest page first', async () => {
+test('live visitors: falls back to 30 minutes, per-minute bars oldest first, busiest page first', async () => {
   setSetting('ga4Property', '123');
   const l = await live.liveNow('page');
   assert.equal(l.missing, undefined);
@@ -306,11 +317,17 @@ test('live visitors: last 30 minutes, per-minute bars oldest first, busiest page
 test('live visitors: a GA4 360 property shows the last hour', async () => {
   realtimeKeeps = 60;
   const l = await live.liveNow('country');
-  assert.equal(l.now, 3);
+  assert.equal(l.now, 8, 'the headline uses the full hour, matching the chart total');
   assert.equal(l.total, 8);
   assert.equal(l.minutes, 60);
   assert.equal(l.perMinute.length, 60);
   assert.equal(l.perMinute[59], 3, 'this minute is last');
   assert.equal(l.perMinute[47], 5, '12 minutes ago');
   realtimeKeeps = 30;
+});
+
+test('devices: search clicks by device and visitors by device and system', () => {
+  const d = results.deviceSplit(30);
+  assert.deepEqual(d.search.map((r) => [r.device, r.clicks]), [['mobile', 25], ['desktop', 8]]);
+  assert.deepEqual(d.visits.map((r) => [r.device, r.os, r.users]), [['mobile', 'Android', 200], ['desktop', 'Windows', 90], ['mobile', 'iOS', 60]]);
 });

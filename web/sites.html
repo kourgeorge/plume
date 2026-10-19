@@ -80,6 +80,7 @@
     </details>
   </main>
 
+  <script src="/dialog.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -155,14 +156,14 @@
       for (const b of document.querySelectorAll('[data-remove]'))
         b.onclick = async () => {
           const slug = b.dataset.remove;
-          const typed = prompt(`This deletes ${slug}'s folder: its documents, drafts, results and competitor history. AI cost records stay.\n\nTo confirm, type this exactly (you can copy it):\n\n${slug}`);
+          const typed = await promptBox(`This deletes ${slug}'s folder: its documents, drafts, results and competitor history. AI cost records stay.\n\nType ${slug} below to confirm.`, { title: 'Remove this website?', placeholder: slug, mustMatch: slug, ok: 'Remove website', danger: true });
           if (typed === null) return;
-          if (typed.trim() !== slug) return alert('That did not match exactly, so nothing was removed.');
+          if (typed.trim() !== slug) return alertBox('That did not match exactly, so nothing was removed.', { title: 'Nothing removed' });
           try {
             await api(`/api/sites/${encodeURIComponent(slug)}`, { method: 'DELETE' });
             load();
           } catch (err) {
-            alert(err.message);
+            alertBox(err.message);
           }
         };
     }
@@ -274,7 +275,7 @@
       }
     };
     $('llm-clear').onclick = async () => {
-      if (!confirm('Forget the saved AI connection? Settings in .env (if any) will be used instead.')) return;
+      if (!(await confirmBox('Settings in .env (if any) will be used instead.', { title: 'Forget the AI connection?', ok: 'Forget', danger: true }))) return;
       await api('/api/llm', { method: 'DELETE' });
       $('llm-checks').innerHTML = '';
       loadLlm();
@@ -294,7 +295,7 @@
         : '<tr><td colspan="4" class="muted">Nothing logged.</td></tr>';
     }
     $('syslog').ontoggle = () => $('syslog').open && loadSyslog().catch((err) => ($('syslog-status').textContent = err.message));
-    $('syslog-site').onchange = $('syslog-problems').onchange = $('syslog-refresh').onclick = () => loadSyslog().catch((err) => alert(err.message));
+    $('syslog-site').onchange = $('syslog-problems').onchange = $('syslog-refresh').onclick = () => loadSyslog().catch((err) => alertBox(err.message));
 
     load()
       .then(() => api('/api/sites'))
