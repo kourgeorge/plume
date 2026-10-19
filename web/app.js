@@ -1447,17 +1447,21 @@ function renderTraffic(body, s) {
   const bounce = (t) => (t.engagement == null ? null : 1 - t.engagement);
   const ratioDelta = (k, now, before, lowerIsBetter) => (fair(k) ? delta(change(now, before), lowerIsBetter) : '');
 
-  // What visitors did.
+  // Three groups: how many came (above the chart), how engaged they were, and which goals they reached.
   const mins = (sec) => (sec == null ? '—' : `${Math.floor(sec / 60)}m ${String(Math.round(sec % 60)).padStart(2, '0')}s`);
-  const did = [
+  const volume = [
     s.now.users != null && statCard('Visitors', n(s.now.users), vs('users'), was('users')),
-    s.now.sessions != null && statCard('Sessions', n(s.now.sessions), vs('sessions'), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
     statCard('Returning visitors', n(s.now.returning), vs('returning'), 'had been here before'),
-    statCard('Key events', n(s.now.keyEvents), vs('keyEvents'), 'sign-ups, purchases and other goals'),
-    statCard('Avg. session', mins(s.now.avgSeconds), vs('avgSeconds'), 'time spent per visit'),
+    s.now.sessions != null && statCard('Sessions', n(s.now.sessions), vs('sessions'), s.now.users ? `${(s.now.sessions / s.now.users).toFixed(1)} per visitor` : ''),
+    s.now.views != null && statCard('Page views', n(s.now.views), vs('views'), s.now.sessions ? `${(s.now.views / s.now.sessions).toFixed(1)} per session` : ''),
+  ].filter(Boolean);
+  const engaged = [
     statCard('Engagement rate', pct(s.now.engagement), ratioDelta('engagement', s.now.engagement, s.before.engagement), 'visits that stayed 10s+, saw 2+ pages or hit a goal'),
     statCard('Bounce rate', pct(bounce(s.now)), ratioDelta('engagement', bounce(s.now), bounce(s.before), true), 'visits that left without engaging'),
-    s.now.views != null && statCard('Page views', n(s.now.views), vs('views'), s.now.sessions ? `${(s.now.views / s.now.sessions).toFixed(1)} per session` : ''),
+    statCard('Avg. session', mins(s.now.avgSeconds), vs('avgSeconds'), 'time spent per visit'),
+  ];
+  const goals = [
+    statCard('Key events', n(s.now.keyEvents), vs('keyEvents'), 'sign-ups, purchases and other goals'),
     s.now.revenue ? statCard('Revenue', money(s.now.revenue), vs('revenue'), 'GA4 conversion value') : '',
   ].filter(Boolean);
   const noNew = s.now.engagement == null && s.now.users != null;
@@ -1474,8 +1478,11 @@ function renderTraffic(body, s) {
   const sites = s.topSources.length ? bars(s.topSources, ['Site', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.channels.length ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see which sites sent them.' : gaMissing(s, 'which sites send visitors'));
   const landing = s.landing.length ? bars(s.landing, ['Page', 'Visitors'], (r) => r.users, (r) => esc(r.label)) : emptyNote(s.now.users != null ? 'Press <b>Get latest data</b> on <a href="#results">Results</a> to see where visits start.' : gaMissing(s, 'where visits start'));
 
-  body.innerHTML = `${block('Traffic over time', null, `<div class="chart-card"><div id="traffic-chart"></div></div>`)}
-    ${block('What they did on your site', null, `${noNew ? `<p class="muted small card-note">Press <b>Get latest data</b> on <a href="#results">Results</a> to fill in returning visitors, key events and engagement.</p>` : ''}<div class="stat-cards">${did.join('')}</div>`)}
+  const cards = (list) => `<div class="stat-cards">${list.join('')}</div>`;
+  const fillNote = noNew ? `<p class="muted small card-note">Press <b>Get latest data</b> on <a href="#results">Results</a> to fill in returning visitors, key events and engagement.</p>` : '';
+  body.innerHTML = `${block('How many came', null, `${cards(volume)}<div class="chart-card"><div id="traffic-chart"></div></div>`)}
+    ${fillNote}
+    <div class="an-row split">${block('How engaged they were', null, cards(engaged))}${block('Goals reached', null, cards(goals))}</div>
     <div class="an-row">${block('Where they came from', null, `<div class="chart-card">${channels}</div>`)}${block('Top sources', null, `<div class="chart-card">${sites}</div>`)}</div>
     ${block('Top landing pages', null, `<div class="chart-card">${landing}</div>`)}
     <p class="muted small">Google Analytics · ${s.compare?.visits === false ? `changes show once Plume has collected the ${s.days} days before this period` : `changes compare with the ${s.days} days before`}</p>`;
