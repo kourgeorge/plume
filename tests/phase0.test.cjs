@@ -47,16 +47,32 @@ test('scheduler: AI tasks start off, free tasks start on; settings validate', ()
   sched.stopScheduler();
 });
 
+test('scheduler: plumbing always runs and is hidden; agents are spread out; plain-words timetables', () => {
+  assert.deepEqual(sched.taskSetting('publish'), { enabled: true, cron: '* * * * *' });
+  assert.throws(() => sched.updateTask('publish', { enabled: false }), /always runs/);
+  assert.throws(() => sched.updateTask('serp', { limit: 2 }), /no drafts per run/);
+  const shown = sched.taskOverview().map((t) => t.id);
+  for (const id of ['publish', 'fix-follow-up', 'cleanup', 'rank-moves']) assert.ok(!shown.includes(id), id);
+  const agentCrons = sched.taskDefs().filter((t) => t.group === 'agents').map((t) => t.cron);
+  assert.equal(new Set(agentCrons).size, agentCrons.length, 'agents should not all start at the same minute');
+  assert.equal(sched.describeCron('13 7 * * 1-5'), 'weekdays at 07:13');
+  assert.equal(sched.describeCron('37 6 * * 1'), 'every Monday at 06:37');
+  assert.equal(sched.describeCron('13 8 1 * *'), 'on day 1 of each month at 08:13');
+  assert.equal(sched.describeCron('*/5 * * * *'), null);
+  sched.stopScheduler();
+});
+
 test('runTask records the run, logs failures, and turns "out of budget" into a skip', async () => {
-  const r = await sched.runTask('agent:seo'); // no profile yet -> fails with the reason
-  assert.equal(r.status, 'failed');
-  assert.match(r.message, /finish the business profile first/);
-  const row = getDb().prepare(`SELECT status, message FROM task_runs WHERE task = 'agent:seo' ORDER BY id DESC`).get();
-  assert.equal(row.status, 'failed');
-  assert.ok(recentLogs({ source: 'agent:seo', level: 'error' }).length >= 1);
+  const r = await sched.runTask('agent:seo'); // no profile (or no AI) yet -> skipped with the reason, no record
+  assert.equal(r.status, 'skipped');
+  assert.match(r.message, /^needs (an AI connection|the business profile finished)/);
+  assert.equal(getDb().prepare(`SELECT COUNT(*) n FROM task_runs WHERE task = 'agent:seo'`).get().n, 0);
   const skip = await sched.runTask('site-check'); // no site yet
-  assert.equal(skip.status, 'done');
-  assert.match(skip.message, /no site yet/);
+  assert.equal(skip.status, 'skipped');
+  assert.equal(skip.message, 'needs your website');
+  const t = sched.taskOverview().find((x) => x.id === 'site-check');
+  assert.equal(t.needs, 'your website');
+  assert.equal(t.when, 'every day at 05:47');
   sched.stopScheduler();
 });
 

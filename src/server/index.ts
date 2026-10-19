@@ -120,6 +120,8 @@ export function buildServer(port: number): FastifyInstance {
     try {
       const { site, created } = addSite(req.body?.url ?? '');
       const jobId = created && req.body?.research ? withSite(site.slug, () => startResearch(site.url)) : null;
+      // The new site's own timers: publishing, the daily checks.
+      if (created) reschedule();
       return { site, created, jobId };
     } catch (err: any) {
       return reply.code(400).send({ error: err.message });
@@ -266,7 +268,9 @@ export function buildServer(port: number): FastifyInstance {
   });
   app.post<{ Params: { id: string }; Body: { limit?: number } }>('/api/agents/:id/run', async (req, reply) => {
     try {
-      return { jobId: startAgentRun(req.params.id, req.body?.limit) };
+      const limit = req.body?.limit === undefined ? undefined : Number(req.body.limit);
+      if (limit !== undefined && !(Number.isInteger(limit) && limit >= 1 && limit <= 10)) return reply.code(400).send({ error: 'drafts per run must be 1–10' });
+      return { jobId: startAgentRun(req.params.id, limit) };
     } catch (err: any) {
       return reply.code(400).send({ error: err.message });
     }

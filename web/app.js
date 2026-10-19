@@ -1253,31 +1253,106 @@ function renderResults(r) {
 
 // ---------------------------------------------------------------- timetable and logs
 
-const CRON_WORDS = { '* * * * *': 'every minute', '7 6 * * *': 'daily 06:07', '47 5 * * *': 'daily 05:47', '17 6 * * *': 'daily 06:17', '53 3 * * *': 'daily 03:53', '13 7 * * 1-5': 'weekdays 07:13' };
+const TASK_GROUPS = [
+  ['agents', 'Agents', 'Each one finds work and writes drafts for you to approve. Uses AI.'],
+  ['checks', 'Free checks', 'Keep the site check, Google numbers and competitor watch up to date.'],
+  ['paid', 'Paid lookups', 'Use AI or DataForSEO, so they cost a little each run.'],
+];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Splits a timetable into "how often" and "what time" for the pickers; null when it is too unusual for them. */
+function cronParts(c) {
+  const m = c.trim().split(/\s+/);
+  if (m.length !== 5 || !/^\d+$/.test(m[0]) || !/^\d+$/.test(m[1]) || m[3] !== '*') return null;
+  const time = `${m[1].padStart(2, '0')}:${m[0].padStart(2, '0')}`;
+  if (m[2] === '*' && m[4] === '*') return { freq: 'daily', time };
+  if (m[2] === '*' && m[4] === '1-5') return { freq: 'weekdays', time };
+  if (m[2] === '*' && /^[0-6]$/.test(m[4])) return { freq: `dow-${m[4]}`, time };
+  if (m[2] === '1' && m[4] === '*') return { freq: 'monthly', time };
+  return null;
+}
+
+function buildCron(freq, time) {
+  const [h, min] = time.split(':').map(Number);
+  if (freq === 'daily') return `${min} ${h} * * *`;
+  if (freq === 'weekdays') return `${min} ${h} * * 1-5`;
+  if (freq === 'monthly') return `${min} ${h} 1 * *`;
+  return `${min} ${h} * * ${freq.slice(4)}`;
+}
+
+function whenPicker(t) {
+  const p = cronParts(t.cron);
+  if (!p) return `<span class="task-when">${esc(t.when ?? t.cron)}</span> <input class="task-cron" value="${esc(t.cron)}" data-cron="${esc(t.id)}" aria-label="Timetable for ${esc(t.label)}" title="minute hour day month weekday">`;
+  const opts = [['daily', 'Every day'], ['weekdays', 'Weekdays'], ...WEEKDAYS.map((d, i) => [`dow-${i}`, `Every ${d}`]), ['monthly', '1st of each month']];
+  return `<select data-freq="${esc(t.id)}" aria-label="How often: ${esc(t.label)}">${opts.map(([v, l]) => `<option value="${v}" ${v === p.freq ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    <input type="time" value="${p.time}" data-time="${esc(t.id)}" aria-label="Time: ${esc(t.label)}">`;
+}
+
+function taskStatus(t) {
+  if (t.running) return '<span class="dot-anim"></span>Running now';
+  if (t.needs) return `<span class="dot-muted"></span>Waiting for ${esc(t.needs)}`;
+  if (!t.enabled) return '<span class="dot-muted"></span>Off';
+  return `<span class="dot-good"></span>Next: ${esc(when(t.next))}`;
+}
+
+function taskLast(t) {
+  if (!t.last) return '<span class="muted">Never run</span>';
+  const dot = { done: 'dot-good', failed: 'dot-bad', skipped: 'dot-mid' }[t.last.status] ?? 'dot-muted';
+  const word = { done: 'Done', failed: 'Failed', skipped: 'Skipped', running: 'Stopped' }[t.last.status] ?? t.last.status;
+  return `<span class="${dot}"></span><span><strong>${word}</strong> ${esc(when(t.last.started_at))}${t.last.message ? ` — <span dir="auto">${esc(t.last.message)}</span>` : ''}</span>`;
+}
+
+function taskRow(t) {
+  return `<li class="task${t.enabled ? '' : ' off'}">
+    <label class="switch" title="${t.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-toggle="${esc(t.id)}" ${t.enabled ? 'checked' : ''} aria-label="${esc(t.label)}"><span></span></label>
+    <div class="task-main">
+      <div class="task-name">${esc(t.label)}${t.costsMoney ? ' <span class="task-cost" title="Costs money each run">$</span>' : ''}</div>
+      ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
+      <div class="task-last">${taskLast(t)}</div>
+    </div>
+    <div class="task-set">
+      <div class="task-pick">${whenPicker(t)}</div>
+      ${t.perRun ? `<label class="task-limit"><input type="number" min="1" max="10" value="${t.limit ?? 1}" data-limit="${esc(t.id)}"> draft(s) each run</label>` : ''}
+    </div>
+    <div class="task-side">
+      <div class="task-status">${taskStatus(t)}</div>
+      <button class="secondary" data-run="${esc(t.id)}" ${t.running || t.needs ? 'disabled' : ''} ${t.needs ? `title="Needs ${esc(t.needs)} first"` : ''}>${t.running ? 'Running…' : 'Run now'}</button>
+    </div>
+  </li>`;
+}
 
 async function loadLogs() {
   showView('logs');
   const [tasks, logs] = await Promise.all([api('/api/tasks'), api('/api/logs?limit=200')]);
-  $('task-rows').innerHTML = tasks
-    .map((t) => `<tr>
-      <td><input type="checkbox" data-toggle="${esc(t.id)}" ${t.enabled ? 'checked' : ''}></td>
-      <td>${esc(t.label)}${t.costsMoney ? ' <small>$</small>' : ''}${t.costsMoney ? ` <small>· <input type="number" min="1" max="10" value="${t.limit ?? 1}" data-limit="${esc(t.id)}" style="width:52px"> per run</small>` : ''}</td>
-      <td><input value="${esc(t.cron)}" data-cron="${esc(t.id)}" title="minute hour day month weekday" style="width:120px"> <small>${esc(CRON_WORDS[t.cron] ?? '')}</small></td>
-      <td>${t.running ? 'running now' : when(t.next)}</td>
-      <td>${t.last ? `<small>${when(t.last.started_at)} · ${esc(t.last.status)}</small> ${esc(t.last.message ?? '')}` : '<small>never run</small>'}</td>
-      <td><button class="secondary" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>Run now</button></td></tr>`)
-    .join('');
+  $('task-groups').innerHTML = TASK_GROUPS.map(([g, title, help]) => {
+    const rows = tasks.filter((t) => t.group === g);
+    if (!rows.length) return '';
+    const on = rows.filter((t) => t.enabled).length;
+    return `<section class="task-group"><div class="task-group-head"><h2>${title}</h2><span class="muted small">${on} of ${rows.length} on</span></div><p class="muted small">${help}</p><ul class="task-list">${rows.map(taskRow).join('')}</ul></section>`;
+  }).join('');
   $('log-rows').innerHTML = logs.map((l) => `<tr class="level-${esc(l.level)}"><td><small>${when(l.at)}</small></td><td>${esc(l.source)}</td><td dir="auto">${esc(l.message)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Nothing has happened on this website yet.</td></tr>';
   const put = (id, body) => api(`/api/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }).then(loadLogs, (e) => (alertBox(e.message), loadLogs()));
-  for (const el of document.querySelectorAll('[data-toggle]')) el.onchange = () => put(el.dataset.toggle, { enabled: el.checked });
-  for (const el of document.querySelectorAll('[data-cron]')) el.onchange = () => put(el.dataset.cron, { cron: el.value.trim() });
-  for (const el of document.querySelectorAll('[data-limit]')) el.onchange = () => put(el.dataset.limit, { limit: Number(el.value) });
-  for (const el of document.querySelectorAll('[data-run]'))
+  const q = (attr) => document.querySelectorAll(`#task-groups [data-${attr}]`);
+  for (const el of q('toggle')) el.onchange = () => put(el.dataset.toggle, { enabled: el.checked });
+  for (const el of q('cron')) el.onchange = () => put(el.dataset.cron, { cron: el.value.trim() });
+  for (const el of q('limit')) el.onchange = () => put(el.dataset.limit, { limit: Number(el.value) });
+  const retime = (id) => {
+    const freq = document.querySelector(`[data-freq="${CSS.escape(id)}"]`).value;
+    const time = document.querySelector(`[data-time="${CSS.escape(id)}"]`).value;
+    if (time) put(id, { cron: buildCron(freq, time) });
+  };
+  for (const el of q('freq')) el.onchange = () => retime(el.dataset.freq);
+  for (const el of q('time')) el.onchange = () => retime(el.dataset.time);
+  for (const el of q('run'))
     el.onclick = async () => {
       el.disabled = true;
       el.textContent = 'Running…';
-      const r = await post(`/api/tasks/${encodeURIComponent(el.dataset.run)}/run`);
-      if (r.status === 'failed') alertBox(r.message);
+      try {
+        const r = await post(`/api/tasks/${encodeURIComponent(el.dataset.run)}/run`);
+        if (r.status !== 'done') alertBox(r.message);
+      } catch (e) {
+        alertBox(e.message);
+      }
       loadLogs();
     };
 }

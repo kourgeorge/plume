@@ -19,9 +19,9 @@ Status: `[ ]` open, `[x]` fixed.
 - [ ] **M4. One hung CMS request stops scheduled publishing for every site** (no fetch timeout; `busy` is global). `src/publish/wordpress.ts`, `webflow.ts`, `hubspot.ts`, `sanity.ts`.
 - [ ] **M5. Crawl has no real limit when pages fail** (failures don't count; sitemap fully queued; no body size cap). `src/research/crawl.ts:181-201`.
 - [x] **M6. SSRF in link discovery / email finding** — AI-supplied URLs can point at localhost / internal addresses, redirects followed. `src/outreach/links.ts:132-139`, `src/outreach/creators.ts:49-63`, `src/research/fetchPage.ts:70`.
-- [ ] **M7. Adding a site doesn't call `reschedule()`** — its scheduled posts and daily pulls don't run until restart. `src/server/index.ts:119-126`.
+- [x] **M7. Adding a site doesn't call `reschedule()`** — its scheduled posts and daily pulls don't run until restart. `src/server/index.ts:119-126`.
 - [ ] **M8. Deleting a site during a running job recreates its folder** and breaks the job. `src/sites.ts:92-97`, `src/db/index.ts`.
-- [ ] **M9. Run button accepts any draft count** (`limit` unchecked; timetable allows 1–10) → large AI bill. `src/server/index.ts:266-268`.
+- [x] **M9. Run button accepts any draft count** (`limit` unchecked; timetable allows 1–10) → large AI bill. `src/server/index.ts:266-268`.
 - [ ] **M10. Paid rankings routes have no "already running" check** — double click pays twice. `src/server/index.ts:671-687`.
 - [ ] **M11. Report lists dry runs / file exports as "Live" published content.** `src/report/clientReport.ts:171-179, 504`.
 - [ ] **M12. Competitor-gap keywords dropped if they contain the first part of our hostname** (`shop.brand.com` → drops everything with "shop"). `src/seo/keywordData.ts:261`.
