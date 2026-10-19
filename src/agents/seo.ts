@@ -122,7 +122,7 @@ export async function writeArticle(agent: string, opp: Opportunity, role: string
     body: art.body,
     meta: {
       slug: art.slug, metaDescription: art.metaDescription, keyword: opp.keyword, reason: opp.reason, sources: art._sources,
-      ...(brief ? { brief: { intent: brief.intent, pageType: brief.pageType, targetWords: brief.targetWords, gaps: brief.gaps, angle: brief.angle, competitors: brief.competitors.map(({ url, position, words }) => ({ url, position, words })) } } : {}),
+      ...(brief ? { brief: { from: brief.from, intent: brief.intent, pageType: brief.pageType, targetWords: brief.targetWords, gaps: brief.gaps, angle: brief.angle, competitors: brief.competitors.map(({ url, position, words }) => ({ url, position, words })) } } : {}),
     },
   });
 }

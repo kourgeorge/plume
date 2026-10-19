@@ -1,6 +1,7 @@
 import { MODELS } from '../config';
 import { agentSystem } from '../context/profile';
-import { askJson } from '../llm/client';
+import { askJson, searchMode } from '../llm/client';
+import { localSearchAvailable, tavilySearch } from '../llm/search';
 import { log } from '../log';
 import { extractPage } from '../research/crawl';
 import { fetchHttp } from '../research/fetchPage';
@@ -10,7 +11,8 @@ import { SerpResult, checkSerp, latestSerp, serpCreds } from './serp';
 /**
  * A short plan written before an article: what kind of page Google shows for the search, what the pages already
  * on top cover, and what they all miss. The writer gets it in its prompt, so the draft fills the gap instead of
- * repeating the top results. Method from claude-seo's content-brief skill (MIT).
+ * repeating the top results. Works without DataForSEO: a plain web search finds the pages instead.
+ * Method from claude-seo's content-brief skill (MIT).
  */
 
 export interface Competitor {
@@ -33,6 +35,8 @@ export interface Brief {
   outline: string[];
   angle: string;
   competitors: Competitor[];
+  /** Where the competitor list came from, so the draft can say how solid the plan is. */
+  from: ResultsFrom;
 }
 
 /** Sites that rank for everything and aren't a business's real competition. */
@@ -50,17 +54,71 @@ export function isCompetitor(r: { url: string; domain: string }, ownSite: string
   return true;
 }
 
-/** Google's top results for the search: a saved lookup up to a month old, or a new one when DataForSEO is connected. */
-async function topResults(keyword: string): Promise<SerpResult[]> {
+export type ResultsFrom = 'google' | 'web-search' | 'none';
+
+const FIND_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['url', 'title'],
+        properties: { url: { type: 'string' }, title: { type: 'string' } },
+      },
+    },
+  },
+};
+
+const asResults = (hits: { url: string; title: string }[]): SerpResult[] =>
+  hits
+    .filter((h) => /^https?:\/\//.test(h.url))
+    .map((h, i) => ({ position: i + 1, url: h.url, domain: new URL(h.url).hostname, title: h.title }));
+
+/**
+ * The pages on top for the search, from the best source this setup has:
+ * 1. Google's own results through DataForSEO (a saved lookup up to a month old, or a new one);
+ * 2. otherwise a web search: Tavily directly (no AI cost), or the AI's own search tool;
+ * 3. nothing, when there is no way to search — the plan is then written without competitors.
+ * A source that fails falls through to the next, so a DataForSEO account out of money doesn't stop the plan.
+ */
+export async function topResults(keyword: string, agent = 'seo', env = process.env): Promise<{ results: SerpResult[]; from: ResultsFrom }> {
   const saved = latestSerp(keyword);
-  if (saved && Date.now() - new Date(saved.at).getTime() < 31 * 86400e3) return saved.results;
-  if (!serpCreds()) return [];
-  try {
-    return (await checkSerp(keyword)).results;
-  } catch (err: any) {
-    log('warn', 'brief', `couldn't look up Google results for "${keyword}": ${err?.message ?? err}`);
-    return [];
+  if (saved && Date.now() - new Date(saved.at).getTime() < 31 * 86400e3) return { results: saved.results, from: 'google' };
+  if (serpCreds()) {
+    try {
+      return { results: (await checkSerp(keyword)).results, from: 'google' };
+    } catch (err: any) {
+      log('warn', 'brief', `couldn't look up Google results for "${keyword}", using web search instead: ${err?.message ?? err}`);
+    }
   }
+  try {
+    if (localSearchAvailable(env)) {
+      const results = asResults(await tavilySearch(keyword, env, 10));
+      if (results.length) return { results, from: 'web-search' };
+    } else if (searchMode(env) === 'server') {
+      const found = await askJson<{ results: { url: string; title: string }[] }>({
+        purpose: `${agent}:brief-search`,
+        model: MODELS.score,
+        effort: 'low',
+        maxTokens: 2000,
+        webSearches: 2,
+        system: 'You find web pages. Report only addresses the search actually returned; never make one up.',
+        schema: FIND_SCHEMA,
+        prompt: `Search the web for "${keyword}" and list the top 8 results in the order the search returned them (address and page title). Leave out ads.`,
+      });
+      // Only addresses the search really returned: a made-up one would be read as a competitor.
+      const real = new Set(found._sources);
+      const results = asResults(found.results.filter((r) => real.has(r.url)));
+      if (results.length) return { results, from: 'web-search' };
+    }
+  } catch (err: any) {
+    log('warn', 'brief', `web search for "${keyword}" failed, planning without competitors: ${err?.message ?? err}`);
+  }
+  return { results: [], from: 'none' };
 }
 
 /** Open the top competitor pages (free: plain page reads) and keep their headings and length. */
@@ -98,17 +156,19 @@ const BRIEF_SCHEMA = {
  */
 export async function writeBrief(agent: string, keyword: string, kind: string): Promise<Brief | null> {
   try {
-    const competitors = await readCompetitors(await topResults(keyword));
+    const top = await topResults(keyword, agent);
+    const competitors = await readCompetitors(top.results);
+    const from: ResultsFrom = competitors.length ? top.from : 'none';
     const seen = competitors.length
-      ? `The pages Google ranks on top for "${keyword}" right now (read just now):\n` +
+      ? `The pages ${from === 'google' ? 'Google ranks' : 'a web search shows'} on top for "${keyword}" right now (read just now):\n` +
         competitors.map((c) => `#${c.position} ${c.title} — ${c.url} — ${c.words} words\n${c.headings.join('\n')}`).join('\n\n')
-      : `No ranking data is saved for "${keyword}". Search the web for it and look at the pages that come up first.`;
-    const b = await askJson<Omit<Brief, 'keyword' | 'competitors'>>({
+      : `The pages on top for "${keyword}" couldn't be read. Plan from what this kind of search usually needs, and keep "covered" and "gaps" to what you are confident of.`;
+    const b = await askJson<Omit<Brief, 'keyword' | 'competitors' | 'from'>>({
       purpose: `${agent}:brief`,
       model: MODELS.research,
       effort: 'medium',
       maxTokens: 4000,
-      webSearches: competitors.length ? 0 : 3,
+      webSearches: 0,
       system: agentSystem('You are the SEO lead planning a page before it is written. You are concrete and brief.', undefined, undefined, agent),
       schema: BRIEF_SCHEMA,
       prompt:
@@ -117,7 +177,7 @@ export async function writeBrief(agent: string, keyword: string, kind: string): 
         `List what they all cover, then what they miss that this business can genuinely add — first-hand experience, local detail, current prices, a clearer answer. ` +
         `Leave out gaps the business can't fill honestly from its profile.`,
     });
-    return { keyword, ...b, targetWords: Math.max(300, Math.min(4000, Math.round(b.targetWords))), competitors };
+    return { keyword, ...b, targetWords: Math.max(300, Math.min(4000, Math.round(b.targetWords))), competitors, from };
   } catch (err: any) {
     log('warn', 'brief', `couldn't plan "${keyword}", writing without a plan: ${err?.message ?? err}`);
     return null;
@@ -127,7 +187,7 @@ export async function writeBrief(agent: string, keyword: string, kind: string): 
 /** The brief as instructions for the writer. */
 export function briefPrompt(b: Brief): string {
   return [
-    `Plan for this page (from the pages ranking on top now):`,
+    b.from === 'none' ? `Plan for this page (no competitor pages could be read, so treat it as a starting point):` : `Plan for this page (from the pages ranking on top now):`,
     `- Searcher wants: ${b.intent}. Google rewards: ${b.pageType}. Aim for about ${b.targetWords} words.`,
     b.covered.length ? `- Must cover, like the top pages: ${b.covered.join('; ')}.` : '',
     b.gaps.length ? `- Where we beat them: ${b.gaps.join('; ')}.` : '',

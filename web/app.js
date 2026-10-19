@@ -868,7 +868,8 @@ async function loadDraft(id) {
     $('draft-brief').innerHTML = `<p class="small">Searchers want: <b>${esc(b.intent)}</b> · Google shows: <b>${esc(b.pageType)}</b> · about ${n(b.targetWords)} words</p>
       <p class="small" dir="auto">${esc(b.angle)}</p>
       ${b.gaps?.length ? `<p class="small muted">What the pages on top miss:</p><ul class="small">${b.gaps.map((g) => `<li dir="auto">${esc(g)}</li>`).join('')}</ul>` : ''}
-      ${b.competitors?.length ? `<p class="small muted">Pages it was compared with:</p><ul class="small">${b.competitors.map((c) => `<li>#${c.position} <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(sourceName(c.url))}</a> · ${n(c.words)} words</li>`).join('')}</ul>` : ''}`;
+      ${b.from === 'none' ? '<p class="small muted">No competitor pages could be read for this plan, so it is a general starting point. Connecting DataForSEO (under Rankings) or a web search makes it sharper.</p>' : ''}
+      ${b.competitors?.length ? `<p class="small muted">Pages it was compared with${b.from === 'web-search' ? ' (from a web search; DataForSEO gives Google’s exact order)' : ''}:</p><ul class="small">${b.competitors.map((c) => `<li>#${c.position} <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(sourceName(c.url))}</a> · ${n(c.words)} words</li>`).join('')}</ul>` : ''}`;
   $('draft-sources').innerHTML = (d.meta.sources ?? []).map((s) => `<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a></li>`).join('');
   if (window.plumeOutreach) window.plumeOutreach.wireDraft(d);
 }

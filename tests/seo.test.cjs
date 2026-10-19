@@ -125,3 +125,32 @@ test('brief: directories and own site are not competitors; competitor pages are 
   assert.match(prompt, /step-by-step guide/);
   assert.match(prompt, /local prices/);
 });
+
+test('brief without DataForSEO: a web search finds the top pages; with no search at all it still plans, marked as such', async () => {
+  const http = require('node:http');
+  const { topResults } = require('../src/seo/brief');
+  const { serpCreds } = require('../src/seo/serp');
+  assert.equal(serpCreds({}), null, 'this test needs no DataForSEO login');
+  let asked = null;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      asked = JSON.parse(body).query;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ results: [{ title: 'Rival guide', url: 'https://rival.com/guide', content: '' }, { title: 'Wiki', url: 'https://en.wikipedia.org/w', content: '' }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const env = { TAVILY_API_KEY: 'k', TAVILY_API_URL: `http://127.0.0.1:${server.address().port}/search`, PLUME_SEARCH: 'local' };
+  try {
+    const got = await topResults('desk cable organizer', 'seo', env);
+    assert.equal(asked, 'desk cable organizer');
+    assert.equal(got.from, 'web-search');
+    assert.deepEqual(got.results.map((r) => [r.position, r.domain]), [[1, 'rival.com'], [2, 'en.wikipedia.org']]);
+  } finally {
+    server.close();
+  }
+  const none = await topResults('desk cable organizer', 'seo', { PLUME_SEARCH: 'off' });
+  assert.deepEqual(none, { results: [], from: 'none' });
+});
