@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import type Anthropic from '@anthropic-ai/sdk';
+import { fetchPublic } from '../research/safeUrl';
 
 /**
  * Web search that Plume runs itself, for gateways that don't forward Anthropic's server-side
@@ -53,11 +54,8 @@ export async function tavilySearch(query: string, env = process.env, limit = 6):
 const PAGE_LIMIT = 30_000;
 
 export async function readPage(url: string): Promise<string> {
-  const u = new URL(url);
-  if (!/^https?:$/.test(u.protocol)) throw new Error('only http(s) pages can be read');
-  // Never let a model-chosen URL reach this machine or the local network.
-  if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[?::1\]?$)/.test(u.hostname)) throw new Error('local addresses are not allowed');
-  const res = await fetch(u, { headers: { 'user-agent': 'PlumeBot/0.1 (+local marketing assistant)' }, redirect: 'follow', signal: AbortSignal.timeout(20_000) });
+  // Never let a model-chosen URL (or a redirect from it) reach this machine or the local network.
+  const res = await fetchPublic(url, { headers: { 'user-agent': 'PlumeBot/0.1 (+local marketing assistant)' }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`page returned ${res.status}`);
   const $ = cheerio.load(await res.text());
   $('script, style, noscript, svg').remove();
