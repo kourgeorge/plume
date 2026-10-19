@@ -66,7 +66,7 @@
         <div class="folders" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
           <div class="card" style="text-align:center;padding:16px;">
             <div class="muted small" style="font-weight:600;text-transform:uppercase;">Overall Health</div>
-            <div style="font-size:28px;font-weight:700;margin:4px 0" class="${scoreClass(data.executiveSummary.overallScore)}">${data.executiveSummary.overallScore}/100</div>
+            <div style="font-size:28px;font-weight:700;margin:4px 0" class="${scoreClass(data.executiveSummary.overallScore)}">${data.executiveSummary.overallScore !== null ? `${data.executiveSummary.overallScore}/100` : '—'}</div>
           </div>
           <div class="card" style="text-align:center;padding:16px;">
             <div class="muted small" style="font-weight:600;text-transform:uppercase;">Technical SEO</div>

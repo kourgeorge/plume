@@ -42,7 +42,9 @@ test('client report: builds structured data across SEO, GEO, analytics and outpu
   const data = buildClientReportData();
   assert.equal(data.siteName, 'Acme Corp');
   assert.equal(data.siteUrl, 'https://acme.example');
-  assert.ok(typeof data.executiveSummary.overallScore === 'number');
+  const { overallScore, seoScore, geoScore } = data.executiveSummary;
+  if (seoScore === null && geoScore === null) assert.equal(overallScore, null, 'no made-up score when nothing was measured');
+  else assert.equal(typeof overallScore, 'number');
   assert.ok(data.searchAnalytics);
   assert.ok(data.seoAudit);
   assert.ok(data.geoVisibility);

@@ -53,7 +53,8 @@ export interface ClientReportData {
   siteUrl: string;
   settings: ReportSettings;
   executiveSummary: {
-    overallScore: number;
+    /** Average of the scores we have; null when no audit or AI-visibility check has run yet. */
+    overallScore: number | null;
     seoScore: number | null;
     geoScore: number | null;
     totalClicks: number;
@@ -180,7 +181,7 @@ export function buildClientReportData(custom?: Partial<ReportSettings>): ClientR
 
   // 6. Overall Composite Score
   const scoreParts = [seoAudit.score, geoVisibility.score].filter((s): s is number => s !== null);
-  const overallScore = scoreParts.length ? Math.round(scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) : (seoAudit.score ?? 85);
+  const overallScore = scoreParts.length ? Math.round(scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) : null;
 
   const competitors = listCompetitors().map((c) => ({ name: c.name, url: c.url ?? null }));
 
@@ -365,7 +366,7 @@ export function renderReportHtml(data: ClientReportData): string {
     <div class="grid">
       <div class="card metric-card">
         <div class="metric-lbl">Overall Marketing Health</div>
-        <div class="metric-val ${scoreClass(data.executiveSummary.overallScore)}">${data.executiveSummary.overallScore}/100</div>
+        <div class="metric-val ${scoreClass(data.executiveSummary.overallScore)}">${data.executiveSummary.overallScore !== null ? `${data.executiveSummary.overallScore}/100` : '—'}</div>
       </div>
       <div class="card metric-card">
         <div class="metric-lbl">Technical SEO Score</div>
@@ -524,7 +525,7 @@ export function renderReportMarkdown(data: ClientReportData): string {
     `**Prepared by:** ${data.settings.agencyName}${data.settings.preparedBy ? ` (${data.settings.preparedBy})` : ''}`,
     '',
     '## Executive Summary',
-    `- **Overall Marketing Health Score:** ${data.executiveSummary.overallScore}/100`,
+    `- **Overall Marketing Health Score:** ${data.executiveSummary.overallScore !== null ? `${data.executiveSummary.overallScore}/100` : 'not measured yet'}`,
     `- **Technical SEO Score:** ${data.executiveSummary.seoScore !== null ? `${data.executiveSummary.seoScore}/100` : 'N/A'}`,
     `- **AI Engine (GEO) Visibility:** ${data.executiveSummary.geoScore !== null ? `${data.executiveSummary.geoScore}%` : 'N/A'}`,
     `- **Organic Search Clicks (28d):** ${data.executiveSummary.totalClicks}`,
