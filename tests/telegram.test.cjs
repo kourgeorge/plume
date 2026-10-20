@@ -91,6 +91,19 @@ test('Not useful turns a draft down and teaches the agent', async () => {
   assert.match(await t.handleUpdate(tap(42, `n:${d.id}`), ENV), /Marked not useful/);
   assert.equal(q.getDraft(d.id).status, 'rejected');
   assert.match(require('../src/feedback').feedbackNote('seo') ?? '', /Meh post/);
+  assert.doesNotMatch(require('../src/feedback').feedbackNote('seo') ?? '', /from Telegram/, 'the button is not a reason');
+});
+
+test('a reply to "what was wrong?" becomes the reason', async () => {
+  const d = q.createDraft({ agent: 'seo', kind: 'blog_post', title: 'Thin post', body: 'x', meta: { keyword: 'widgets' } });
+  await t.handleUpdate(tap(42, `n:${d.id}`), ENV);
+  const ask = calls.filter((c) => c.method === 'sendMessage').at(-1);
+  assert.match(ask.body.text, /What was wrong with it\?/);
+  assert.ok(ask.body.reply_markup.force_reply);
+  const askId = nextId - 1;
+  assert.match(await t.handleUpdate(msg(42, 'Too short, no examples', { reply_to_message: { message_id: askId } }), ENV), /Thanks/);
+  assert.match(require('../src/feedback').feedbackNote('seo'), /"Thin post" \(blog_post, keyword "widgets"\): Too short, no examples/);
+  assert.equal(q.getDraft(d.id).body, 'x', "the reason doesn't replace the draft text");
 });
 
 test('Approve goes to a connected place that fits the draft', () => {

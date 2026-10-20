@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { recordFeedback } from './feedback';
 
 export type DraftStatus = 'draft' | 'approved' | 'published' | 'failed' | 'rejected';
 
@@ -131,7 +132,10 @@ export function moveDraft(
       id,
     );
   logEvent(id, d.status, to, fields.note ?? fields.error ?? undefined);
-  return getDraft(id)!;
+  const after = getDraft(id)!;
+  // A first approval teaches the agent what the user wants; a retry after a failed publish is not a new decision.
+  if (d.status === 'draft' && to === 'approved') recordFeedback(after, 'approved');
+  return after;
 }
 
 /** Approved items whose time has come (or that have no time set). */

@@ -64,9 +64,30 @@ test('"not useful" rejects, counts as done, and the agent sees it next time', ()
   assert.equal(q.getDraft(d.id).status, 'rejected');
   assert.ok(today.todayProgress().doneToday >= 1);
   const role = agentSystem('You write.', fs.mkdtempSync(path.join(os.tmpdir(), 'p-')), null, 'writer').at(-1).text;
-  assert.match(role, /turned down[\s\S]*"Ten reasons to love widgets": too generic, our buyers are experts/);
+  assert.match(role, /turned down[\s\S]*"Ten reasons to love widgets" \(article\): too generic, our buyers are experts/);
   const other = agentSystem('You write.', fs.mkdtempSync(path.join(os.tmpdir(), 'p-')), null, 'seo').at(-1).text;
   assert.doesNotMatch(other, /Ten reasons/, "one agent's rejections shouldn't reach another");
+});
+
+test('approving teaches the agent too, including what the user changed', () => {
+  const d = q.createDraft({ agent: 'approver', kind: 'article', title: 'How experts pick widgets', body: '# Title\n\nWidgets are great.\nBuy now!', meta: { keyword: 'pick widgets', reason: 'people search this' } });
+  q.editDraft(d.id, { body: '# Title\n\nWidgets are great.\nSee the guide.' });
+  q.moveDraft(d.id, 'approved', { target: 'export' });
+  const role = agentSystem('You write.', fs.mkdtempSync(path.join(os.tmpdir(), 'p-')), null, 'approver').at(-1).text;
+  assert.match(role, /approved these[\s\S]*"How experts pick widgets" \(article, keyword "pick widgets"\)/);
+  assert.match(role, /- Buy now!\n\s+\+ See the guide\./);
+  // A retry after a failed publish is not a second approval.
+  q.moveDraft(d.id, 'failed', { error: 'down' });
+  q.moveDraft(d.id, 'approved');
+  const n = require('../src/db').getDb().prepare(`SELECT COUNT(*) AS n FROM feedback WHERE draft_id = ? AND verdict = 'approved'`).get(d.id).n;
+  assert.equal(n, 1);
+});
+
+test('a rejection keeps the keyword and why the agent wrote it', () => {
+  const d = q.createDraft({ agent: 'rej', kind: 'article', title: 'Cheap widgets', body: 'x', meta: { keyword: 'cheap widgets', reason: 'high volume' } });
+  today.notUseful(d.id, '');
+  const role = agentSystem('You write.', fs.mkdtempSync(path.join(os.tmpdir(), 'p-')), null, 'rej').at(-1).text;
+  assert.match(role, /"Cheap widgets" \(article, keyword "cheap widgets"\): \(no reason given\)\n\s+You had written it because: high volume/);
 });
 
 test('jobs left running by a restart are closed on startup', () => {

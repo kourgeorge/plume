@@ -7,6 +7,7 @@ import { currentSite, withSite } from '../site';
 import { getSite, listSites } from '../sites';
 import { Draft, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { countDone, notUseful, preview } from '../today';
+import { addReason } from '../feedback';
 import { checkTarget, getPublisher, targetsFor } from '../publish';
 import { publishOne } from '../publish/runner';
 import { PORT } from '../config';
@@ -33,6 +34,13 @@ CREATE TABLE IF NOT EXISTS telegram_sent (
   PRIMARY KEY (chat_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS telegram_sent_by_draft ON telegram_sent (draft_id);
+-- "Why wasn't it useful?" questions: a reply to one is the reason for that draft.
+CREATE TABLE IF NOT EXISTS telegram_why (
+  chat_id TEXT NOT NULL,
+  message_id INTEGER NOT NULL,
+  draft_id INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, message_id)
+);
 `;
 const ready = new WeakSet<Database.Database>();
 function tdb(): Database.Database {
@@ -229,11 +237,13 @@ export async function handleUpdate(update: any, env = siteEnv()): Promise<string
     const [, action, idText] = /^([an]):(\d+)$/.exec(String(cb.data ?? '')) ?? [];
     const d = idText ? getDraft(Number(idText)) : undefined;
     let note: string;
+    let turnedDown = false;
     if (!d) note = 'That draft no longer exists.';
     else if (d.status !== 'draft' && d.status !== 'failed') note = `Already ${d.status}.`;
     else if (action === 'n') {
-      notUseful(d.id, 'from Telegram');
-      note = 'Marked not useful. The agent will learn from it.';
+      notUseful(d.id, null);
+      note = 'Marked not useful.';
+      turnedDown = true;
     } else {
       const target = defaultTarget(d, env);
       checkTarget(d.kind, target);
@@ -253,12 +263,28 @@ export async function handleUpdate(update: any, env = siteEnv()): Promise<string
     if (d && cb.message?.message_id) {
       await tg(token, 'editMessageReplyMarkup', { chat_id: fromChat, message_id: cb.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
     }
+    if (d && turnedDown) {
+      // Ask why, as its own message, so a reply to it can be matched back to this draft.
+      const ask = await tg(token, 'sendMessage', {
+        chat_id: fromChat,
+        text: `Marked "${esc(d.title)}" not useful. What was wrong with it? Reply to this message and the agent will learn from it.`,
+        parse_mode: 'HTML',
+        reply_markup: { force_reply: true, input_field_placeholder: 'What was wrong with it?' },
+      }).catch((err) => (log('warn', 'telegram', `couldn't ask why: ${err.message}`), null));
+      if (ask?.message_id) tdb().prepare('INSERT OR IGNORE INTO telegram_why (chat_id, message_id, draft_id) VALUES (?, ?, ?)').run(fromChat, ask.message_id, d.id);
+      return note;
+    }
     return reply(token, fromChat, note, cb.message?.message_id);
   }
 
   if (typeof msg?.text === 'string') {
     // A reply to a draft message replaces that draft's text.
     const to = msg.reply_to_message?.message_id;
+    const why = to ? (tdb().prepare('SELECT draft_id FROM telegram_why WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined) : undefined;
+    if (why) {
+      const ok = getDraft(why.draft_id)?.status === 'rejected' && addReason(why.draft_id, msg.text);
+      return reply(token, fromChat, ok ? 'Thanks. The agent will keep that in mind.' : "That draft isn't turned down any more, so I didn't save it.");
+    }
     if (to) {
       const row = tdb().prepare('SELECT draft_id FROM telegram_sent WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined;
       const d = row ? getDraft(row.draft_id) : undefined;

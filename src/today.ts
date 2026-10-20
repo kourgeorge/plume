@@ -113,7 +113,7 @@ export function notUseful(draftId: number, reason: string | null): void {
   const d = getDraft(draftId);
   if (!d) throw new Error(`no draft ${draftId}`);
   moveDraft(draftId, 'rejected', { note: reason ? `not useful: ${reason}` : 'not useful' });
-  recordFeedback(d.agent, d.title, reason);
+  recordFeedback(d, 'rejected', reason);
   countDone();
 }
 

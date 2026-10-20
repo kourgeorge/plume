@@ -399,15 +399,22 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
 
-  for (const [action, to] of [['reject', 'rejected'], ['reopen', 'draft']] as const) {
-    app.post<{ Params: { id: string } }>(`/api/drafts/:id/${action}`, async (req, reply) => {
-      try {
-        return moveDraft(Number(req.params.id), to);
-      } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
-      }
-    });
-  }
+  // Turning a draft down always goes through "not useful", so the agent learns from it.
+  app.post<{ Params: { id: string }; Body: { reason?: string } }>('/api/drafts/:id/reject', async (req, reply) => {
+    try {
+      notUseful(Number(req.params.id), req.body?.reason ?? null);
+      return getDraft(Number(req.params.id));
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/reopen', async (req, reply) => {
+    try {
+      return moveDraft(Number(req.params.id), 'draft');
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
 
   // ---- Google: Search Console + Analytics ----
   const redirectUri = `http://127.0.0.1:${port}/api/google/callback`;

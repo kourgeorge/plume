@@ -151,7 +151,13 @@ CREATE TABLE IF NOT EXISTS feedback (
   at TEXT NOT NULL,
   agent TEXT NOT NULL,
   title TEXT NOT NULL,
-  reason TEXT                     -- the user's words, may be empty
+  reason TEXT,                    -- the user's words, may be empty
+  verdict TEXT NOT NULL DEFAULT 'rejected', -- rejected | approved
+  draft_id INTEGER,
+  kind TEXT,
+  keyword TEXT,
+  why TEXT,                       -- the agent's own reason for writing it
+  edits TEXT                      -- approved only: a few lines the user changed, or null
 );
 CREATE TABLE IF NOT EXISTS competitors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,6 +352,12 @@ const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'ga_site_daily', column: 'engaged_sessions', type: 'INTEGER' },
   { table: 'ga_site_daily', column: 'avg_seconds', type: 'REAL' },
   { table: 'ga_site_daily', column: 'new_users', type: 'INTEGER' },
+  { table: 'feedback', column: 'verdict', type: "TEXT NOT NULL DEFAULT 'rejected'" },
+  { table: 'feedback', column: 'draft_id', type: 'INTEGER' },
+  { table: 'feedback', column: 'kind', type: 'TEXT' },
+  { table: 'feedback', column: 'keyword', type: 'TEXT' },
+  { table: 'feedback', column: 'why', type: 'TEXT' },
+  { table: 'feedback', column: 'edits', type: 'TEXT' },
 ];
 
 function open(file: string, schema: string): Database.Database {
