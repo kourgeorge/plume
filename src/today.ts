@@ -1,6 +1,6 @@
 import { getSetting, setSetting } from './db';
 import { listDrafts, getDraft, moveDraft, Draft } from './queue';
-import { AuditResult, Issue, dailyFixes, markFixDone, pinIssue, pinnedIssues } from './agents/seoAudit';
+import { AuditResult, Issue, markFixDone, openFixes, pinIssue, pinnedIssues } from './agents/seoAudit';
 import { recordFixDone } from './actions';
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
@@ -11,7 +11,7 @@ import { Gap, gapDone, openGaps } from './geo/visibility';
 import { PageChangeCard, dismissPageChange, openPageChanges } from './research/pageChanges';
 import { GoogleUpdate, updatesNear } from './seo/googleUpdates';
 
-/** One card on the Dashboard. `key` is stable so skips survive a refresh. */
+/** One card on the Dashboard. `key` is stable so "Later" survives a refresh. */
 export type TodayItem =
   | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number; targets: string[] } }
   | { key: string; kind: 'fix'; score: number; fix: Issue }
@@ -27,15 +27,14 @@ function todayStr(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** Keys skipped today. A new day starts with a clean slate. */
-function skipped(now: Date): Set<string> {
-  const s = getSetting<{ day: string; keys: string[] }>('todaySkips', { day: '', keys: [] });
-  return new Set(s.day === todayStr(now) ? s.keys : []);
+/** Cards put off with "Later", and when. They stay on the Dashboard, just behind everything else. */
+function later(): Record<string, string> {
+  return getSetting<Record<string, string>>('laterItems', {});
 }
 
+/** Move a card to the back of the list. Nothing leaves the Dashboard until it is dealt with. */
 export function skipItem(key: string, now = new Date()): void {
-  const keys = [...skipped(now), key];
-  setSetting('todaySkips', { day: todayStr(now), keys });
+  setSetting('laterItems', { ...later(), [key]: now.toISOString() });
 }
 
 /** First words of a draft for the card, without Markdown symbols. */
@@ -50,16 +49,14 @@ export function preview(markdown: string, words = 45): string {
 }
 
 /**
- * Everything waiting for the user today, best first:
- * critical fixes and serious speed problems, then drafts (those built on real search data first), then smaller fixes.
+ * Everything waiting for the user, best first: critical fixes and serious speed problems, then drafts
+ * (those built on real search data first), then smaller fixes. Cards put off with "Later" go to the back,
+ * in the order they were put off.
  */
 export function todayFeed(now = new Date()): TodayItem[] {
-  const skip = skipped(now);
   const items: TodayItem[] = [];
 
-  const audit = getSetting<AuditResult | null>('lastAudit', null);
-  const fixes = audit ? dailyFixes(audit, 2, todayStr(now)) : [];
-  for (const f of fixes) items.push({ key: `fix:${f.id}`, kind: 'fix', score: SEVERITY_SCORE[f.severity], fix: f });
+  for (const f of openFixes(getSetting<AuditResult | null>('lastAudit', null))) items.push({ key: `fix:${f.id}`, kind: 'fix', score: SEVERITY_SCORE[f.severity], fix: f });
 
   const speed = lastSpeed();
   const handled = getSetting<Record<string, string>>('speedHandled', {});
@@ -94,10 +91,13 @@ export function todayFeed(now = new Date()): TodayItem[] {
     items.push({ key: `draft:${d.id}`, kind: 'draft', score: fromData ? 80 : 60, draft: { ...rest, preview: preview(body), words: body.split(/\s+/).length, targets: targetsFor(d.kind) } });
   }
 
-  return items.filter((i) => !skip.has(i.key)).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  const put = later();
+  // Forget "Later" marks for cards that are gone, so the list doesn't grow forever.
+  if (Object.keys(put).some((k) => !items.some((i) => i.key === k))) setSetting('laterItems', Object.fromEntries(items.filter((i) => put[i.key]).map((i) => [i.key, put[i.key]])));
+  return items.sort((a, b) => (put[a.key] ?? '').localeCompare(put[b.key] ?? '') || b.score - a.score || a.key.localeCompare(b.key));
 }
 
-/** Count of what's left, for the header ("3 of 7 done today"). */
+/** How many cards are waiting, and how many were dealt with today. */
 export function todayProgress(now = new Date()): { left: number; doneToday: number } {
   const done = getSetting<{ day: string; n: number }>('todayDone', { day: '', n: 0 });
   return { left: todayFeed(now).length, doneToday: done.day === todayStr(now) ? done.n : 0 };
@@ -125,7 +125,7 @@ export function fixDone(id: string): void {
   countDone();
 }
 
-/** Speed panel → today's fixes. Returns the fix, or null when that report has nothing to fix. */
+/** Speed panel → the Dashboard's fixes. Returns the fix, or null when that report has nothing to fix. */
 export function sendSpeedToSeo(strategy: Strategy): Issue | null {
   const r = lastSpeed()[strategy];
   const issue = r && speedIssue(r);

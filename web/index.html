@@ -267,6 +267,7 @@
             <label>When <input id="draft-when" type="datetime-local" title="Leave empty to publish right away"></label>
           </div>
           <div class="draft-buttons">
+            <button id="draft-delete" class="secondary danger-text">Delete</button>
             <button id="draft-reject" class="secondary">Not useful</button>
             <button id="draft-save" class="secondary">Save edits</button>
             <button id="draft-approve">Approve</button>
@@ -285,9 +286,9 @@
         <div id="audit-empty" class="muted">No check yet. It runs every morning, or click the button.</div>
         <div id="audit-body" hidden>
           <div class="score-row"><div class="score"><span id="audit-score"></span><small>/ 100</small></div><div id="audit-counts" class="muted"></div></div>
-          <h2>Today's fixes</h2>
+          <h2>Still to fix</h2>
           <div id="audit-today"></div>
-          <h2>Everything else</h2>
+          <h2>Everything the last check found</h2>
           <div class="table-wrap" role="region" aria-label="Site audit problems" tabindex="0"><table><thead><tr><th>Severity</th><th>Problem</th><th>Page</th></tr></thead><tbody id="audit-rows"></tbody></table></div>
           <h2>Fixed</h2>
           <p class="muted">Fixes you marked done, whether the next check still finds them, and the page's Google numbers before and after.</p>

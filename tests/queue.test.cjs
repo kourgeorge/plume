@@ -71,3 +71,15 @@ test('usedKeywords ignores rejected drafts', () => {
   assert.ok(used.has('alpha'));
   assert.ok(!used.has('beta'));
 });
+
+test('a deleted draft is gone with its history; a published one cannot be deleted', () => {
+  const d = mk('delete-me');
+  q.deleteDraft(d.id);
+  assert.equal(q.getDraft(d.id), undefined);
+  assert.equal(q.draftEvents(d.id).length, 0);
+  assert.ok(!q.usedKeywords().has('delete-me'));
+  const p = mk();
+  q.moveDraft(p.id, 'approved', { target: 'export' });
+  q.moveDraft(p.id, 'published');
+  assert.throws(() => q.deleteDraft(p.id), /already published/);
+});

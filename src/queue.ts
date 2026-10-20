@@ -156,6 +156,20 @@ export function usedKeywords(): Set<string> {
   return new Set(rows.map((r) => (JSON.parse(r.meta).keyword ?? '').toLowerCase().trim()).filter(Boolean));
 }
 
+/**
+ * Throw a draft away for good: no learning, no history. Published ones stay, since they are on the site
+ * and the results pages measure them. What the agent learned from earlier decisions is kept.
+ */
+export function deleteDraft(id: number): void {
+  const d = mustGet(id);
+  if (d.status === 'published') throw new Error('already published; it stays so its results can be tracked');
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare('DELETE FROM draft_events WHERE draft_id = ?').run(id);
+    db.prepare('DELETE FROM drafts WHERE id = ?').run(id);
+  })();
+}
+
 function mustGet(id: number): Draft {
   const d = getDraft(id);
   if (!d) throw new Error(`no draft ${id}`);

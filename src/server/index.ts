@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
+import fs from 'fs';
 import path from 'path';
 import { getDb, getGlobalDb, getSetting, setSetting } from '../db';
 import { currentSite, isSlug, withSite } from '../site';
@@ -16,16 +17,18 @@ import { startResearch } from '../research/profile';
 import { getJob, runningJob, runningJobs } from '../jobs';
 import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
-import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
+import { AuditResult, openFixes, runAudit } from '../agents/seoAudit';
 import { runRedScan, RedScanResult } from '../red/scan';
 import { lastCompliance } from '../compliance/scan';
 import { REGIONS } from '../compliance/regions';
 import { redPermissions } from '../red/ownership';
 import { openDependencyFix } from '../red/depFix';
-import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
+import { DraftMeta, DraftStatus, deleteDraft, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher, pageHtml, stripTitle, targetsFor } from '../publish';
 import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
 import { publishOne } from '../publish/runner';
+import { imageDir } from '../social/images';
+import { videoDir } from '../video/agent';
 import { authUrl, disconnectGoogle, finishAuth, googleConfigured, googleConnected } from '../analytics/google';
 import { PullStatus, listAnalyticsProperties, listSearchConsoleSites, matchSite, pullAll } from '../analytics/pull';
 import { LIVE_BREAKDOWNS, LiveBreakdown, liveNow } from '../analytics/live';
@@ -229,8 +232,8 @@ export function buildServer(port: number): FastifyInstance {
       {
         id: 'site-check',
         label: 'Site fixes',
-        description: "Your site's technical health, with two fixes a day.",
-        waiting: audit ? dailyFixes(audit).length : 0,
+        description: "Your site's technical health, and every problem still to fix.",
+        waiting: openFixes(audit ?? null).length,
         total: audit?.issues.length ?? 0,
         working: runningJob('task:site-check')?.progress ?? null,
         needs: siteUrl() ? null : 'your website',
@@ -284,11 +287,11 @@ export function buildServer(port: number): FastifyInstance {
   // ---- daily site check ----
   app.get('/api/audit', async () => {
     const audit = getSetting<AuditResult | null>('lastAudit', null);
-    return { audit, today: audit ? dailyFixes(audit) : [], history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
+    return { audit, today: openFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
   });
   app.post('/api/audit', async () => {
     const audit = await runAudit(siteUrl() ?? undefined);
-    return { audit, today: dailyFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
+    return { audit, today: openFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
   });
   app.post<{ Body: { id?: string } }>('/api/audit/done', async (req, reply) => {
     if (!req.body?.id) return reply.code(400).send({ error: 'id required' });
@@ -414,6 +417,18 @@ export function buildServer(port: number): FastifyInstance {
     } catch (err: any) {
       return reply.code(400).send({ error: err.message });
     }
+  });
+
+  // Gone for good, with its photos and video. Unlike "not useful", the agent learns nothing from it.
+  app.delete<{ Params: { id: string } }>('/api/drafts/:id', async (req, reply) => {
+    const id = Number(req.params.id);
+    try {
+      deleteDraft(id);
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+    for (const dir of [imageDir(id), videoDir(id)]) fs.rmSync(dir, { recursive: true, force: true });
+    return { ok: true };
   });
 
   // ---- Google: Search Console + Analytics ----

@@ -22,6 +22,8 @@ export interface ComplianceResult {
   trackersBefore: string[];
   cookiesBefore: string[];
   pagesChecked: number;
+  /** Every page was visited, not one of each kind. */
+  allPages: boolean;
   counts: { critical: number; warnings: number };
   at: string;
 }
@@ -35,9 +37,9 @@ const LINK_TEXT: Record<keyof ScanFindings['links'], RegExp> = {
   imprint: /impressum|imprint|legal notice|mentions légales|aviso legal/i,
 };
 const LINK_HREF: Record<keyof ScanFindings['links'], RegExp> = {
-  privacy: /privacy|datenschutz|privacidad/i,
-  cookies: /cookie/i,
-  accessibility: /accessib|barrierefrei|negishut|nagishut/i,
+  privacy: /privacy|datenschutz|privacidad|confidentialite|פרטיות/i,
+  cookies: /cookie|עוגיות/i,
+  accessibility: /accessib|barrierefrei|accesibilidad|negishut|nagishut|נגישות/i,
   optOut: /do-not-sell|donotsell|privacy-choices|opt-out/i,
   imprint: /impressum|imprint|legal-notice|mentions-legales/i,
 };
@@ -53,18 +55,47 @@ const COOKIE_WORD = 'cookie|cookies|עוגיות|קוקיז|כוקיז|ملفا�
 let axeSource: string | null = null;
 const axe = () => (axeSource ??= readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8'));
 
-/** The pages worth checking besides home: where people type in their details or pay. */
-export function keyPages(origin: string, rows: { url: string; text?: string | null }[], max = 5): string[] {
+/** Addresses read as text: "/%D7%A6%D7%95%D7%A8-%D7%A7%D7%A9%D7%A8" becomes "/צור-קשר", so Hebrew page names match. */
+export function readablePath(u: string): string {
+  const p = new URL(u).pathname.toLowerCase();
+  try {
+    return decodeURIComponent(p);
+  } catch {
+    return p;
+  }
+}
+
+/** True when one of the words is a whole part of the address ("/contact-us", "/shop/"), not inside another word ("/workshops"). */
+const hasWord = (path: string, words: string) => new RegExp(`(^|[/_.-])(${words})($|[/_.-])`).test(path);
+
+/** Pages where people type in their details or pay, best first. 0 = not one of them. */
+function formScore(u: string): number {
+  const p = readablePath(u);
+  if (hasWord(p, 'contact|kontakt|צור-קשר|צרו-קשר|יצירת-קשר|اتصل')) return 4;
+  if (hasWord(p, 'checkout|cart|basket|bookings|booking|book|register|signup|sign-up|login|order|join|apply|quote|subscribe|newsletter|הרשמה|הזמנה|תשלום|הצעת-מחיר')) return 3;
+  if (hasWord(p, 'pricing|prices|price|plans|shop|store|products|product|מחירון|חנות')) return 2;
+  return 0;
+}
+
+/**
+ * Which pages to visit. Most pages share one layout (same banner, footer and trackers), so checking 40 blog
+ * posts finds the same problems 40 times. Instead: the home page, every page where people fill something in,
+ * and one example from each section of the site ("/blog/…", "/services/…"), up to `max` in all.
+ * With `all`, every page Plume has read.
+ */
+export function pagesToVisit(origin: string, rows: { url: string }[], opts: { all?: boolean; max?: number } = {}): string[] {
   const home = `${origin.replace(/\/$/, '')}/`;
-  const score = (u: string) => {
-    const p = new URL(u).pathname.toLowerCase();
-    if (/contact|צור-קשר|kontakt/.test(p)) return 4;
-    if (/checkout|cart|book|register|signup|sign-up|order|join|הרשמה/.test(p)) return 3;
-    if (/pricing|price|plans|shop|store/.test(p)) return 2;
-    return 0;
-  };
-  const picked = rows.map((r) => r.url).filter((u) => u !== home && score(u) > 0).sort((a, b) => score(b) - score(a) || a.length - b.length);
-  return [home, ...new Set(picked)].slice(0, max + 1);
+  const urls = [...new Set(rows.map((r) => r.url))].filter((u) => u !== home && !/\.(pdf|xml|txt)$/i.test(u));
+  if (opts.all) return [home, ...urls.sort((a, b) => formScore(b) - formScore(a) || a.length - b.length)];
+  const max = opts.max ?? 20;
+  const forms = urls.filter((u) => formScore(u) > 0).sort((a, b) => formScore(b) - formScore(a) || a.length - b.length);
+  const sections = new Map<string, string>();
+  for (const u of [...urls].sort((a, b) => a.length - b.length)) {
+    // "/about" and "/about/team" are one section; the shortest address stands for it.
+    const key = readablePath(u).split('/').filter(Boolean)[0] ?? '';
+    if (!sections.has(key)) sections.set(key, u);
+  }
+  return [home, ...new Set([...forms, ...sections.values()])].slice(0, max);
 }
 
 interface Visit {
@@ -186,22 +217,55 @@ async function findBanner(page: any): Promise<boolean> {
 function findLinks(links: { text: string; href: string }[]): ScanFindings['links'] {
   const out = {} as ScanFindings['links'];
   for (const k of Object.keys(LINK_TEXT) as (keyof ScanFindings['links'])[]) {
-    out[k] = links.find((l) => LINK_TEXT[k].test(l.text) || LINK_HREF[k].test(l.href))?.href ?? null;
+    out[k] = links.find((l) => LINK_TEXT[k].test(l.text) || LINK_HREF[k].test(readable(l.href)))?.href ?? null;
   }
   return out;
 }
 
+const readable = (u: string) => {
+  try {
+    return readablePath(u);
+  } catch {
+    return u;
+  }
+};
+
+/**
+ * Fill in what the home page didn't show from every page Plume has read: a privacy policy linked only from the
+ * contact page, or a page called /accessibility, still counts as there. Free: the pages are already stored.
+ */
+export function addStoredLinks(found: ScanFindings['links'], rows: { url: string; links_out?: string | null; title?: string | null }[]): ScanFindings['links'] {
+  const out = { ...found };
+  const known: { text: string; href: string }[] = [];
+  for (const r of rows) {
+    known.push({ text: r.title ?? '', href: r.url });
+    try {
+      for (const l of JSON.parse(r.links_out || '[]') as string[]) known.push({ text: '', href: l });
+    } catch {
+      /* old row */
+    }
+  }
+  const more = findLinks(known);
+  for (const k of Object.keys(out) as (keyof ScanFindings['links'])[]) out[k] ??= more[k];
+  return out;
+}
+
 /** Visit the site and work out the problems. Saved as `lastCompliance` for the agent page. */
-export async function runComplianceScan(origin: string, onProgress: (m: string) => void = () => {}): Promise<ComplianceResult> {
+export interface ScanOptions {
+  /** Visit every page Plume has read, not just one of each kind. Slow: about 10–40 seconds a page. */
+  allPages?: boolean;
+}
+
+export async function runComplianceScan(origin: string, onProgress: (m: string) => void = () => {}, opts: ScanOptions = {}): Promise<ComplianceResult> {
   await assertPublicUrl(origin);
   const rows = (() => {
     try {
-      return getDb().prepare('SELECT url FROM pages WHERE status < 400').all() as { url: string }[];
+      return getDb().prepare('SELECT url, title, links_out FROM pages WHERE status < 400').all() as { url: string; title: string; links_out: string | null }[];
     } catch {
       return [];
     }
   })();
-  const urls = keyPages(origin, rows);
+  const urls = pagesToVisit(origin, rows, { all: opts.allPages });
   const home = getSetting<{ phone: string | null } | null>('homeFacts', null);
   const language = contentLanguage();
   const { regions, why } = regionsFor({ countries: visitorCountries(), language, phone: home?.phone });
@@ -240,7 +304,7 @@ export async function runComplianceScan(origin: string, onProgress: (m: string) 
     }
     const f: ScanFindings = {
       origin, regions, language, builder, cmp, bannerSeen, rejectButton, trackersAfterReject, trackersWithGpc,
-      links: findLinks(v0.links), pages,
+      links: addStoredLinks(findLinks(v0.links), rows), pages,
     };
     return { f, cookies: v0.cookies };
   });
@@ -256,6 +320,7 @@ export async function runComplianceScan(origin: string, onProgress: (m: string) 
     trackersBefore: [...new Set(findings.f.pages.flatMap((p) => p.trackersBefore))],
     cookiesBefore: findings.cookies,
     pagesChecked: findings.f.pages.length,
+    allPages: !!opts.allPages,
     counts: { critical: issues.filter((i) => i.severity === 'critical').length, warnings: issues.filter((i) => i.severity !== 'critical').length },
     at: new Date().toISOString(),
   };

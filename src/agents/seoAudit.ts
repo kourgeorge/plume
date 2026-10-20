@@ -407,26 +407,29 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
   return result;
 }
 
-/**
- * Today's fixes: the two most severe open issues not handed out before.
- * Same day = same two, so refreshing the page doesn't reshuffle them.
- */
-export function dailyFixes(audit: AuditResult, perDay = 2, today = new Date().toISOString().slice(0, 10)): Issue[] {
-  const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
-  // Problems the user sent over by hand come first, on top of the daily two, until marked fixed.
-  const pinned = pinnedIssues().filter((i) => !log.done.includes(i.id));
-  if (log.day === today)
-    return [...pinned, ...log.ids.filter((id) => !log.done.includes(id)).map((id) => audit.issues.find((i) => i.id === id)).filter((i): i is Issue => !!i)];
-  const skip = new Set([...log.given, ...log.done]);
-  const pick = audit.issues.filter((i) => !skip.has(i.id)).slice(0, perDay);
-  setSetting('dailyFixes', { day: today, ids: pick.map((i) => i.id), given: [...log.given, ...pick.map((i) => i.id)], done: log.done });
-  return [...pinned, ...pick];
+/** When each problem was marked fixed. A check that runs after that and still finds it puts it back. */
+function fixedAt(): Record<string, string> {
+  const marks = getSetting<Record<string, string> | null>('fixedIssues', null);
+  if (marks) return marks;
+  // Older sites kept a plain list in the daily-fixes log: count those as fixed when it was written.
+  const old = getSetting<{ day?: string; done?: string[] }>('dailyFixes', {});
+  return Object.fromEntries((old.done ?? []).map((id) => [id, `${old.day || '1970-01-01'}T23:59:59.999Z`]));
 }
 
-export function markFixDone(id: string): void {
-  const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
-  if (!log.done.includes(id)) log.done.push(id);
-  setSetting('dailyFixes', log);
+/**
+ * Every problem still waiting, most severe first: the ones sent over by hand (e.g. from the speed panel),
+ * then everything the last site check found. A problem leaves only when it is marked fixed, and comes back
+ * if a later check still finds it.
+ */
+export function openFixes(audit: AuditResult | null): Issue[] {
+  const marks = fixedAt();
+  const pinned = pinnedIssues().filter((i) => !marks[i.id]);
+  const found = (audit?.issues ?? []).filter((i) => !(marks[i.id] && marks[i.id] >= audit!.at) && !pinned.some((p) => p.id === i.id));
+  return [...pinned, ...found];
+}
+
+export function markFixDone(id: string, at = new Date()): void {
+  setSetting('fixedIssues', { ...fixedAt(), [id]: at.toISOString() });
   setSetting('pinnedIssues', pinnedIssues().filter((i) => i.id !== id));
 }
 
@@ -434,10 +437,10 @@ export function pinnedIssues(): Issue[] {
   return getSetting<Issue[]>('pinnedIssues', []);
 }
 
-/** Put a problem in today's fixes now (e.g. from the speed panel). Re-sending replaces the old copy. */
+/** Put a problem on the Dashboard now (e.g. from the speed panel). Re-sending replaces the old copy. */
 export function pinIssue(issue: Issue): void {
-  const log = getSetting<{ day: string; ids: string[]; given: string[]; done: string[] }>('dailyFixes', { day: '', ids: [], given: [], done: [] });
-  setSetting('dailyFixes', { ...log, done: log.done.filter((d) => d !== issue.id) });
+  const { [issue.id]: _, ...rest } = fixedAt();
+  setSetting('fixedIssues', rest);
   setSetting('pinnedIssues', [issue, ...pinnedIssues().filter((i) => i.id !== issue.id)]);
 }
 

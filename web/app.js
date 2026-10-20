@@ -359,8 +359,7 @@ async function loadToday() {
   // Publishers first: the card's "Post to" list is built from them.
   const [t, folders, pubs] = await Promise.all([api('/api/today'), api('/api/agents'), api('/api/publishers')]);
   publishers = pubs;
-  const total = t.left + t.doneToday;
-  $('today-progress').textContent = total ? `${t.doneToday} of ${total} done` : '';
+  $('today-progress').textContent = t.left ? `${t.left} waiting${t.doneToday ? ` · ${t.doneToday} done today` : ''}` : '';
   // Stay on the same card after a reload; if it's gone (approved, skipped), show the one that took its place.
   const keep = todayItems[todayPos]?.key;
   todayItems = t.items;
@@ -411,7 +410,7 @@ function renderTodayCard(item) {
         <select id="t-target">${fitting(d).map((p) => `<option value="${p.id}">${esc(p.label)}${p.configured ? '' : ' (dry run)'}</option>`).join('')}</select>
         <button id="t-approve">Approve</button>
         <a href="#draft/${d.id}"><button class="secondary">Read and edit</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button><button class="secondary" id="t-no">Not useful</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button><button class="secondary" id="t-no">Not useful</button><button class="secondary danger-text" id="t-delete">Delete</button></span>
       </div></div>`;
     const firstLive = fitting(d).find((p) => p.configured && p.id !== 'export');
     if (firstLive) $('t-target').value = firstLive.id;
@@ -421,6 +420,7 @@ function renderTodayCard(item) {
       if (reason === null) return 'cancel';
       await post(`/api/drafts/${d.id}/not-useful`, { reason });
     });
+    $('t-delete').onclick = act(async () => ((await confirmDelete()) ? api(`/api/drafts/${d.id}`, { method: 'DELETE' }) : 'cancel'));
   } else if (item.kind === 'fix') {
     const f = item.fix;
     box.innerHTML = `<div class="today">
@@ -434,7 +434,7 @@ function renderTodayCard(item) {
         <button id="t-done">Mark as fixed</button>
         ${f.snippet ? '<button class="secondary" id="t-copy">Copy code</button>' : ''}
         <span data-pr-issue="${esc(f.id)}"></span>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     if (window.plumeGeo) window.plumeGeo.wirePr(box);
     $('t-done').onclick = act(async () => post('/api/audit/done', { id: f.id }));
@@ -447,7 +447,7 @@ function renderTodayCard(item) {
       <div class="acts">
         <button id="t-send">Send to SEO agent</button>
         <a href="#speed"><button class="secondary">See details</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     $('t-send').onclick = act(async () => post('/api/speed/send', { strategy: item.strategy }));
   }
@@ -461,7 +461,7 @@ function renderTodayCard(item) {
         <button id="t-seen">Got it</button>
         ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener"><button class="secondary">Open their site</button></a>` : ''}
         <a href="#competitor/${c.competitorId}"><button class="secondary">Notes on ${esc(c.name)}</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/changes/${c.id}/seen`));
   }
@@ -478,7 +478,7 @@ function renderTodayCard(item) {
       <div class="acts">
         <button id="t-seen">Got it</button>
         <a href="#rankings"><button class="secondary">See rankings</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/rank-alerts/${a.id}/seen`));
   }
@@ -498,7 +498,7 @@ function renderTodayCard(item) {
       <div class="acts">
         <button id="t-seen">${serious ? 'Checked it' : 'Got it'}</button>
         <a href="#analytics"><button class="secondary">See the site check</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     $('t-seen').onclick = act(async () => post(`/api/page-changes/${c.id}/seen`));
   }
@@ -511,7 +511,7 @@ function renderTodayCard(item) {
       <div class="acts">
         <button id="t-seen">Got it</button>
         <a href="#ai"><button class="secondary">See all answers</button></a>
-        <span class="right"><button class="secondary" id="t-skip">Skip for today</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
       </div></div>`;
     $('t-seen').onclick = act(async () => post('/api/ai-visibility/gaps/done', { runId: g.runId, questionId: g.questionId }));
   }
@@ -550,6 +550,10 @@ function changeList(changes) {
 }
 
 const OUTCOME = { baseline: ['First look', 'Recorded as the starting point. Changes show from the next scan.'], changed: ['Changed', ''], unchanged: ['No change', 'Nothing new since the scan before.'], failed: ['Failed', ''] };
+
+/** Delete is for good, so ask first. "Not useful" is the choice that teaches the agent. */
+const confirmDelete = () =>
+  confirmBox('Delete this draft for good? The agent won’t learn anything from it. To teach it what you don’t want, use Not useful instead.', { title: 'Delete draft?', ok: 'Delete', danger: true });
 
 /** Wrap a card action: run it, then show the next card. Returning 'cancel' keeps the card. */
 function act(fn) {
@@ -788,11 +792,11 @@ async function renderCompliancePanel(id) {
   }
   const n = scan.issues.length;
   box.innerHTML = `
-    <p><strong>Last checked ${esc(when(scan.at))}</strong> · ${scan.pagesChecked} page${scan.pagesChecked === 1 ? '' : 's'} · ${n ? `${scan.counts.critical} serious, ${scan.counts.warnings} other problem${scan.counts.warnings === 1 ? '' : 's'} (<a href="#check">in Site fixes</a>)` : 'no problems found'}</p>
+    <p><strong>Last checked ${esc(when(scan.at))}</strong> · ${scan.pagesChecked} page${scan.pagesChecked === 1 ? '' : 's'}${scan.allPages ? ' (every page)' : ' (one of each kind)'} · ${n ? `${scan.counts.critical} serious, ${scan.counts.warnings} other problem${scan.counts.warnings === 1 ? '' : 's'} (<a href="#check">in Site fixes</a>)` : 'no problems found'}</p>
     <p>Rules checked: ${scan.regions.map((r) => esc(regionNames[r] ?? r)).join(', ')}</p>
     <p class="muted small">${scan.regionsWhy.map(esc).join(' ')}</p>
     <p>Loads before the visitor agrees to anything: ${scan.trackersBefore.length ? scan.trackersBefore.map(esc).join(', ') : 'nothing Plume recognises as a tracker'}${scan.cmp ? ` · cookie banner: ${esc(scan.cmp)}` : ''}</p>
-    <p class="muted small">Plume checks what a visitor can see. It is not legal advice.</p>`;
+    <p class="muted small">To check every page instead, switch on "Privacy and accessibility check on every page" in the <a href="#logs">Timetable</a>. Plume checks what a visitor can see. It is not legal advice.</p>`;
 }
 
 async function loadFolder(id) {
@@ -874,6 +878,8 @@ async function loadDraft(id) {
   for (const el of ['draft-title', 'draft-slug', 'draft-meta', 'draft-body', 'draft-save', 'draft-approve', 'draft-target', 'draft-when']) $(el).disabled = !editable;
   $('draft-reject').textContent = d.status === 'rejected' ? 'Reopen' : 'Not useful';
   $('draft-reject').disabled = d.status === 'published' || d.status === 'approved';
+  // A scheduled one can be deleted too: removing it is how you stop it going out.
+  $('draft-delete').hidden = d.status === 'published';
   $('draft-badge').hidden = d.status === 'draft';
   $('draft-badge').className = `draft-badge ${d.status}`;
   $('draft-badge').textContent = { approved: 'Scheduled', published: d.dryRun ? 'Saved as files' : 'Published', failed: 'Failed', rejected: 'Turned down' }[d.status] ?? '';
@@ -1152,7 +1158,7 @@ function renderAudit({ audit, today, history = [], fixed = [] }) {
           <button data-done="${esc(i.id)}">Mark as fixed</button> <span data-pr-issue="${esc(i.id)}"></span></div>`,
         )
         .join('')
-    : '<p class="muted">Nothing left to fix today.</p>';
+    : '<p class="muted">Nothing left to fix.</p>';
   if (window.plumeGeo) window.plumeGeo.wirePr($('audit-today'));
   for (const b of $('audit-today').querySelectorAll('[data-copy]')) b.onclick = () => navigator.clipboard.writeText(b.dataset.copy);
   for (const b of $('audit-today').querySelectorAll('[data-done]'))
@@ -1795,10 +1801,10 @@ function seoOnPage(main, audit) {
   // A grouped title can't name one page's count ("8 images without alt text"), so use the check's general name.
   const NAME = { 'images-missing-alt': 'Images without alt text', 'title-length': 'Title too short or too long', 'stale-page': 'Pages not updated in a long time', 'broken-page': 'Pages that return an error', 'duplicate-title': 'Same title on several pages', 'thin-content': 'Very little text on the page', 'meta-description-length': 'Description too short or too long' };
   const rows = [...groups.entries()].sort((a, b) => RANK[a[1].severity] - RANK[b[1].severity] || b[1].pages.size - a[1].pages.size);
-  const count = (label, v, cls) => `<div class="op-row"><span>${label}</span><span class="chip ${cls}">${v}</span></div>`;
+  const tile = (label, v, cls) => `<div class="stat-card"><span class="lbl">${label}</span><span class="val"><b><span class="${v ? cls : ''}">${v}</span></b></span></div>`;
   main.innerHTML = `<div class="chart-card op-card">
-    <div class="op-score"><b class="${band(audit.score)}">${audit.score}</b><span class="muted">On-page health · checked ${shortDay(audit.at)} · ${audit.pagesChecked} pages</span></div>
-    ${count('Critical', audit.counts.critical, 'bad')}${count('Warnings', audit.counts.warnings, 'mid')}${count('Passed', audit.counts.passed, 'good')}
+    <div class="op-score"><span class="op-what"><strong>On-page health score</strong><span class="muted small">100 means no problems found · checked ${shortDay(audit.at)} · ${audit.pagesChecked} pages</span></span><span class="op-num"><b class="${band(audit.score)}">${audit.score}</b><span class="op-outof">/ 100</span></span></div>
+    <div class="stat-cards op-tiles">${tile('Critical', audit.counts.critical, 'bad')}${tile('Warnings', audit.counts.warnings, 'mid')}${tile('Passed', audit.counts.passed, 'good')}</div>
     <h4 class="op-sub">Top issues</h4>
     ${rows.map(([check, g]) => `<div class="op-row"><span>${esc(NAME[check] ?? g.title)} <span class="muted small">· ${g.pages.size} ${g.pages.size === 1 ? 'page' : 'pages'}</span></span><span class="chip ${g.severity === 'critical' ? 'bad' : g.severity === 'low' ? 'muted' : 'mid'}">${LABEL[g.severity]}</span></div>`).join('') || '<p class="muted small">No problems found.</p>'}
     <p class="small card-foot"><a href="#check">See every page and how to fix it →</a></p></div>`;
@@ -1920,7 +1926,7 @@ window.addEventListener('resize', () => (clearTimeout(resizeTimer), (resizeTimer
 
 const TOUR = [
   { el: 'col-left', title: 'What your agents know', text: 'Every agent reads these documents before it writes anything. Correct something here once and every agent gets it right from then on.' },
-  { el: 'today-card', title: 'Dashboard', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Approve, edit, skip it for today, or mark it not useful so the agent learns.' },
+  { el: 'today-card', title: 'Dashboard', text: 'Your agents’ work arrives here one card at a time: drafts, site fixes and speed problems, most important first. Everything waiting stays here until it is dealt with. Approve, edit, put it off with Later, or mark it not useful so the agent learns.' },
   { el: 'folders', title: 'Agents', text: 'One folder per agent. “Ready” means work is waiting for you, a pulsing dot means it is working right now. Open a folder to see everything it has made.' },
   { el: 'col-right', title: 'Ask Plume', text: 'Ask anything in plain words, or have it write something. It knows your documents, results and competitors. Changes it suggests wait for you to apply them, and anything it writes goes to the Dashboard first. Type @ to point at an agent or document.' },
   { el: 'cost-link', title: 'Cost and safety', text: 'See exactly what the AI has cost this month and set a monthly limit. Nothing is ever published until you approve it.' },
@@ -2021,6 +2027,15 @@ $('draft-reject').onclick = async () => {
       await post(`/api/drafts/${currentDraft}/not-useful`, { reason });
     }
     await loadDraft(currentDraft);
+  } catch (err) {
+    alertBox(err.message);
+  }
+};
+$('draft-delete').onclick = async () => {
+  try {
+    if (!(await confirmDelete())) return;
+    await api(`/api/drafts/${currentDraft}`, { method: 'DELETE' });
+    location.hash = draftBack;
   } catch (err) {
     alertBox(err.message);
   }

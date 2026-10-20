@@ -5,7 +5,7 @@ import { publishDue } from './publish/runner';
 import { pullIfDue } from './analytics/pull';
 import { crawlSite } from './research/crawl';
 import { closeBrowser } from './research/fetchPage';
-import { dailyFixes, runAudit } from './agents/seoAudit';
+import { openFixes, runAudit } from './agents/seoAudit';
 import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
@@ -38,6 +38,8 @@ export interface TaskDef {
   system?: boolean;
   /** Agents only: the number of drafts per run can be set. */
   perRun?: boolean;
+  /** Starts switched off even though it is free (e.g. a check that takes hours). */
+  offByDefault?: boolean;
   /** What is missing before this task can do anything, in a few words; null when it is ready. Such runs are skipped without a record. */
   needs?(): string | null;
   /** Logged on success: what was done, in a few words. Return null to log nothing (quiet tasks). */
@@ -97,10 +99,31 @@ export function taskDefs(): TaskDef[] {
       run: async () => (pruneLogs(), null),
     },
     {
+      id: 'compliance-all-pages',
+      label: 'Privacy and accessibility check on every page',
+      group: 'checks',
+      note: 'Opens every page in Chrome; can take hours on a big site. The Compliance agent already checks one page of each kind.',
+      cron: '23 2 * * 0',
+      costsMoney: false,
+      offByDefault: true,
+      needs: noSite,
+      run: async (progress) => {
+        try {
+          const { runComplianceScan } = require('./compliance/scan') as typeof import('./compliance/scan');
+          const { pinIssue } = require('./agents/seoAudit') as typeof import('./agents/seoAudit');
+          const r = await runComplianceScan(site()!, progress, { allPages: true });
+          for (const i of r.issues.filter((i) => i.severity === 'critical' || i.severity === 'high')) pinIssue(i);
+          return `checked ${r.pagesChecked} pages: ${r.counts.critical} serious, ${r.counts.warnings} other problem(s)`;
+        } finally {
+          await closeBrowser();
+        }
+      },
+    },
+    {
       id: 'site-check',
       label: 'Re-read the site and run the site check',
       group: 'checks',
-      note: "Picks the day's fixes for the Dashboard.",
+      note: 'Puts the problems it finds on the Dashboard.',
       cron: '47 5 * * *',
       costsMoney: false,
       needs: noSite,
@@ -110,8 +133,7 @@ export function taskDefs(): TaskDef[] {
           const pages = await crawlSite(site()!);
           progress('Running the site check');
           const audit = await runAudit(site()!);
-          const today = dailyFixes(audit);
-          return `read ${pages.length} pages, score ${audit.score}, today's fixes: ${today.map((i) => i.title).join('; ') || 'none'}`;
+          return `read ${pages.length} pages, score ${audit.score}, ${openFixes(audit).length} problems waiting on the Dashboard`;
         } finally {
           await closeBrowser();
         }
@@ -239,7 +261,7 @@ export function taskSetting(id: string): TaskSetting {
   // Plumbing can't be switched off or retimed: a stray click would quietly stop publishing.
   if (def?.system) return { enabled: true, cron: def.cron };
   const saved: Partial<TaskSetting> | undefined = getSetting<Record<string, Partial<TaskSetting>>>('tasks', {})[id];
-  return { enabled: !def?.costsMoney, cron: def?.cron ?? '', ...(def?.perRun ? { limit: 1 } : {}), ...saved };
+  return { enabled: !def?.costsMoney && !def?.offByDefault, cron: def?.cron ?? '', ...(def?.perRun ? { limit: 1 } : {}), ...saved };
 }
 
 export function updateTask(id: string, patch: Partial<TaskSetting>): TaskSetting {

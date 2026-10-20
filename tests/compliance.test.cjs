@@ -9,7 +9,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
 process.env.PLUME_SITE = 'test.example';
 const { regionsFor } = require('../src/compliance/regions');
 const { complianceIssues, matchTrackers, matchCmp, RECHECKABLE } = require('../src/compliance/checks');
-const { keyPages } = require('../src/compliance/scan');
+const { pagesToVisit, addStoredLinks, readablePath } = require('../src/compliance/scan');
 const { plannedDocs, summaryBody } = require('../src/compliance/agent');
 const { targetsFor } = require('../src/publish');
 
@@ -154,9 +154,51 @@ test('compliance problems are left to the next visit, not re-checked by the quic
 
 // ---------------------------------------------------------------- which pages, which drafts
 
-test('key pages: home first, then contact and checkout, never more than asked', () => {
-  const rows = ['https://a.test/', 'https://a.test/blog/x', 'https://a.test/contact', 'https://a.test/checkout', 'https://a.test/pricing'].map((url) => ({ url }));
-  assert.deepEqual(keyPages('https://a.test', rows, 2), ['https://a.test/', 'https://a.test/contact', 'https://a.test/checkout']);
+test('pages to visit: home, every form page, then one page from each section', () => {
+  const rows = ['https://a.test/', 'https://a.test/about', 'https://a.test/blog/one', 'https://a.test/blog/two-longer', 'https://a.test/blog/three',
+    'https://a.test/services/web', 'https://a.test/services/seo', 'https://a.test/contact', 'https://a.test/checkout', 'https://a.test/sitemap.xml'].map((url) => ({ url }));
+  assert.deepEqual(pagesToVisit('https://a.test', rows), [
+    'https://a.test/', 'https://a.test/contact', 'https://a.test/checkout', 'https://a.test/about', 'https://a.test/blog/one', 'https://a.test/services/web',
+  ]);
+  assert.equal(pagesToVisit('https://a.test', rows, { max: 3 }).length, 3);
+});
+
+test('form words match whole words only, and a page and its sub-pages are one section', () => {
+  const rows = ['https://a.test/about', 'https://a.test/about/quotes', 'https://a.test/community/workshops', 'https://a.test/community', 'https://a.test/get-a-quote', 'https://a.test/contact-us'].map((url) => ({ url }));
+  assert.deepEqual(pagesToVisit('https://a.test', rows), ['https://a.test/', 'https://a.test/contact-us', 'https://a.test/get-a-quote', 'https://a.test/about', 'https://a.test/community']);
+});
+
+test('every page, when asked: forms first, nothing skipped but files', () => {
+  const rows = ['https://a.test/blog/one', 'https://a.test/blog/two', 'https://a.test/contact', 'https://a.test/x.pdf'].map((url) => ({ url }));
+  assert.deepEqual(pagesToVisit('https://a.test', rows, { all: true }), ['https://a.test/', 'https://a.test/contact', 'https://a.test/blog/one', 'https://a.test/blog/two']);
+});
+
+test('Hebrew page names are recognised', () => {
+  const contact = new URL('https://a.test/צור-קשר').toString();
+  assert.equal(readablePath(contact), '/צור-קשר');
+  const rows = [contact, 'https://a.test/blog/x'].map((url) => ({ url }));
+  assert.equal(pagesToVisit('https://a.test', rows)[1], contact);
+  const statement = new URL('https://a.test/הצהרת-נגישות').toString();
+  assert.equal(addStoredLinks(noLinks, [{ url: statement, title: '', links_out: '[]' }]).accessibility, statement);
+});
+
+test('policy links found anywhere on the site count, not just on the home page', () => {
+  const rows = [
+    { url: 'https://a.test/contact', title: 'Contact', links_out: JSON.stringify(['https://a.test/privacy-policy']) },
+    { url: 'https://a.test/legal/barrierefreiheit', title: 'Erklärung zur Barrierefreiheit', links_out: '[]' },
+  ];
+  const links = addStoredLinks({ ...noLinks, cookies: 'https://a.test/c' }, rows);
+  assert.equal(links.privacy, 'https://a.test/privacy-policy');
+  assert.equal(links.accessibility, 'https://a.test/legal/barrierefreiheit');
+  assert.equal(links.cookies, 'https://a.test/c');
+  assert.equal(links.imprint, null);
+});
+
+test('the every-page check exists in the Timetable and starts switched off', () => {
+  const { taskDefs, taskSetting } = require('../src/scheduler');
+  assert.ok(taskDefs().some((t) => t.id === 'compliance-all-pages' && !t.costsMoney));
+  assert.equal(taskSetting('compliance-all-pages').enabled, false);
+  assert.equal(taskSetting('site-check').enabled, true);
 });
 
 const result = (o) => ({ issues: [], regions: ['il'], regionsWhy: [], cmp: null, trackersBefore: [], cookiesBefore: [], pagesChecked: 1, counts: { critical: 0, warnings: 0 }, at: '2026-10-20T00:00:00Z', ...o });

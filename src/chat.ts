@@ -240,7 +240,7 @@ export async function runChatTool(threadId: number, name: string, input: any, to
       }
       case 'get_today': {
         const items = todayFeed();
-        if (!items.length) return { content: 'Nothing is waiting today.', isError: false };
+        if (!items.length) return { content: 'Nothing is waiting.', isError: false };
         return {
           content: items
             .map((i) =>

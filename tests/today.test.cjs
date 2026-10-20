@@ -34,11 +34,11 @@ test('feed: critical fix, then serious speed problem, then data-backed draft, th
   assert.ok(!('body' in feed[2].draft), 'cards should not carry the whole body');
 });
 
-test('skip hides an item for today only', () => {
-  const key = today.todayFeed(NOW).find((i) => i.kind === 'draft').key;
-  today.skipItem(key, NOW);
-  assert.ok(!today.todayFeed(NOW).some((i) => i.key === key));
-  assert.ok(today.todayFeed(new Date('2026-10-17T09:00:00Z')).some((i) => i.key === key), 'should come back tomorrow');
+test('"Later" moves a card to the back but keeps it on the Dashboard', () => {
+  const first = today.todayFeed(NOW)[0].key;
+  today.skipItem(first, NOW);
+  const feed = today.todayFeed(new Date('2026-10-20T09:00:00Z'));
+  assert.equal(feed.at(-1).key, first, 'should be last, not gone');
 });
 
 test('sending speed to the SEO agent turns it into a pinned fix (and it is not shown twice)', () => {

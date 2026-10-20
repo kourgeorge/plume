@@ -7,7 +7,7 @@ const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
 process.env.PLUME_SITE = 'test.example';
-const { auditPages, dailyFixes, markFixDone } = require('../src/agents/seoAudit');
+const { auditPages, openFixes, markFixDone } = require('../src/agents/seoAudit');
 const { filterNew, searchConsoleGaps } = require('../src/agents/seo');
 
 const page = (o) => ({ url: 'https://a.com/', status: 200, title: 'Acme widgets for small teams', meta_description: 'x'.repeat(130), canonical: 'https://a.com/', h1: 'Widgets', headings: '[]', images_missing_alt: 0, has_schema: 1, word_count: 600, ...o });
@@ -38,15 +38,14 @@ test('snippets escape page text', () => {
   assert.doesNotMatch(r.issues.find((i) => i.check === 'missing-title').snippet, /<script>x/);
 });
 
-test('two fixes a day, stable within the day, new ones the next day', () => {
-  const r = auditPages([page({ url: 'https://a.com/x', title: '', meta_description: '', canonical: '', h1: '' })]);
-  const d1 = dailyFixes(r, 2, '2026-10-16');
-  assert.equal(d1.length, 2);
-  assert.deepEqual(dailyFixes(r, 2, '2026-10-16').map((i) => i.id), d1.map((i) => i.id));
-  markFixDone(d1[0].id);
-  assert.deepEqual(dailyFixes(r, 2, '2026-10-16').map((i) => i.id), [d1[1].id], 'a fix marked done must leave today\'s list');
-  const d2 = dailyFixes(r, 2, '2026-10-17');
-  assert.ok(!d2.some((i) => d1.some((j) => j.id === i.id)), 'repeated a fix');
+test('every open problem waits until marked fixed, and comes back if a later check still finds it', () => {
+  const r = { ...auditPages([page({ url: 'https://a.com/x', title: '', meta_description: '', canonical: '', h1: '' })]), at: '2026-10-16T05:00:00.000Z' };
+  const all = openFixes(r);
+  assert.equal(all.length, r.issues.length, 'every problem should be waiting, not two a day');
+  markFixDone(all[0].id, new Date('2026-10-16T10:00:00Z'));
+  assert.deepEqual(openFixes(r).map((i) => i.id), all.slice(1).map((i) => i.id), 'a fix marked done must leave the list');
+  const later = { ...r, at: '2026-10-17T05:00:00.000Z' };
+  assert.equal(openFixes(later).length, all.length, 'a problem the next check still finds should come back');
 });
 
 test('filterNew drops covered and duplicate keywords', () => {
