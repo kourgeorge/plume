@@ -39,6 +39,26 @@ export function googleConnected(): boolean {
   return fs.existsSync(tokenFile());
 }
 
+/**
+ * Which read-only scopes the signed-in user actually granted. Plume-Red uses this: an Analytics
+ * connection switches the feature on, but only a Search Console grant (which Google gives after it
+ * has verified the person controls the domain) is treated as proof of ownership.
+ */
+export function googleScopes(): string[] {
+  if (!googleConnected()) return [];
+  try {
+    const t: Tokens = JSON.parse(fs.readFileSync(tokenFile(), 'utf8'));
+    return (t.scope ?? '').split(/\s+/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** True when the connection includes Search Console, which Google grants only for a verified property. */
+export function searchConsoleVerified(): boolean {
+  return googleScopes().some((s) => s.includes('webmasters'));
+}
+
 function saveTokens(t: Tokens): void {
   fs.mkdirSync(path.dirname(tokenFile()), { recursive: true });
   fs.writeFileSync(tokenFile(), JSON.stringify(t, null, 2), { mode: 0o600 });

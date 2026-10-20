@@ -1008,3 +1008,18 @@ label.small-btn { white-space: nowrap; }
 /* Buttons for actions that delete or disconnect something */
 button.danger { background: #c93b2c; color: #fff; }
 button.danger:hover:not(:disabled) { background: #a92f22; }
+
+/* Plume-Red (security) */
+.red-summary { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+.red-score { font-size: 34px; font-weight: 600; line-height: 1; }
+.red-score.good { color: var(--good); } .red-score.ok { color: var(--mid); } .red-score.bad { color: var(--bad); }
+.red-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.red-issue { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--panel); }
+.red-issue-head { display: flex; align-items: center; gap: 8px; }
+.red-issue ul { margin: 6px 0 0; padding-left: 18px; }
+.red-fix-bar { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
+.tag.sev-critical { color: #fff; background: var(--bad); border-radius: 999px; padding: 1px 8px; text-transform: uppercase; font-size: 10px; letter-spacing: .03em; }
+.tag.sev-high { color: var(--bad); border: 1px solid var(--bad); border-radius: 999px; padding: 0 7px; text-transform: uppercase; font-size: 10px; }
+.tag.sev-medium { color: var(--mid); border: 1px solid var(--mid); border-radius: 999px; padding: 0 7px; text-transform: uppercase; font-size: 10px; }
+.tag.sev-low { color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; text-transform: uppercase; font-size: 10px; }
+.snippet { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 10px; font-size: 12px; overflow-x: auto; margin: 8px 0 0; white-space: pre-wrap; }

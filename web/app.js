@@ -63,7 +63,7 @@ let days = pref.get('days', 30);
 
 // ---------------------------------------------------------------- routing
 
-const VIEWS = ['dashboard', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'report', 'analytics', 'logs', 'usage', 'settings', 'ai', 'outreach', 'tools'];
+const VIEWS = ['dashboard', 'job', 'doc', 'competitor', 'person', 'accounts', 'notes', 'llms', 'folder', 'draft', 'check', 'speed', 'results', 'report', 'red', 'analytics', 'logs', 'usage', 'settings', 'ai', 'outreach', 'tools'];
 
 function showView(id) {
   // Views added by later scripts (e.g. rankings.js) may not exist yet on the first call.
@@ -111,6 +111,7 @@ async function route() {
     case 'analytics': return loadAnalytics(arg);
     case 'results': return loadResults();
     case 'report': return window.plumeReport ? window.plumeReport.load() : loadToday();
+    case 'red': return window.plumeRed ? window.plumeRed.load() : loadToday();
     case 'rankings': return loadAnalytics('rankings');
     case 'ai': return window.plumeGeo ? window.plumeGeo.load() : loadToday();
     case 'outreach': return window.plumeOutreach ? window.plumeOutreach.load(location.hash.slice('#outreach/'.length)) : loadToday();

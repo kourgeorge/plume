@@ -17,8 +17,11 @@ import { getJob, runningJob, runningJobs } from '../jobs';
 import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
+import { runRedScan, RedScanResult } from '../red/scan';
 import { lastCompliance } from '../compliance/scan';
 import { REGIONS } from '../compliance/regions';
+import { redPermissions } from '../red/ownership';
+import { openDependencyFix } from '../red/depFix';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher, pageHtml, stripTitle, targetsFor } from '../publish';
 import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
@@ -298,6 +301,29 @@ export function buildServer(port: number): FastifyInstance {
     scan: lastCompliance(),
     regionNames: Object.fromEntries(Object.entries(REGIONS).map(([k, v]) => [k, v.name])),
   }));
+
+  // ---- Plume-Red (security) ----
+  app.get('/api/red', async () => {
+    const last = getSetting<RedScanResult | null>('lastRedScan', null);
+    return { scan: last, permissions: redPermissions() };
+  });
+  app.post<{ Body: { active?: boolean } }>('/api/red', async (req) => {
+    // Active, non-destructive tests run only when the caller explicitly ticks the box AND ownership
+    // is verified (the scan itself enforces the second part, so a stale UI can't bypass it).
+    const scan = await runRedScan({ origin: siteUrl() ?? undefined, approveActive: !!req.body?.active });
+    return { scan, permissions: scan.permissions };
+  });
+  app.post<{ Body: { id?: string } }>('/api/red/fix', async (req, reply) => {
+    const last = getSetting<RedScanResult | null>('lastRedScan', null);
+    const issue = last?.issues.find((i) => i.id === req.body?.id);
+    if (!issue) return reply.code(404).send({ error: 'that issue is not in the latest scan' });
+    if (!issue.check.startsWith('vulnerable-dependency-')) return reply.code(400).send({ error: 'only dependency issues can be fixed automatically for now' });
+    try {
+      return await openDependencyFix(issue);
+    } catch (e) {
+      return reply.code(502).send({ error: e instanceof Error ? e.message : 'could not open the pull request' });
+    }
+  });
 
   // ---- inbox ----
   app.get('/api/publishers', async () =>
