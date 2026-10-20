@@ -7,6 +7,7 @@ import { redditAgent, socialAgent } from '../social/agents';
 import { influencerAgent } from '../outreach/creators';
 import { linksAgent } from '../outreach/links';
 import { videoAgent } from '../video/agent';
+import { complianceAgent } from '../compliance/agent';
 import { log } from '../log';
 import { agentPhotosOn, suggestPhoto } from '../social/photos';
 import type { Agent } from './types';
@@ -14,7 +15,7 @@ import type { Agent } from './types';
 /** Agents whose drafts get a photo picked for them once written. */
 const PHOTO_AGENTS = ['social', 'writer'];
 
-export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent, influencerAgent, linksAgent, videoAgent];
+export const AGENTS: Agent[] = [seoAgent, writerAgent, socialAgent, redditAgent, influencerAgent, linksAgent, videoAgent, complianceAgent];
 
 export function getAgent(id: string): Agent | undefined {
   return AGENTS.find((a) => a.id === id);

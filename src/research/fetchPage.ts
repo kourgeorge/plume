@@ -108,7 +108,11 @@ export function setBrowserForTests(launch: () => Promise<any>, delayMs = 20): vo
   closeDelayMs = delayMs;
 }
 
-export const chromeFetch: BrowserFetch = async (url) => {
+/**
+ * Run `fn` with the shared Chrome, counting it as an open read so Chrome isn't closed under it. For jobs that
+ * need more than the page's HTML (the compliance visit watches network requests and clicks buttons).
+ */
+export async function withBrowser<T>(fn: (browser: any) => Promise<T>): Promise<T> {
   if (closeTimer) clearTimeout(closeTimer), (closeTimer = null);
   openReads++;
   try {
@@ -120,7 +124,17 @@ export const chromeFetch: BrowserFetch = async (url) => {
         throw new Error(`Google Chrome could not be started for reading JavaScript pages (${String(err.message).split('\n')[0]})`);
       }
     })();
-    const browser = await browserPromise;
+    return await fn(await browserPromise);
+  } finally {
+    openReads--;
+    if (closeWanted && openReads === 0) scheduleClose();
+  }
+}
+
+export const BROWSER_USER_AGENT = BROWSER_UA;
+
+export const chromeFetch: BrowserFetch = (url) =>
+  withBrowser(async (browser) => {
     const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: 'en-US' });
     try {
       const page = await ctx.newPage();
@@ -130,11 +144,7 @@ export const chromeFetch: BrowserFetch = async (url) => {
     } finally {
       await ctx.close().catch(() => {});
     }
-  } finally {
-    openReads--;
-    if (closeWanted && openReads === 0) scheduleClose();
-  }
-};
+  });
 
 function scheduleClose(): void {
   if (closeTimer) clearTimeout(closeTimer);

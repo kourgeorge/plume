@@ -18,6 +18,7 @@ import { auditPages, markFixDone } from '../agents/seoAudit';
 import { recordFixDone } from '../actions';
 import { escapeHtml } from '../publish';
 import { DiffLine, lineDiff } from '../diff';
+import { RECHECKABLE } from '../compliance/checks';
 
 /**
  * Site fixes as GitHub pull requests, in three steps the owner can follow:
@@ -200,7 +201,11 @@ async function findPageSource(
 }
 
 /** Checks that need the shared layout (they're about every page) rather than one page's file. */
-const SITE_WIDE = new Set(['missing-identity-schema', 'missing-canonical', 'missing-meta-description', 'meta-description-length']);
+const SITE_WIDE = new Set([
+  'missing-identity-schema', 'missing-canonical', 'missing-meta-description', 'meta-description-length',
+  // Cookie banners and footer links live in the shared layout, not one page.
+  'privacy-no-consent', 'privacy-trackers-before-consent', 'privacy-no-policy', 'privacy-no-optout', 'privacy-no-imprint', 'privacy-google-fonts', 'a11y-no-statement', 'a11y-html-has-lang', 'a11y-meta-viewport',
+]);
 
 /** The files most likely to hold the page (and, for site-wide checks, the layout), best first. */
 export function candidateFiles(issue: Pick<Issue, 'check' | 'url'>, tree: TreeFile[]): string[] {
@@ -587,6 +592,8 @@ export async function stillBroken(issue: Issue, fetchFn: typeof fetch = fetch): 
     }
   })();
   if (issue.check === 'cloudflare-ai-block') return null;
+  // Privacy and accessibility problems need the full browser visit; the compliance agent's next run re-checks them.
+  if (RECHECKABLE.test(issue.check)) return null;
   if (issue.check === 'missing-robots' || issue.check === 'missing-sitemap') {
     const r = await fetchHttp(`${origin}/${issue.check === 'missing-robots' ? 'robots.txt' : 'sitemap.xml'}`, fetchFn);
     return r.ok ? false : r.kind === 'http-error' ? true : null;

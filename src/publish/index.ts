@@ -101,7 +101,7 @@ const SOCIAL_KINDS = ['social_post', 'x_post', 'x_thread', 'linkedin_post', 'fac
 const REDDIT_KINDS = ['reddit_reply', 'reddit_post'];
 const SOCIAL_TARGETS = ['x', 'linkedin', 'facebook', 'facebook_reel', 'instagram', 'reddit', 'email'];
 /** Kinds with their own short list: an outreach email goes to one person; a video script is posted as a Reel, using the video the owner filmed and uploaded. */
-const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['facebook_reel', 'instagram', 'export'] };
+const PRIVATE_KINDS: Record<string, string[]> = { outreach_email: ['email', 'export'], outreach_message: ['export'], video_script: ['facebook_reel', 'instagram', 'export'], compliance_report: ['export'] };
 export function targetsFor(kind: string): string[] {
   if (PRIVATE_KINDS[kind]) return PRIVATE_KINDS[kind];
   if (REDDIT_KINDS.includes(kind)) return ['reddit', 'export'];
@@ -121,9 +121,11 @@ export function checkTarget(kind: string, targetId: string): void {
       ? 'an outreach message'
       : kind === 'video_script'
         ? 'a Reel'
-        : SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind)
-          ? 'a social post'
-          : 'an article';
+        : kind === 'compliance_report'
+          ? 'a compliance report'
+          : SOCIAL_KINDS.includes(kind) || REDDIT_KINDS.includes(kind)
+            ? 'a social post'
+            : 'an article';
   throw new Error(`${label} can't take ${what}. Pick one of: ${targetsFor(kind).map((t) => getPublisher(t)?.label ?? t).join(', ')}.`);
 }
 

@@ -6,7 +6,7 @@ import { BusinessFacts, IDENTITY_TYPES, RETIRED_RICH_RESULTS, identitySchema } f
 import type { PageRow } from '../research/pageChanges';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
-export type Area = 'technical' | 'on-page' | 'content' | 'performance' | 'ai-search';
+export type Area = 'technical' | 'on-page' | 'content' | 'performance' | 'ai-search' | 'security' | 'privacy' | 'accessibility';
 
 /** One problem found on the site, with a fix someone without SEO knowledge can apply. */
 export interface Issue {
@@ -64,7 +64,7 @@ const ROBOTS_EDIT: Record<string, string> = {
  * Where each builder lets the owner paste code into the page <head>. Null = it can't be done there,
  * so the fix says so instead of handing over code with nowhere to go.
  */
-const HEAD_CODE: Record<string, string | null> = {
+export const HEAD_CODE: Record<string, string | null> = {
   WordPress: 'In WordPress, install a plugin such as "WPCode" or "Insert Headers and Footers" and paste it into the header box. (Yoast and Rank Math add some of this automatically — check before adding a second copy.)',
   Webflow: 'In Webflow, open Site settings → Custom code → Head code, paste it, save and publish.',
   Wix: 'In Wix, open Settings → Custom code → Add custom code, paste it, choose "All pages" and "Head", then apply.',

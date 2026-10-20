@@ -17,6 +17,8 @@ import { getJob, runningJob, runningJobs } from '../jobs';
 import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
 import { AuditResult, dailyFixes, runAudit } from '../agents/seoAudit';
+import { lastCompliance } from '../compliance/scan';
+import { REGIONS } from '../compliance/regions';
 import { DraftMeta, DraftStatus, draftEvents, editDraft, getDraft, listDrafts, moveDraft } from '../queue';
 import { PUBLISHERS, getPublisher, pageHtml, stripTitle, targetsFor } from '../publish';
 import { describeIntegrations, getIntegration, removeIntegration, saveIntegration, siteEnv, testIntegration } from '../integrations';
@@ -290,6 +292,12 @@ export function buildServer(port: number): FastifyInstance {
     fixDone(req.body.id);
     return { ok: true };
   });
+
+  // ---- compliance (privacy and accessibility) ----
+  app.get('/api/compliance', async () => ({
+    scan: lastCompliance(),
+    regionNames: Object.fromEntries(Object.entries(REGIONS).map(([k, v]) => [k, v.name])),
+  }));
 
   // ---- inbox ----
   app.get('/api/publishers', async () =>

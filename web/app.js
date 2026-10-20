@@ -775,6 +775,25 @@ async function loadLlms() {
 
 // ---------------------------------------------------------------- folders and drafts
 
+/** On the Compliance folder: which rules were checked and what loads before consent, from the last visit. */
+async function renderCompliancePanel(id) {
+  const box = $('folder-compliance');
+  box.hidden = id !== 'compliance';
+  if (box.hidden) return;
+  const { scan, regionNames } = await api('/api/compliance').catch(() => ({ scan: null, regionNames: {} }));
+  if (!scan) {
+    box.innerHTML = '<p class="muted">Not checked yet. "Find work and draft now" opens your site in Chrome like a new visitor, and checks cookies, trackers, policies and accessibility.</p>';
+    return;
+  }
+  const n = scan.issues.length;
+  box.innerHTML = `
+    <p><strong>Last checked ${esc(when(scan.at))}</strong> · ${scan.pagesChecked} page${scan.pagesChecked === 1 ? '' : 's'} · ${n ? `${scan.counts.critical} serious, ${scan.counts.warnings} other problem${scan.counts.warnings === 1 ? '' : 's'} (<a href="#check">in Site fixes</a>)` : 'no problems found'}</p>
+    <p>Rules checked: ${scan.regions.map((r) => esc(regionNames[r] ?? r)).join(', ')}</p>
+    <p class="muted small">${scan.regionsWhy.map(esc).join(' ')}</p>
+    <p>Loads before the visitor agrees to anything: ${scan.trackersBefore.length ? scan.trackersBefore.map(esc).join(', ') : 'nothing Plume recognises as a tracker'}${scan.cmp ? ` · cookie banner: ${esc(scan.cmp)}` : ''}</p>
+    <p class="muted small">Plume checks what a visitor can see. It is not legal advice.</p>`;
+}
+
 async function loadFolder(id) {
   showView('folder');
   const folders = await api('/api/agents');
@@ -788,6 +807,7 @@ async function loadFolder(id) {
   $('folder-run').textContent = f.working ? 'Working…' : 'Find work and draft now';
   $('folder-run').title = f.working ? `Working now: ${f.working.replace(/^[^:]+:\s*/, '')}` : '';
   $('folder-run').onclick = () => runAgentNow(id);
+  await renderCompliancePanel(id);
   const instr = await api(`/api/agents/${encodeURIComponent(id)}/instructions`);
   $('folder-instr').value = instr.text;
   $('folder-instr-tag').textContent = instr.text ? '· set' : '· none yet';
