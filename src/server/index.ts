@@ -17,7 +17,8 @@ import { startResearch } from '../research/profile';
 import { getJob, runningJob, runningJobs } from '../jobs';
 import { AGENTS, getAgent, startAgentRun, startAgentRuns } from '../agents';
 import { agentInstructions, generalInstructions, setAgentInstructions, setGeneralInstructions } from '../agents/instructions';
-import { AuditResult, openFixes, runAudit } from '../agents/seoAudit';
+import { AuditResult, runAudit } from '../agents/seoAudit';
+import { IssueStatus, openIssues, setWontFix, trackedIssues } from '../issues';
 import { runRedScan, RedScanResult } from '../red/scan';
 import { lastCompliance } from '../compliance/scan';
 import { REGIONS } from '../compliance/regions';
@@ -40,7 +41,7 @@ import {
 } from '../chat';
 import { pageChangeSeen, rankAlertSeen } from '../today';
 import { updatesBetween } from '../seo/googleUpdates';
-import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress } from '../today';
+import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress, wontFixIssue } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
   savePerson, setBrandProfiles, setUserNotes, updateCompetitor, userNotes,
@@ -220,8 +221,8 @@ export function buildServer(port: number): FastifyInstance {
         id: a.id,
         label: a.label,
         description: a.description,
-        waiting: drafts.filter((d) => d.status === 'draft').length,
-        total: drafts.length,
+        waiting: drafts.filter((d) => d.status === 'draft' || d.status === 'failed').length + openIssues(a.id).length,
+        total: drafts.length + trackedIssues().filter((i) => i.agent === a.id).length,
         working: job?.progress ?? null,
         needs: ready ? null : 'business profile',
         schedule: taskSetting(`agent:${a.id}`),
@@ -233,7 +234,7 @@ export function buildServer(port: number): FastifyInstance {
         id: 'site-check',
         label: 'Site fixes',
         description: "Your site's technical health, and every problem still to fix.",
-        waiting: openFixes(audit ?? null).length,
+        waiting: openIssues('site-check').length,
         total: audit?.issues.length ?? 0,
         working: runningJob('task:site-check')?.progress ?? null,
         needs: siteUrl() ? null : 'your website',
@@ -287,11 +288,29 @@ export function buildServer(port: number): FastifyInstance {
   // ---- daily site check ----
   app.get('/api/audit', async () => {
     const audit = getSetting<AuditResult | null>('lastAudit', null);
-    return { audit, today: openFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
+    return { audit, today: openIssues('site-check'), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
   });
   app.post('/api/audit', async () => {
     const audit = await runAudit(siteUrl() ?? undefined);
-    return { audit, today: openFixes(audit), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
+    return { audit, today: openIssues('site-check'), history: auditHistory(), fixed: actionResults(50).filter((a) => a.kind === 'fix-done') };
+  });
+  // Problems from every agent that finds them, in the same steps as drafts (?agent=compliance&status=draft).
+  app.get<{ Querystring: { agent?: string; status?: IssueStatus } }>('/api/issues', async (req) =>
+    trackedIssues().filter((i) => (!req.query.agent || i.agent === req.query.agent) && (!req.query.status || i.status === req.query.status)),
+  );
+  app.post<{ Body: { id?: string } }>('/api/issues/wont-fix', async (req, reply) => {
+    if (!req.body?.id) return reply.code(400).send({ error: 'id required' });
+    try {
+      wontFixIssue(req.body.id);
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+  app.post<{ Body: { id?: string } }>('/api/issues/reopen', async (req, reply) => {
+    if (!req.body?.id) return reply.code(400).send({ error: 'id required' });
+    setWontFix(req.body.id, false);
+    return { ok: true };
   });
   app.post<{ Body: { id?: string } }>('/api/audit/done', async (req, reply) => {
     if (!req.body?.id) return reply.code(400).send({ error: 'id required' });

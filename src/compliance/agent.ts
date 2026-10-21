@@ -4,7 +4,6 @@ import { askJson } from '../llm/client';
 import { createDraft, listDrafts } from '../queue';
 import { siteUrl } from '../sites';
 import { getSetting } from '../db';
-import { pinIssue } from '../agents/seoAudit';
 import type { Agent, Opportunity } from '../agents/types';
 import { REGIONS, Region, lawList, needsStatement } from './regions';
 import { ComplianceResult, lastCompliance, runComplianceScan } from './scan';
@@ -143,8 +142,7 @@ export const complianceAgent: Agent = {
     const origin = siteUrl();
     if (!origin) throw new Error('add your website address first');
     const r = await runComplianceScan(origin, (m) => onProgress?.(m));
-    // Serious ones go straight into Site fixes, so they get the same step-by-step and pull-request flow.
-    for (const i of r.issues.filter((i) => i.severity === 'critical' || i.severity === 'high')) pinIssue(i);
+    // Every problem it finds waits on the Dashboard (and on this agent's page) until it is fixed or turned down.
     const f = getSetting<Pick<ScanFindings, 'links'>>('lastComplianceFindings', { links: { privacy: null, cookies: null, accessibility: null, optOut: null, imprint: null } });
     // The visit is the slow part; once it is done, write everything it calls for (at most three documents).
     return plannedDocs(r, f, alreadyDrafted()).slice(0, Math.max(limit, 3));

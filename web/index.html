@@ -81,6 +81,8 @@
           <span class="today-right"><span id="today-nav" class="today-nav" hidden></span><span id="today-progress" class="muted"></span></span>
         </div>
         <p id="today-flash" class="flash-note" hidden></p>
+        <div id="today-overview" class="ov" hidden></div>
+        <div id="today-filter" class="ov-filter" hidden></div>
         <div id="today-card"></div>
         <div class="section-head">
           <h2>Agents</h2>
@@ -230,7 +232,7 @@
           <div class="editor-bar"><span id="folder-instr-status" class="muted small"></span><span><button id="folder-instr-save" class="secondary">Save instructions</button></span></div>
         </details>
         <div class="tabs" id="folder-tabs">
-          <button data-status="draft">Waiting</button><button data-status="approved">Scheduled</button><button data-status="published">Published</button><button data-status="failed">Failed</button><button data-status="rejected">Turned down</button>
+          <button data-status="draft" title="Drafts and problems waiting for you to decide">Waiting</button><button data-status="approved" title="Approved posts on their way out, and fixes under way (a pull request is open)">Accepted</button><button data-status="published" title="Posts that went out, and problems that are fixed">Resolved</button><button data-status="rejected" title="Drafts marked not useful, and problems you chose not to fix">Rejected</button><button data-status="failed" title="Posts that failed to publish, and fixes that failed">Failed</button>
         </div>
         <ul id="folder-list" class="item-list"></ul>
       </section>

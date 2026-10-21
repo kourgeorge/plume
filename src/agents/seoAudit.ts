@@ -408,24 +408,12 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
 }
 
 /** When each problem was marked fixed. A check that runs after that and still finds it puts it back. */
-function fixedAt(): Record<string, string> {
+export function fixedAt(): Record<string, string> {
   const marks = getSetting<Record<string, string> | null>('fixedIssues', null);
   if (marks) return marks;
   // Older sites kept a plain list in the daily-fixes log: count those as fixed when it was written.
   const old = getSetting<{ day?: string; done?: string[] }>('dailyFixes', {});
   return Object.fromEntries((old.done ?? []).map((id) => [id, `${old.day || '1970-01-01'}T23:59:59.999Z`]));
-}
-
-/**
- * Every problem still waiting, most severe first: the ones sent over by hand (e.g. from the speed panel),
- * then everything the last site check found. A problem leaves only when it is marked fixed, and comes back
- * if a later check still finds it.
- */
-export function openFixes(audit: AuditResult | null): Issue[] {
-  const marks = fixedAt();
-  const pinned = pinnedIssues().filter((i) => !marks[i.id]);
-  const found = (audit?.issues ?? []).filter((i) => !(marks[i.id] && marks[i.id] >= audit!.at) && !pinned.some((p) => p.id === i.id));
-  return [...pinned, ...found];
 }
 
 export function markFixDone(id: string, at = new Date()): void {

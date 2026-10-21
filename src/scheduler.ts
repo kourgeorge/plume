@@ -5,7 +5,8 @@ import { publishDue } from './publish/runner';
 import { pullIfDue } from './analytics/pull';
 import { crawlSite } from './research/crawl';
 import { closeBrowser } from './research/fetchPage';
-import { openFixes, runAudit } from './agents/seoAudit';
+import { runAudit } from './agents/seoAudit';
+import { openIssues } from './issues';
 import { checkSpeed } from './analytics/pagespeed';
 import { AGENTS, runAgent } from './agents';
 import { BudgetExceeded } from './llm/budget';
@@ -110,9 +111,7 @@ export function taskDefs(): TaskDef[] {
       run: async (progress) => {
         try {
           const { runComplianceScan } = require('./compliance/scan') as typeof import('./compliance/scan');
-          const { pinIssue } = require('./agents/seoAudit') as typeof import('./agents/seoAudit');
           const r = await runComplianceScan(site()!, progress, { allPages: true });
-          for (const i of r.issues.filter((i) => i.severity === 'critical' || i.severity === 'high')) pinIssue(i);
           return `checked ${r.pagesChecked} pages: ${r.counts.critical} serious, ${r.counts.warnings} other problem(s)`;
         } finally {
           await closeBrowser();
@@ -133,7 +132,7 @@ export function taskDefs(): TaskDef[] {
           const pages = await crawlSite(site()!);
           progress('Running the site check');
           const audit = await runAudit(site()!);
-          return `read ${pages.length} pages, score ${audit.score}, ${openFixes(audit).length} problems waiting on the Dashboard`;
+          return `read ${pages.length} pages, score ${audit.score}, ${openIssues('site-check').length} problems waiting on the Dashboard`;
         } finally {
           await closeBrowser();
         }

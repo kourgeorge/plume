@@ -1030,3 +1030,69 @@ button.danger:hover:not(:disabled) { background: #a92f22; }
 .snippet { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 10px; font-size: 12px; overflow-x: auto; margin: 8px 0 0; white-space: pre-wrap; }
 /* Delete on a draft: quiet like its neighbours, but red so it isn't pressed by mistake. */
 button.secondary.danger-text { color: var(--bad); }
+
+/* Dashboard overview: what is waiting, how serious, where. Every part is a filter for the cards below. */
+.ov { margin-bottom: 14px; display: flex; flex-direction: column; gap: 10px; }
+.ov-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.ov-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: start; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); font-weight: 400; }
+.ov-tile:hover:not(:disabled) { border-color: var(--faint); background: var(--hover); color: var(--ink); }
+.ov-tile:disabled { opacity: .55; box-shadow: none; }
+.ov-tile .lbl { font-size: 12.5px; color: var(--ink-2); }
+.ov-tile b { font: 500 22px/1.2 var(--font-mono); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.ov-tile .foot { font-size: 11.5px; color: var(--muted); }
+.ov-tile .foot .bad { font-weight: 500; }
+.ov-tile.on, .ov-bar.on, .ov-legend .key.on { outline: 2px solid var(--accent); outline-offset: -1px; }
+.ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; }
+@media (max-width: 760px) { .ov-grid { grid-template-columns: 1fr; } }
+.ov-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); min-width: 0; }
+.ov-panel h3 { margin: 0 0 10px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.ov-panel h3.ov-sub { margin-top: 16px; }
+.ov-sev { display: flex; gap: 2px; height: 20px; }
+.ov-sev .seg { padding: 0; min-width: 6px; border: 0; border-radius: 0; box-shadow: none; cursor: pointer; font: 500 11px/20px var(--font-mono); color: #fff; text-align: center; overflow: hidden; text-shadow: 0 0 3px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.7); }
+.ov-sev .seg.medium, .ov-sev .seg.low { color: var(--ink); text-shadow: none; }
+.ov-legend .key.on { background: var(--hover); }
+.ov-sev .seg:first-child { border-start-start-radius: 4px; border-end-start-radius: 4px; }
+.ov-sev .seg:last-child { border-start-end-radius: 4px; border-end-end-radius: 4px; }
+.ov-sev .seg.critical:hover:not(:disabled) { background: var(--bad); }
+.ov-sev .seg.medium:hover:not(:disabled) { background: color-mix(in srgb, var(--mid) 45%, var(--line)); }
+.ov-sev .seg.low:hover:not(:disabled) { background: var(--line); }
+.ov-sev .seg.high:hover:not(:disabled) { background: repeating-linear-gradient(135deg, var(--mid) 0 4px, color-mix(in srgb, var(--mid) 70%, var(--panel)) 4px 6px); }
+.ov-sev .seg:hover:not(:disabled), .ov-sev .seg.on { outline: 2px solid var(--ink); outline-offset: 1px; }
+.seg.critical, .ov-legend .dot.critical { background: var(--bad); }
+/* Stripes as well as colour: red and amber look alike to many colour-blind people. */
+.seg.high, .ov-legend .dot.high { background: repeating-linear-gradient(135deg, var(--mid) 0 4px, color-mix(in srgb, var(--mid) 70%, var(--panel)) 4px 6px); }
+.seg.medium, .ov-legend .dot.medium { background: color-mix(in srgb, var(--mid) 45%, var(--line)); }
+.seg.low, .ov-legend .dot.low { background: var(--line); }
+.ov-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
+.ov-legend .key { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; box-shadow: none; padding: 2px 4px; border-radius: 6px; color: var(--ink-2); font-size: 12.5px; font-weight: 400; }
+.ov-legend .key:hover:not(:disabled) { background: var(--hover); }
+.ov-legend .key b { color: var(--ink); font-family: var(--font-mono); font-weight: 500; }
+.ov-legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.ov-bars { display: flex; flex-direction: column; gap: 2px; }
+.ov-bar { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 10px; background: none; border: 0; box-shadow: none; padding: 5px 4px; border-radius: 6px; color: var(--ink-2); font-size: 12.5px; font-weight: 400; text-align: start; }
+.ov-bar:hover:not(:disabled), .ov-bar.on { background: var(--hover); }
+.ov-bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-bar .track { height: 8px; }
+.ov-bar .track span { display: block; height: 100%; background: var(--ink-2); opacity: .55; border-radius: 0 4px 4px 0; }
+.ov-bar:hover .track span, .ov-bar.on .track span { opacity: .9; }
+.ov-bar b { font-family: var(--font-mono); font-weight: 500; color: var(--ink); text-align: end; font-variant-numeric: tabular-nums; }
+.ov-check { border-bottom: 1px solid var(--line-soft); }
+.ov-check:last-of-type { border-bottom: 0; }
+.ov-check summary { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 8px 2px; cursor: pointer; font-size: 13px; list-style: none; }
+.ov-check summary::-webkit-details-marker { display: none; }
+.ov-check summary::after { content: "›"; color: var(--faint); transition: transform .15s; grid-column: 4; }
+.ov-check[open] summary::after { transform: rotate(90deg); }
+.ov-check summary:hover { background: var(--hover); border-radius: 6px; }
+.ov-check .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-check .sev { font-size: 11px; padding: 1px 7px; border-radius: 999px; }
+.ov-check ul { margin: 0 0 8px; padding-inline-start: 18px; font-size: 12.5px; columns: 2; column-gap: 18px; }
+.ov-check li { break-inside: avoid; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-check .text-link { background: none; border: 0; box-shadow: none; padding: 0 0 10px; color: var(--accent); font-weight: 500; cursor: pointer; }
+.ov-check .text-link:hover:not(:disabled) { background: none;  text-decoration: underline; }
+.ov-filter { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 10px; border-radius: var(--radius); background: var(--accent-soft); font-size: 13px; }
+/* A problem in an agent's list: opens to show the proposed fix and its buttons. */
+.issue-row summary { cursor: pointer; font-weight: 600; list-style: none; }
+.issue-row summary::-webkit-details-marker { display: none; }
+.issue-row summary small { font-weight: 400; margin-top: 2px; }
+.issue-row .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.item-list li.issue-row li { background: none; border: 0; box-shadow: none; padding: 0; margin: 0 0 4px; }

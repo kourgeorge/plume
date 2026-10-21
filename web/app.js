@@ -362,15 +362,145 @@ async function loadToday() {
   $('today-progress').textContent = t.left ? `${t.left} waiting${t.doneToday ? ` · ${t.doneToday} done today` : ''}` : '';
   // Stay on the same card after a reload; if it's gone (approved, skipped), show the one that took its place.
   const keep = todayItems[todayPos]?.key;
-  todayItems = t.items;
-  const same = todayItems.findIndex((x) => x.key === keep);
-  todayPos = same >= 0 ? same : Math.min(todayPos, Math.max(todayItems.length - 1, 0));
-  showTodayCard();
+  allTodayItems = t.items;
+  renderOverview();
+  applyTodayFilter(keep);
   renderFolders(folders);
 }
 
+let allTodayItems = [];
 let todayItems = [];
 let todayPos = 0;
+/** What the overview narrowed the cards to: { type, value, label }, or null for everything. */
+let todayFilter = null;
+
+const SEV_ORDER = ['critical', 'high', 'medium', 'low'];
+const SEV_NAME = { critical: 'Serious', high: 'Important', medium: 'Warning', low: 'Minor' };
+/** The Dashboard's kinds of card, grouped the way a person thinks about them. */
+const CARD_GROUP = { fix: 'fixes', speed: 'fixes', 'page-change': 'changes', watch: 'changes', draft: 'drafts', rank: 'search', 'ai-gap': 'search' };
+const GROUP_NAME = { fixes: 'Site problems', drafts: 'Drafts to review', search: 'Search and AI', changes: 'Changes to look at' };
+const GROUP_FOOT = { fixes: 'fixes and speed', drafts: 'written by your agents', search: 'rankings and AI answers', changes: 'your site and competitors' };
+/** A plain name for a kind of problem, without one page's numbers in it. */
+const CHECK_NAME = {
+  'images-missing-alt': 'Images without alt text', 'title-length': 'Title too short or too long', 'stale-page': 'Pages not updated in a long time',
+  'broken-page': 'Pages that return an error', 'duplicate-title': 'Same title on several pages', 'thin-content': 'Very little text on the page',
+  'meta-description-length': 'Description too short or too long', 'missing-meta-description': 'No description', 'missing-title': 'No title',
+  'missing-h1': 'No main heading', 'missing-canonical': 'No canonical link', 'images-no-size': 'Images without a set size', 'orphan-page': 'Pages nothing links to',
+  'missing-social-preview': 'No social preview', 'hero-image-lazy': 'Main image loads late', 'page-speed': 'Slow pages',
+};
+
+/** How serious a card is, for the overview's severity filter. Non-problem cards have none. */
+function cardSeverity(i) {
+  if (i.kind === 'fix') return i.fix.severity;
+  if (i.kind === 'speed') return i.performance < 50 ? 'critical' : 'high';
+  if (i.kind === 'page-change') return i.change.worst;
+  return null;
+}
+
+function matchesFilter(i, f) {
+  if (!f) return true;
+  if (f.type === 'group') return CARD_GROUP[i.kind] === f.value;
+  if (f.type === 'severity') return CARD_GROUP[i.kind] === 'fixes' && cardSeverity(i) === f.value;
+  if (f.type === 'area') return (i.kind === 'fix' && i.fix.area === f.value) || (i.kind === 'speed' && f.value === 'performance');
+  if (f.type === 'check') return i.kind === 'fix' && i.fix.check === f.value;
+  return true;
+}
+
+/** Narrow the cards to the overview's choice, staying on `keep` (a card key) when it is still there. */
+function applyTodayFilter(keep) {
+  todayItems = allTodayItems.filter((i) => matchesFilter(i, todayFilter));
+  if (todayFilter && !todayItems.length) todayFilter = null, (todayItems = allTodayItems);
+  const same = todayItems.findIndex((x) => x.key === keep);
+  todayPos = same >= 0 ? same : Math.min(todayPos, Math.max(todayItems.length - 1, 0));
+  const bar = $('today-filter');
+  bar.hidden = !todayFilter;
+  if (todayFilter) {
+    bar.innerHTML = `<span>Showing <b>${esc(todayFilter.label)}</b> · ${todayItems.length} of ${allTodayItems.length}</span><button class="secondary small-btn" id="t-clear">Show everything ×</button>`;
+    $('t-clear').onclick = () => setTodayFilter(null);
+  }
+  for (const el of $('today-overview').querySelectorAll('[data-f]')) el.classList.toggle('on', !!todayFilter && el.dataset.f === `${todayFilter.type}:${todayFilter.value}`);
+  showTodayCard();
+}
+
+function setTodayFilter(f, keep) {
+  todayFilter = f && todayFilter && f.type === todayFilter.type && f.value === todayFilter.value ? null : f;
+  todayPos = 0;
+  applyTodayFilter(keep);
+}
+
+/** The high-level picture above the card: what kind of work is waiting, how serious, where, and the commonest problems. */
+function renderOverview() {
+  const box = $('today-overview');
+  const items = allTodayItems;
+  box.hidden = items.length < 2;
+  if (box.hidden) return;
+  const fixes = items.filter((i) => CARD_GROUP[i.kind] === 'fixes');
+  const f = (type, value) => `data-f="${type}:${esc(value)}" data-type="${type}" data-value="${esc(value)}"`;
+
+  const groups = Object.keys(GROUP_NAME).map((g) => {
+    const mine = items.filter((i) => CARD_GROUP[i.kind] === g);
+    const serious = g === 'fixes' ? mine.filter((i) => cardSeverity(i) === 'critical').length : 0;
+    return `<button class="ov-tile" ${f('group', g)} data-label="${esc(GROUP_NAME[g].toLowerCase())}" ${mine.length ? '' : 'disabled'}>
+      <span class="lbl">${GROUP_NAME[g]}</span><b>${mine.length}</b>
+      <span class="foot">${serious ? `<span class="bad">${serious} serious</span>` : GROUP_FOOT[g]}</span></button>`;
+  });
+
+  let detail = '';
+  if (fixes.length) {
+    const bySev = SEV_ORDER.map((s) => [s, fixes.filter((i) => cardSeverity(i) === s).length]).filter(([, n]) => n);
+    const bar = `<div class="ov-sev" role="group" aria-label="Site problems by how serious they are">${bySev
+      .map(([s, n]) => `<button class="seg ${s}" style="flex:${n}" ${f('severity', s)} data-label="${SEV_NAME[s].toLowerCase()} problems" title="${SEV_NAME[s]}: ${n}" aria-label="${SEV_NAME[s]}: ${n}">${n / fixes.length >= 0.08 ? n : ''}</button>`)
+      .join('')}</div>
+      <div class="ov-legend">${bySev.map(([s, n]) => `<button class="key" ${f('severity', s)} data-label="${SEV_NAME[s].toLowerCase()} problems"><i class="dot ${s}"></i>${SEV_NAME[s]} <b>${n}</b></button>`).join('')}</div>`;
+
+    const areas = new Map();
+    for (const i of fixes) {
+      const a = i.kind === 'speed' ? 'performance' : i.fix.area;
+      areas.set(a, (areas.get(a) ?? 0) + 1);
+    }
+    const areaRows = [...areas.entries()].sort((a, b) => b[1] - a[1]);
+    const most = areaRows[0][1];
+    const byArea = areaRows
+      .map(([a, n]) => {
+        const name = areaLabel(a).replace(/^./, (c) => c.toUpperCase());
+        return `<button class="ov-bar" ${f('area', a)} data-label="${esc(`problems in “${name}”`)}"><span class="name">${esc(name)}</span><span class="track"><span style="width:${Math.max(4, (n / most) * 100)}%"></span></span><b>${n}</b></button>`;
+      })
+      .join('');
+
+    const checks = new Map();
+    for (const i of fixes.filter((x) => x.kind === 'fix')) {
+      const c = checks.get(i.fix.check) ?? { title: i.fix.title, severity: i.fix.severity, cards: [] };
+      if (SEV_ORDER.indexOf(i.fix.severity) < SEV_ORDER.indexOf(c.severity)) c.severity = i.fix.severity;
+      c.cards.push(i);
+      checks.set(i.fix.check, c);
+    }
+    const top = [...checks.entries()].sort((a, b) => SEV_ORDER.indexOf(a[1].severity) - SEV_ORDER.indexOf(b[1].severity) || b[1].cards.length - a[1].cards.length);
+    const pagePath = (u) => { try { const x = new URL(u); return x.pathname === '/' ? x.host : x.pathname; } catch { return u; } };
+    const list = top
+      .slice(0, 6)
+      .map(([check, c]) => {
+        const name = c.cards.length > 1 ? CHECK_NAME[check] ?? c.title : c.title;
+        return `<details class="ov-check"><summary><span class="sev ${c.severity}">${SEV_NAME[c.severity]}</span><span class="t" dir="auto">${esc(name)}</span><span class="muted small">${c.cards.length} ${c.cards.length === 1 ? 'page' : 'pages'}</span></summary>
+          <ul>${c.cards.slice(0, 12).map((i) => `<li><a href="#" data-open="${esc(i.key)}" dir="auto">${esc(pagePath(i.fix.url))}</a></li>`).join('')}${c.cards.length > 12 ? `<li class="muted small">and ${c.cards.length - 12} more</li>` : ''}</ul>
+          ${c.cards.length > 1 ? `<button class="text-link small" ${f('check', check)} data-label="${esc(name.toLowerCase())}">Go through these ${c.cards.length} one by one →</button>` : ''}</details>`;
+      })
+      .join('');
+    detail = `<div class="ov-grid">
+      <div class="ov-panel"><h3>How serious</h3>${bar}<h3 class="ov-sub">Where</h3><div class="ov-bars">${byArea}</div></div>
+      <div class="ov-panel"><h3>Most common problems</h3>${list}${top.length > 6 ? `<p class="muted small"><a href="#check">See all ${top.length} kinds of problem →</a></p>` : ''}</div>
+    </div>`;
+  }
+  box.innerHTML = `<div class="ov-tiles">${groups.join('')}</div>${detail}`;
+  for (const el of box.querySelectorAll('[data-type]')) el.onclick = () => setTodayFilter({ type: el.dataset.type, value: el.dataset.value, label: el.dataset.label });
+  for (const a of box.querySelectorAll('[data-open]'))
+    a.onclick = (e) => {
+      e.preventDefault();
+      const key = a.dataset.open;
+      if (!todayItems.some((i) => i.key === key)) todayFilter = null;
+      applyTodayFilter(key);
+      $('today-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+}
 
 /** Show the card at todayPos, with back / next arrows to move through every waiting card. */
 function showTodayCard() {
@@ -424,20 +554,22 @@ function renderTodayCard(item) {
   } else if (item.kind === 'fix') {
     const f = item.fix;
     box.innerHTML = `<div class="today">
-      <div class="kicker"><span class="sev ${f.severity}">${esc(f.severity)}</span><span>·</span><span>Site fix · ${esc(areaLabel(f.area))}</span></div>
+      <div class="kicker"><span class="sev ${f.severity}">${esc(f.severity)}</span><span>·</span><span>${esc(agentLabel(f.agent))} · ${esc(areaLabel(f.area))}</span>${f.status === 'failed' ? '<span>·</span><span class="bad">fix failed</span>' : ''}</div>
       <h2>${esc(f.title)}</h2>
       <p class="why">${esc(f.url)}</p>
       <p class="body">${esc(f.why)}</p>
+      <p class="small"><strong>Proposed fix</strong></p>
       <ol>${f.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
       ${f.snippet ? `<pre><code>${esc(f.snippet)}</code></pre>` : ''}
       <div class="acts">
         <button id="t-done">Mark as fixed</button>
         ${f.snippet ? '<button class="secondary" id="t-copy">Copy code</button>' : ''}
         <span data-pr-issue="${esc(f.id)}"></span>
-        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button></span>
+        <span class="right"><button class="secondary" id="t-skip" title="Move this to the end of the list. It stays until it is dealt with.">Later</button><button class="secondary" id="t-wontfix" title="Leaves the Dashboard. You can reopen it from the agent's Rejected list.">Won’t fix</button></span>
       </div></div>`;
     if (window.plumeGeo) window.plumeGeo.wirePr(box);
     $('t-done').onclick = act(async () => post('/api/audit/done', { id: f.id }));
+    $('t-wontfix').onclick = act(async () => post('/api/issues/wont-fix', { id: f.id }));
     if (f.snippet) $('t-copy').onclick = () => navigator.clipboard.writeText(f.snippet).then(() => ($('t-copy').textContent = 'Copied'));
   } else if (item.kind === 'speed') {
     box.innerHTML = `<div class="today">
@@ -571,7 +703,7 @@ function act(fn) {
 
 const AGENT_GLYPH = { seo: '⌕', writer: '✎', 'site-check': '⚙', social: '✦', reddit: '◉', influencer: '☺', links: '⛓', video: '▶' };
 function agentLabel(id) {
-  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes', social: 'Social', reddit: 'Reddit', influencer: 'Influencers', links: 'Links', video: 'Video', chat: 'Chat' }[id] ?? id;
+  return { seo: 'SEO agent', writer: 'Writer', 'site-check': 'Site fixes', social: 'Social', reddit: 'Reddit', influencer: 'Influencers', links: 'Links', video: 'Video', chat: 'Chat', compliance: 'Compliance', red: 'Security' }[id] ?? id;
 }
 function kindLabel(k) {
   return (
@@ -792,11 +924,47 @@ async function renderCompliancePanel(id) {
   }
   const n = scan.issues.length;
   box.innerHTML = `
-    <p><strong>Last checked ${esc(when(scan.at))}</strong> · ${scan.pagesChecked} page${scan.pagesChecked === 1 ? '' : 's'}${scan.allPages ? ' (every page)' : ' (one of each kind)'} · ${n ? `${scan.counts.critical} serious, ${scan.counts.warnings} other problem${scan.counts.warnings === 1 ? '' : 's'} (<a href="#check">in Site fixes</a>)` : 'no problems found'}</p>
+    <p><strong>Last checked ${esc(when(scan.at))}</strong> · ${scan.pagesChecked} page${scan.pagesChecked === 1 ? '' : 's'}${scan.allPages ? ' (every page)' : ' (one of each kind)'} · ${n ? `${scan.counts.critical} serious, ${scan.counts.warnings} other problem${scan.counts.warnings === 1 ? '' : 's'} (listed below, each with a proposed fix)` : 'no problems found'}</p>
     <p>Rules checked: ${scan.regions.map((r) => esc(regionNames[r] ?? r)).join(', ')}</p>
     <p class="muted small">${scan.regionsWhy.map(esc).join(' ')}</p>
     <p>Loads before the visitor agrees to anything: ${scan.trackersBefore.length ? scan.trackersBefore.map(esc).join(', ') : 'nothing Plume recognises as a tracker'}${scan.cmp ? ` · cookie banner: ${esc(scan.cmp)}` : ''}</p>
     <p class="muted small">To check every page instead, switch on "Privacy and accessibility check on every page" in the <a href="#logs">Timetable</a>. Plume checks what a visitor can see. It is not legal advice.</p>`;
+}
+
+/** One problem in an agent's list: what is wrong, the proposed fix, and the buttons for where it stands. */
+function issueRow(i) {
+  const pr = i.fix?.prUrl ? ` · <a href="${esc(i.fix.prUrl)}" target="_blank" rel="noopener">pull request</a>` : '';
+  const open = i.status === 'draft' || i.status === 'failed';
+  return `<li class="issue-row"><details><summary><span class="sev ${i.severity}">${esc(i.severity)}</span> <span dir="auto">${esc(i.title)}</span>
+      <small>Problem · ${esc(areaLabel(i.area))} · ${esc(sourceName(i.url))}${i.fixedAt ? ` · fixed ${esc(when(i.fixedAt))}` : ''}${pr}</small></summary>
+      <p class="small">${esc(i.why)}</p>
+      ${i.steps?.length ? `<p class="small"><strong>Proposed fix</strong></p><ol class="small">${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : ''}
+      ${i.snippet ? `<pre><code>${esc(i.snippet)}</code></pre>` : ''}
+      ${i.status === 'failed' && i.fix?.message ? `<p class="small bad">${esc(i.fix.message)}</p>` : ''}
+      <div class="acts">
+        ${open ? `<button class="small-btn" data-issue-done="${esc(i.id)}">Mark as fixed</button> <span data-pr-issue="${esc(i.id)}"></span> <button class="secondary small-btn" data-issue-wontfix="${esc(i.id)}">Won’t fix</button>` : ''}
+        ${i.status === 'rejected' ? `<button class="secondary small-btn" data-issue-reopen="${esc(i.id)}">Reopen</button>` : ''}
+      </div></details></li>`;
+}
+
+function wireIssueRows(box, reload) {
+  if (window.plumeGeo) window.plumeGeo.wirePr(box);
+  const on = (attr, fn) => {
+    for (const b of box.querySelectorAll(`[${attr}]`))
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          await fn(b.getAttribute(attr));
+          await reload();
+        } catch (err) {
+          alertBox(err.message);
+          b.disabled = false;
+        }
+      };
+  };
+  on('data-issue-done', (id) => post('/api/audit/done', { id }));
+  on('data-issue-wontfix', (id) => post('/api/issues/wont-fix', { id }));
+  on('data-issue-reopen', (id) => post('/api/issues/reopen', { id }));
 }
 
 async function loadFolder(id) {
@@ -832,12 +1000,15 @@ async function loadFolder(id) {
     b.classList.toggle('on', b.dataset.status === folderStatus);
     b.onclick = () => ((folderStatus = b.dataset.status), loadFolder(id));
   }
-  const drafts = await api(`/api/drafts?agent=${encodeURIComponent(id)}&status=${folderStatus}`);
-  $('folder-list').innerHTML = drafts.length
-    ? drafts
+  const q = `agent=${encodeURIComponent(id)}&status=${folderStatus}`;
+  const [drafts, issues] = await Promise.all([api(`/api/drafts?${q}`), api(`/api/issues?${q}`)]);
+  // Problems the agent found come first: each one is a fix it proposes, waiting like a draft.
+  $('folder-list').innerHTML =
+    issues.map(issueRow).join('') +
+      drafts
         .map((d) => `<li><a href="#draft/${d.id}" dir="auto">${esc(d.title)}</a><small>${esc(kindLabel(d.kind))} · ${d.words} words · ${when(d.updatedAt)}${d.dryRun ? ' · dry run' : ''}${d.publishedUrl?.startsWith('http') ? ` · <a href="${esc(d.publishedUrl)}" target="_blank" rel="noopener">open</a>` : ''}</small></li>`)
-        .join('')
-    : '<li class="muted">Nothing here yet.</li>';
+        .join('') || '<li class="muted">Nothing here yet.</li>';
+  wireIssueRows($('folder-list'), () => loadFolder(id));
   draftBack = `#folder/${id}`;
 }
 

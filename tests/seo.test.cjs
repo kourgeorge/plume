@@ -7,7 +7,9 @@ const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
 process.env.PLUME_SITE = 'test.example';
-const { auditPages, openFixes, markFixDone } = require('../src/agents/seoAudit');
+const { auditPages, markFixDone } = require('../src/agents/seoAudit');
+const { openIssues, trackedIssues, setWontFix } = require('../src/issues');
+const { setSetting } = require('../src/db');
 const { filterNew, searchConsoleGaps } = require('../src/agents/seo');
 
 const page = (o) => ({ url: 'https://a.com/', status: 200, title: 'Acme widgets for small teams', meta_description: 'x'.repeat(130), canonical: 'https://a.com/', h1: 'Widgets', headings: '[]', images_missing_alt: 0, has_schema: 1, word_count: 600, ...o });
@@ -38,14 +40,26 @@ test('snippets escape page text', () => {
   assert.doesNotMatch(r.issues.find((i) => i.check === 'missing-title').snippet, /<script>x/);
 });
 
-test('every open problem waits until marked fixed, and comes back if a later check still finds it', () => {
+test('every problem waits until fixed or turned down, and a later check that still finds it brings it back', () => {
   const r = { ...auditPages([page({ url: 'https://a.com/x', title: '', meta_description: '', canonical: '', h1: '' })]), at: '2026-10-16T05:00:00.000Z' };
-  const all = openFixes(r);
+  setSetting('lastAudit', r);
+  const all = openIssues('site-check');
   assert.equal(all.length, r.issues.length, 'every problem should be waiting, not two a day');
   markFixDone(all[0].id, new Date('2026-10-16T10:00:00Z'));
-  assert.deepEqual(openFixes(r).map((i) => i.id), all.slice(1).map((i) => i.id), 'a fix marked done must leave the list');
-  const later = { ...r, at: '2026-10-17T05:00:00.000Z' };
-  assert.equal(openFixes(later).length, all.length, 'a problem the next check still finds should come back');
+  assert.equal(trackedIssues().find((i) => i.id === all[0].id).status, 'published', 'a fixed problem is resolved');
+  setWontFix(all[1].id, true);
+  assert.equal(trackedIssues().find((i) => i.id === all[1].id).status, 'rejected');
+  assert.equal(openIssues('site-check').length, all.length - 2);
+  setSetting('lastAudit', { ...r, at: '2026-10-17T05:00:00.000Z' });
+  assert.equal(openIssues('site-check').length, all.length - 1, 'the fixed one is found again and comes back; the turned-down one stays out');
+  setWontFix(all[1].id, false);
+  assert.equal(openIssues('site-check').length, all.length);
+});
+
+test('problems from the compliance check belong to the compliance agent', () => {
+  setSetting('lastCompliance', { issues: [{ id: 'no-banner:https://a.com/', check: 'no-banner', severity: 'critical', area: 'privacy', url: 'https://a.com/', title: 'No banner', why: 'w', steps: ['s'] }], at: '2026-10-17T05:00:00.000Z' });
+  assert.deepEqual(openIssues('compliance').map((i) => i.id), ['no-banner:https://a.com/']);
+  setSetting('lastCompliance', null);
 });
 
 test('filterNew drops covered and duplicate keywords', () => {

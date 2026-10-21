@@ -330,8 +330,12 @@ const FOLLOW_UP_DAYS = 3;
 
 /** Find a site-check problem by its id, in the latest check or in the ones sent over by hand. */
 export function findIssue(id: string): Issue | null {
-  const audit = getSetting<AuditResult | null>('lastAudit', null);
-  return audit?.issues.find((i) => i.id === id) ?? pinnedIssues().find((i) => i.id === id) ?? null;
+  // Any agent that finds problems: the site check, the compliance check, the security scan.
+  for (const key of ['lastAudit', 'lastCompliance', 'lastRedScan']) {
+    const hit = getSetting<{ issues: Issue[] } | null>(key, null)?.issues.find((i) => i.id === id);
+    if (hit) return hit;
+  }
+  return pinnedIssues().find((i) => i.id === id) ?? null;
 }
 
 /** What the owner sees before a pull request is opened. */

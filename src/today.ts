@@ -1,6 +1,7 @@
 import { getSetting, setSetting } from './db';
 import { listDrafts, getDraft, moveDraft, Draft } from './queue';
-import { AuditResult, Issue, markFixDone, openFixes, pinIssue, pinnedIssues } from './agents/seoAudit';
+import { Issue, markFixDone, pinIssue } from './agents/seoAudit';
+import { findTracked, openIssues, setWontFix } from './issues';
 import { recordFixDone } from './actions';
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
@@ -14,7 +15,7 @@ import { GoogleUpdate, updatesNear } from './seo/googleUpdates';
 /** One card on the Dashboard. `key` is stable so "Later" survives a refresh. */
 export type TodayItem =
   | { key: string; kind: 'draft'; score: number; draft: Omit<Draft, 'body' | 'originalBody'> & { preview: string; words: number; targets: string[] } }
-  | { key: string; kind: 'fix'; score: number; fix: Issue }
+  | { key: string; kind: 'fix'; score: number; fix: Issue & { agent: string; status: string; fix: unknown } }
   | { key: string; kind: 'speed'; score: number; strategy: Strategy; headline: string; performance: number }
   | { key: string; kind: 'watch'; score: number; change: ChangeCard }
   | { key: string; kind: 'rank'; score: number; alert: RankAlert; googleUpdates: GoogleUpdate[] }
@@ -56,7 +57,7 @@ export function preview(markdown: string, words = 45): string {
 export function todayFeed(now = new Date()): TodayItem[] {
   const items: TodayItem[] = [];
 
-  for (const f of openFixes(getSetting<AuditResult | null>('lastAudit', null))) items.push({ key: `fix:${f.id}`, kind: 'fix', score: SEVERITY_SCORE[f.severity], fix: f });
+  for (const f of openIssues()) items.push({ key: `fix:${f.id}`, kind: 'fix', score: SEVERITY_SCORE[f.severity], fix: f });
 
   const speed = lastSpeed();
   const handled = getSetting<Record<string, string>>('speedHandled', {});
@@ -85,7 +86,8 @@ export function todayFeed(now = new Date()): TodayItem[] {
     items.push({ key: `watch:${c.id}`, kind: 'watch', score: real ? 50 : 10, change: c });
   }
 
-  for (const d of listDrafts({ status: 'draft' })) {
+  // Drafts waiting for a yes or no, and ones that failed to publish and need another go.
+  for (const d of [...listDrafts({ status: 'draft' }), ...listDrafts({ status: 'failed' })]) {
     const { body, originalBody, ...rest } = d;
     const fromData = d.meta.source === 'search-console';
     items.push({ key: `draft:${d.id}`, kind: 'draft', score: fromData ? 80 : 60, draft: { ...rest, preview: preview(body), words: body.split(/\s+/).length, targets: targetsFor(d.kind) } });
@@ -119,8 +121,9 @@ export function notUseful(draftId: number, reason: string | null): void {
 
 export function fixDone(id: string): void {
   // Look it up before marking it: a pinned fix leaves the pinned list once done.
-  const issue = getSetting<AuditResult | null>('lastAudit', null)?.issues.find((i) => i.id === id) ?? pinnedIssues().find((i) => i.id === id);
+  const issue = findTracked(id);
   markFixDone(id);
+  setWontFix(id, false);
   if (issue) recordFixDone(issue);
   countDone();
 }
@@ -133,6 +136,13 @@ export function sendSpeedToSeo(strategy: Strategy): Issue | null {
   pinIssue(issue);
   setSetting('speedHandled', { ...getSetting<Record<string, string>>('speedHandled', {}), [strategy]: r!.at });
   return issue;
+}
+
+/** "Won't fix": the problem leaves the Dashboard and stays in the agent's Rejected list, where it can be reopened. */
+export function wontFixIssue(id: string): void {
+  if (!findTracked(id)) throw new Error('that problem is no longer in the latest check');
+  setWontFix(id, true);
+  countDone();
 }
 
 export function changeSeen(id: number): void {
