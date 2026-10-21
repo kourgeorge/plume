@@ -4,7 +4,6 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const Database = require('better-sqlite3');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-geo-'));
 process.env.PLUME_SITE = 'test.example';
@@ -135,24 +134,6 @@ test('crawler records kinds and dates; a Hebrew page works the same', () => {
   assert.deepEqual(p.schemaTypes, ['DrivingSchool']);
   assert.equal(p.pageDate, '2025-02-01T00:00:00.000Z');
   assert.equal(p.lang, 'he');
-});
-
-test('an older site database gains the new page columns on open, keeping its rows', () => {
-  const slug = 'old.example';
-  const dir = path.join(process.env.DATA_DIR, 'sites', slug);
-  fs.mkdirSync(dir, { recursive: true });
-  const old = new Database(path.join(dir, 'site.db'));
-  old.exec(`CREATE TABLE pages (url TEXT PRIMARY KEY, status INTEGER, title TEXT, meta_description TEXT, canonical TEXT, h1 TEXT, headings TEXT, images_missing_alt INTEGER, has_schema INTEGER, word_count INTEGER, text TEXT, crawled_at TEXT);
-    INSERT INTO pages (url, status, title) VALUES ('https://old.example/', 200, 'Old');`);
-  old.close();
-  const d = db.getDb(slug);
-  const cols = d.prepare('PRAGMA table_info(pages)').all().map((c) => c.name);
-  assert.ok(cols.includes('schema_types') && cols.includes('page_date'));
-  const row = d.prepare('SELECT * FROM pages').get();
-  assert.equal(row.title, 'Old');
-  assert.equal(row.schema_types, '[]');
-  db.closeSiteDb(slug);
-  assert.doesNotThrow(() => db.getDb(slug), 'opening twice must not try to add the columns again');
 });
 
 // ---------------------------------------------------------------- 3. writing rules

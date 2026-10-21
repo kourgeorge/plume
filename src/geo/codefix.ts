@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb, getSetting } from '../db';
 import { MODELS } from '../config';
 import { askJson } from '../llm/client';
@@ -27,42 +26,6 @@ import { RECHECKABLE } from '../compliance/checks';
  * 2. Open: on the owner's say-so, open a pull request on a new branch. Plume never merges.
  * 3. Follow up: once the pull request is merged, re-read the live page and mark the fix done if it's gone.
  */
-
-const TABLE = `CREATE TABLE IF NOT EXISTS code_fixes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  issue_id TEXT NOT NULL,
-  at TEXT NOT NULL,
-  status TEXT NOT NULL,            -- proposed | cancelled | opened | merged | verified | closed | failed | not-fixable
-  pr_url TEXT,
-  files TEXT NOT NULL DEFAULT '[]',
-  message TEXT
-);
-CREATE INDEX IF NOT EXISTS code_fixes_by_issue ON code_fixes (issue_id, id);
--- Which repository file a page comes from, found once by matching the live page's text, reused after.
-CREATE TABLE IF NOT EXISTS page_sources (
-  url TEXT PRIMARY KEY,
-  repo TEXT NOT NULL,
-  path TEXT NOT NULL,
-  how TEXT NOT NULL,
-  at TEXT NOT NULL
-);`;
-/** Added after the first version of the table; older databases get them on first use. */
-const LATER_COLUMNS: [string, string][] = [
-  ['pr_number', 'INTEGER'],
-  ['proposal', 'TEXT'],
-  ['checked_at', 'TEXT'],
-];
-const ready = new WeakSet<Database.Database>();
-function db(): Database.Database {
-  const d = getDb();
-  if (!ready.has(d)) {
-    d.exec(TABLE);
-    const have = new Set((d.prepare('PRAGMA table_info(code_fixes)').all() as { name: string }[]).map((c) => c.name));
-    for (const [name, type] of LATER_COLUMNS) if (!have.has(name)) d.exec(`ALTER TABLE code_fixes ADD COLUMN ${name} ${type}`);
-    ready.add(d);
-  }
-  return d;
-}
 
 // ---------------------------------------------------------------- GitHub
 
@@ -156,12 +119,12 @@ export function searchOrder(url: string, tree: TreeFile[], limit = 40): string[]
 }
 
 function rememberedSource(url: string, repo: string): string | null {
-  const r = db().prepare('SELECT path FROM page_sources WHERE url = ? AND repo = ?').get(url, repo) as { path: string } | undefined;
+  const r = getDb().prepare('SELECT path FROM page_sources WHERE url = ? AND repo = ?').get(url, repo) as { path: string } | undefined;
   return r?.path ?? null;
 }
 
 function rememberSource(url: string, repo: string, path: string, how: string): void {
-  db().prepare('INSERT OR REPLACE INTO page_sources (url, repo, path, how, at) VALUES (?, ?, ?, ?, ?)').run(url, repo, path, how, new Date().toISOString());
+  getDb().prepare('INSERT OR REPLACE INTO page_sources (url, repo, path, how, at) VALUES (?, ?, ?, ?, ?)').run(url, repo, path, how, new Date().toISOString());
 }
 
 /**
@@ -370,7 +333,7 @@ function rowState(r: any): FixState {
 }
 
 function latestRow(issueId: string): any {
-  return db().prepare('SELECT * FROM code_fixes WHERE issue_id = ? ORDER BY id DESC LIMIT 1').get(issueId);
+  return getDb().prepare('SELECT * FROM code_fixes WHERE issue_id = ? ORDER BY id DESC LIMIT 1').get(issueId);
 }
 
 export function lastFix(issueId: string): FixState | null {
@@ -379,12 +342,12 @@ export function lastFix(issueId: string): FixState | null {
 }
 
 export function fixesByIssue(): Record<string, FixState> {
-  const rows = db().prepare('SELECT * FROM code_fixes WHERE id IN (SELECT MAX(id) FROM code_fixes GROUP BY issue_id)').all() as any[];
+  const rows = getDb().prepare('SELECT * FROM code_fixes WHERE id IN (SELECT MAX(id) FROM code_fixes GROUP BY issue_id)').all() as any[];
   return Object.fromEntries(rows.map((r) => [r.issue_id, rowState(r)]));
 }
 
 function record(issueId: string, status: string, message: string, o: { prUrl?: string | null; prNumber?: number | null; files?: string[]; proposal?: StoredProposal } = {}): void {
-  db()
+  getDb()
     .prepare('INSERT INTO code_fixes (issue_id, at, status, pr_url, pr_number, files, message, proposal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(issueId, new Date().toISOString(), status, o.prUrl ?? null, o.prNumber ?? null, JSON.stringify(o.files ?? []), message, o.proposal ? JSON.stringify(o.proposal) : null);
 }
@@ -639,7 +602,7 @@ export async function followUpFixes(env = siteEnv(), fetchFn: typeof fetch = fet
   const out = { checked: 0, verified: [] as string[], closed: 0 };
   if (!ghConfigured(env)) return out;
   const g = gh(env);
-  const rows = (db().prepare("SELECT * FROM code_fixes WHERE id IN (SELECT MAX(id) FROM code_fixes GROUP BY issue_id) AND status IN ('opened', 'merged') AND pr_number IS NOT NULL").all() as any[]);
+  const rows = (getDb().prepare("SELECT * FROM code_fixes WHERE id IN (SELECT MAX(id) FROM code_fixes GROUP BY issue_id) AND status IN ('opened', 'merged') AND pr_number IS NOT NULL").all() as any[]);
   for (const r of rows) {
     out.checked++;
     const issue = findIssue(r.issue_id);
@@ -676,7 +639,7 @@ export async function followUpFixes(env = siteEnv(), fetchFn: typeof fetch = fet
     // Stop re-checking once there's nothing more Plume can learn on its own.
     const done = broken === null || days > FOLLOW_UP_DAYS;
     if (r.status !== 'merged' || r.message !== msg) record(issue.id, done ? 'closed' : 'merged', msg, keep);
-    else db().prepare('UPDATE code_fixes SET checked_at = ? WHERE id = ?').run(new Date().toISOString(), r.id);
+    else getDb().prepare('UPDATE code_fixes SET checked_at = ? WHERE id = ?').run(new Date().toISOString(), r.id);
   }
   return out;
 }

@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb, getGlobalDb, getGlobalSetting, getSetting, setGlobalSetting, setSetting } from '../db';
 import { MODELS } from '../config';
 import { askJson, askPlain } from '../llm/client';
@@ -15,49 +14,6 @@ import { log } from '../log';
  * they name this business, in what position, how they describe it, and who they name instead.
  * These answers come from what each assistant already knows; they don't search the web here.
  */
-
-// Own tables, created on first use, so this feature doesn't touch the shared schema file.
-const TABLES = `
-CREATE TABLE IF NOT EXISTS ai_questions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  question TEXT NOT NULL UNIQUE,
-  source TEXT NOT NULL,            -- user | suggested
-  added_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ai_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at TEXT NOT NULL,
-  engines TEXT NOT NULL,           -- JSON {engine: model}
-  status TEXT NOT NULL,            -- running | done | failed
-  error TEXT,
-  cost REAL NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS ai_answers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER NOT NULL,
-  question_id INTEGER NOT NULL,
-  question TEXT NOT NULL,          -- copied, so history survives deleting the question
-  engine TEXT NOT NULL,
-  model TEXT NOT NULL,
-  answer TEXT,
-  error TEXT,
-  mentioned INTEGER,
-  position INTEGER,                -- 1 = named first among the businesses it recommends
-  sentiment TEXT,                  -- positive | neutral | negative
-  competitors TEXT NOT NULL DEFAULT '[]',
-  others TEXT NOT NULL DEFAULT '[]'
-);
-CREATE INDEX IF NOT EXISTS ai_answers_by_run ON ai_answers (run_id, question_id);
-`;
-const ready = new WeakSet<Database.Database>();
-function db(): Database.Database {
-  const d = getDb();
-  if (!ready.has(d)) {
-    d.exec(TABLES);
-    ready.add(d);
-  }
-  return d;
-}
 
 export const MAX_QUESTIONS = 20;
 
@@ -174,21 +130,21 @@ export interface Question {
 }
 
 export function listQuestions(): Question[] {
-  return (db().prepare('SELECT * FROM ai_questions ORDER BY id').all() as any[]).map((r) => ({ id: r.id, question: r.question, source: r.source, addedAt: r.added_at }));
+  return (getDb().prepare('SELECT * FROM ai_questions ORDER BY id').all() as any[]).map((r) => ({ id: r.id, question: r.question, source: r.source, addedAt: r.added_at }));
 }
 
 export function addQuestion(raw: string, source: Question['source'] = 'user'): Question | null {
   const q = String(raw ?? '').replace(/\s+/g, ' ').trim();
   if (q.length < 8) throw new Error('write the question the way a customer would ask it (at least a few words)');
   if (q.length > 300) throw new Error('keep the question under 300 characters');
-  if (db().prepare('SELECT 1 FROM ai_questions WHERE lower(question) = lower(?)').get(q)) return null;
+  if (getDb().prepare('SELECT 1 FROM ai_questions WHERE lower(question) = lower(?)').get(q)) return null;
   if (listQuestions().length >= MAX_QUESTIONS) throw new Error(`you can check up to ${MAX_QUESTIONS} questions — remove one first`);
-  const r = db().prepare('INSERT INTO ai_questions (question, source, added_at) VALUES (?, ?, ?)').run(q, source, new Date().toISOString());
+  const r = getDb().prepare('INSERT INTO ai_questions (question, source, added_at) VALUES (?, ?, ?)').run(q, source, new Date().toISOString());
   return listQuestions().find((x) => x.id === Number(r.lastInsertRowid))!;
 }
 
 export function removeQuestion(id: number): void {
-  db().prepare('DELETE FROM ai_questions WHERE id = ?').run(id);
+  getDb().prepare('DELETE FROM ai_questions WHERE id = ?').run(id);
 }
 
 /** Questions a customer would ask an assistant before they know this business exists. */
@@ -314,9 +270,9 @@ export async function runVisibilityCheck(onProgress: (m: string) => void = () =>
   }
   const engines = activeEngines();
   if (!engines.length) throw new Error('no AI assistant answered — check the AI connection on the website list');
-  const run = Number(db().prepare(`INSERT INTO ai_runs (at, engines, status) VALUES (?, ?, 'running')`).run(new Date().toISOString(), JSON.stringify(Object.fromEntries(engines))).lastInsertRowid);
+  const run = Number(getDb().prepare(`INSERT INTO ai_runs (at, engines, status) VALUES (?, ?, 'running')`).run(new Date().toISOString(), JSON.stringify(Object.fromEntries(engines))).lastInsertRowid);
   const purpose = `ai-visibility:run:${run}`;
-  const ins = db().prepare(
+  const ins = getDb().prepare(
     'INSERT INTO ai_answers (run_id, question_id, question, engine, model, answer, error, mentioned, position, sentiment, competitors, others) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   try {
@@ -335,12 +291,12 @@ export async function runVisibilityCheck(onProgress: (m: string) => void = () =>
       );
     }
     const cost = (getGlobalDb().prepare('SELECT COALESCE(SUM(cost_usd), 0) c FROM llm_calls WHERE site = ? AND purpose = ?').get(currentSite(), purpose) as { c: number }).c;
-    db().prepare(`UPDATE ai_runs SET status = 'done', cost = ? WHERE id = ?`).run(cost, run);
+    getDb().prepare(`UPDATE ai_runs SET status = 'done', cost = ? WHERE id = ?`).run(cost, run);
     const s = visibilitySummary();
     log('info', 'ai-visibility', `named in ${s?.overall.mentioned ?? 0} of ${s?.overall.answered ?? 0} answers ($${cost.toFixed(3)})`);
     return run;
   } catch (err: any) {
-    db().prepare(`UPDATE ai_runs SET status = 'failed', error = ? WHERE id = ?`).run(String(err?.message ?? err), run);
+    getDb().prepare(`UPDATE ai_runs SET status = 'failed', error = ? WHERE id = ?`).run(String(err?.message ?? err), run);
     throw err;
   }
 }
@@ -357,9 +313,9 @@ export interface Cell {
 }
 
 export function visibilitySummary() {
-  const run = db().prepare(`SELECT * FROM ai_runs WHERE status = 'done' ORDER BY id DESC LIMIT 1`).get() as any;
+  const run = getDb().prepare(`SELECT * FROM ai_runs WHERE status = 'done' ORDER BY id DESC LIMIT 1`).get() as any;
   if (!run) return null;
-  const rows = db().prepare('SELECT * FROM ai_answers WHERE run_id = ? ORDER BY question_id, engine').all(run.id) as any[];
+  const rows = getDb().prepare('SELECT * FROM ai_answers WHERE run_id = ? ORDER BY question_id, engine').all(run.id) as any[];
   const engines = Object.keys(JSON.parse(run.engines)) as EngineId[];
   const answered = rows.filter((r) => !r.error);
   const mentioned = answered.filter((r) => r.mentioned);
@@ -388,8 +344,8 @@ export function visibilitySummary() {
   const voice = new Map<string, number>();
   for (const r of answered) for (const n of new Set([...JSON.parse(r.competitors), ...JSON.parse(r.others)])) voice.set(n, (voice.get(n) ?? 0) + 1);
   const shareOfVoice = [{ name: 'You', answers: mentioned.length, you: true }, ...[...voice].sort((a, b) => b[1] - a[1]).slice(0, 9).map(([name, answers]) => ({ name, answers, you: false }))];
-  const trend = (db().prepare(`SELECT id, at FROM ai_runs WHERE status = 'done' ORDER BY id DESC LIMIT 12`).all() as any[]).reverse().map((t) => {
-    const a = db().prepare('SELECT COUNT(*) n, COALESCE(SUM(mentioned), 0) m FROM ai_answers WHERE run_id = ? AND error IS NULL').get(t.id) as { n: number; m: number };
+  const trend = (getDb().prepare(`SELECT id, at FROM ai_runs WHERE status = 'done' ORDER BY id DESC LIMIT 12`).all() as any[]).reverse().map((t) => {
+    const a = getDb().prepare('SELECT COUNT(*) n, COALESCE(SUM(mentioned), 0) m FROM ai_answers WHERE run_id = ? AND error IS NULL').get(t.id) as { n: number; m: number };
     return { at: t.at, score: a.n ? Math.round((100 * a.m) / a.n) : 0 };
   });
   return {
@@ -406,17 +362,17 @@ export function visibilitySummary() {
 }
 
 export function getAnswer(id: number): { question: string; engine: string; model: string; answer: string | null; error: string | null } | null {
-  const r = db().prepare('SELECT question, engine, model, answer, error FROM ai_answers WHERE id = ?').get(id) as any;
+  const r = getDb().prepare('SELECT question, engine, model, answer, error FROM ai_answers WHERE id = ?').get(id) as any;
   return r ?? null;
 }
 
 export function runningRun(): boolean {
-  return !!db().prepare(`SELECT 1 FROM ai_runs WHERE status = 'running'`).get();
+  return !!getDb().prepare(`SELECT 1 FROM ai_runs WHERE status = 'running'`).get();
 }
 
 /** On startup: a check cut off by a restart is marked failed rather than "running" forever. */
 export function closeStaleRuns(): void {
-  db().prepare(`UPDATE ai_runs SET status = 'failed', error = 'stopped because Plume was restarted' WHERE status = 'running'`).run();
+  getDb().prepare(`UPDATE ai_runs SET status = 'failed', error = 'stopped because Plume was restarted' WHERE status = 'running'`).run();
 }
 
 // ---------------------------------------------------------------- gaps → Dashboard
@@ -439,7 +395,7 @@ export function openGaps(): Gap[] {
     if (done.has(`${s.runId}:${q.questionId}`)) continue;
     const cells = Object.values(q.cells).filter((c): c is Cell => !!c && c.mentioned !== null);
     if (!cells.length || cells.some((c) => c.mentioned)) continue;
-    const rows = db().prepare('SELECT competitors, others FROM ai_answers WHERE run_id = ? AND question_id = ? AND error IS NULL').all(s.runId, q.questionId) as any[];
+    const rows = getDb().prepare('SELECT competitors, others FROM ai_answers WHERE run_id = ? AND question_id = ? AND error IS NULL').all(s.runId, q.questionId) as any[];
     const named = [...new Set(rows.flatMap((r) => [...JSON.parse(r.competitors), ...JSON.parse(r.others)]))];
     if (named.length) out.push({ runId: s.runId, questionId: q.questionId, question: q.question, namedInstead: named.slice(0, 5), engines: cells.length });
   }

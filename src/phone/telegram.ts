@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import type Database from 'better-sqlite3';
 import { getDb, getGlobalDb, getSetting, setSetting } from '../db';
 import { siteEnv } from '../integrations';
 import { log } from '../log';
@@ -24,33 +23,6 @@ import { PageChangeCard, markPageChangeSent, unsentSerious } from '../research/p
  */
 
 export const TELEGRAM_API = { base: (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/$/, '') };
-
-const TABLES = `
-CREATE TABLE IF NOT EXISTS telegram_sent (
-  draft_id INTEGER NOT NULL,
-  chat_id TEXT NOT NULL,
-  message_id INTEGER NOT NULL,
-  sent_at TEXT NOT NULL,
-  PRIMARY KEY (chat_id, message_id)
-);
-CREATE INDEX IF NOT EXISTS telegram_sent_by_draft ON telegram_sent (draft_id);
--- "Why wasn't it useful?" questions: a reply to one is the reason for that draft.
-CREATE TABLE IF NOT EXISTS telegram_why (
-  chat_id TEXT NOT NULL,
-  message_id INTEGER NOT NULL,
-  draft_id INTEGER NOT NULL,
-  PRIMARY KEY (chat_id, message_id)
-);
-`;
-const ready = new WeakSet<Database.Database>();
-function tdb(): Database.Database {
-  const d = getDb();
-  if (!ready.has(d)) {
-    d.exec(TABLES);
-    ready.add(d);
-  }
-  return d;
-}
 
 export interface Link {
   chatId: string | null;
@@ -166,7 +138,7 @@ export async function sendNewDrafts(env = siteEnv(), max = 5): Promise<number> {
   const token = telegramToken(env);
   const chat = getSetting<Link | null>('telegramLink', null)?.chatId;
   if (!token || !chat) return 0;
-  const sent = new Set((tdb().prepare('SELECT draft_id FROM telegram_sent').all() as { draft_id: number }[]).map((r) => r.draft_id));
+  const sent = new Set((getDb().prepare('SELECT draft_id FROM telegram_sent').all() as { draft_id: number }[]).map((r) => r.draft_id));
   // Only drafts made after linking: linking a busy site shouldn't flood the phone with its backlog.
   const since = getSetting<Link | null>('telegramLink', null)?.linkedAt ?? '';
   const todo = listDrafts({ status: 'draft' })
@@ -175,7 +147,7 @@ export async function sendNewDrafts(env = siteEnv(), max = 5): Promise<number> {
     .slice(0, max);
   for (const d of todo) {
     const msg = await tg(token, 'sendMessage', { chat_id: chat, text: draftMessage(d, env), parse_mode: 'HTML', reply_markup: buttons(d), link_preview_options: { is_disabled: true } });
-    tdb().prepare('INSERT OR IGNORE INTO telegram_sent (draft_id, chat_id, message_id, sent_at) VALUES (?, ?, ?, ?)').run(d.id, String(chat), msg.message_id, new Date().toISOString());
+    getDb().prepare('INSERT OR IGNORE INTO telegram_sent (draft_id, chat_id, message_id, sent_at) VALUES (?, ?, ?, ?)').run(d.id, String(chat), msg.message_id, new Date().toISOString());
   }
   return todo.length;
 }
@@ -271,7 +243,7 @@ export async function handleUpdate(update: any, env = siteEnv()): Promise<string
         parse_mode: 'HTML',
         reply_markup: { force_reply: true, input_field_placeholder: 'What was wrong with it?' },
       }).catch((err) => (log('warn', 'telegram', `couldn't ask why: ${err.message}`), null));
-      if (ask?.message_id) tdb().prepare('INSERT OR IGNORE INTO telegram_why (chat_id, message_id, draft_id) VALUES (?, ?, ?)').run(fromChat, ask.message_id, d.id);
+      if (ask?.message_id) getDb().prepare('INSERT OR IGNORE INTO telegram_why (chat_id, message_id, draft_id) VALUES (?, ?, ?)').run(fromChat, ask.message_id, d.id);
       return note;
     }
     return reply(token, fromChat, note, cb.message?.message_id);
@@ -280,19 +252,19 @@ export async function handleUpdate(update: any, env = siteEnv()): Promise<string
   if (typeof msg?.text === 'string') {
     // A reply to a draft message replaces that draft's text.
     const to = msg.reply_to_message?.message_id;
-    const why = to ? (tdb().prepare('SELECT draft_id FROM telegram_why WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined) : undefined;
+    const why = to ? (getDb().prepare('SELECT draft_id FROM telegram_why WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined) : undefined;
     if (why) {
       const ok = getDraft(why.draft_id)?.status === 'rejected' && addReason(why.draft_id, msg.text);
       return reply(token, fromChat, ok ? 'Thanks. The agent will keep that in mind.' : "That draft isn't turned down any more, so I didn't save it.");
     }
     if (to) {
-      const row = tdb().prepare('SELECT draft_id FROM telegram_sent WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined;
+      const row = getDb().prepare('SELECT draft_id FROM telegram_sent WHERE chat_id = ? AND message_id = ?').get(fromChat, to) as { draft_id: number } | undefined;
       const d = row ? getDraft(row.draft_id) : undefined;
       if (!d) return reply(token, fromChat, "I can't tell which draft that reply is for. Reply to a draft's own message.");
       if (d.status !== 'draft' && d.status !== 'failed') return reply(token, fromChat, `"${d.title}" is already ${d.status}, so it can't be edited.`);
       const after = editDraft(d.id, { body: msg.text });
       const sent = await tg(token, 'sendMessage', { chat_id: fromChat, text: `Saved your text for "${esc(after.title)}". Approve it here when ready.`, parse_mode: 'HTML', reply_markup: buttons(after) });
-      tdb().prepare('INSERT OR IGNORE INTO telegram_sent (draft_id, chat_id, message_id, sent_at) VALUES (?, ?, ?, ?)').run(d.id, fromChat, sent.message_id, new Date().toISOString());
+      getDb().prepare('INSERT OR IGNORE INTO telegram_sent (draft_id, chat_id, message_id, sent_at) VALUES (?, ?, ?, ?)').run(d.id, fromChat, sent.message_id, new Date().toISOString());
       return `edited draft ${d.id}`;
     }
     if (/^\/(report|today)\b/.test(msg.text.trim())) return reply(token, fromChat, weeklyReport(), undefined, true);

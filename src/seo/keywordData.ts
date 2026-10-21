@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../db';
 import { listCompetitors } from '../context/extra';
 import { siteUrl } from '../sites';
@@ -13,38 +12,6 @@ import { dfsPost, keywordLanguage, serpCreds, serpLocation } from './serp';
  * Costs about $0.012 per request plus $0.00012 per keyword returned. Everything is saved and reused for a
  * month, because these numbers barely move week to week.
  */
-
-const TABLES = `
-CREATE TABLE IF NOT EXISTS keyword_metrics (
-  keyword TEXT NOT NULL,
-  location TEXT NOT NULL,
-  volume INTEGER,                  -- monthly searches; null = DataForSEO has no figure for it
-  difficulty INTEGER,              -- 0-100
-  intent TEXT,                     -- informational | navigational | commercial | transactional
-  cpc REAL,                        -- what advertisers pay per click, USD
-  at TEXT NOT NULL,
-  PRIMARY KEY (keyword, location)
-);
-CREATE TABLE IF NOT EXISTS competitor_keywords (
-  competitor_id INTEGER NOT NULL,
-  keyword TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  url TEXT,
-  volume INTEGER,
-  difficulty INTEGER,
-  at TEXT NOT NULL,
-  PRIMARY KEY (competitor_id, keyword)
-);
-`;
-const ready = new WeakSet<Database.Database>();
-function db(): Database.Database {
-  const d = getDb();
-  if (!ready.has(d)) {
-    d.exec(TABLES);
-    ready.add(d);
-  }
-  return d;
-}
 
 export const FRESH_DAYS = 30;
 /** Above this, a small site rarely reaches page one. */
@@ -86,7 +53,7 @@ export function parseOverview(data: any): { items: KeywordMetrics[]; cost: numbe
 /** What is saved for these searches, fresh or not. Missing = never looked up. */
 export function savedMetrics(keywords: string[], location = serpLocation()): Map<string, KeywordMetrics & { at: string }> {
   const out = new Map<string, KeywordMetrics & { at: string }>();
-  const get = db().prepare('SELECT * FROM keyword_metrics WHERE keyword = ? AND location = ?');
+  const get = getDb().prepare('SELECT * FROM keyword_metrics WHERE keyword = ? AND location = ?');
   for (const k of new Set(keywords.map((x) => x.toLowerCase().trim()))) {
     const r = get.get(k, location) as any;
     if (r) out.set(k, { keyword: k, volume: r.volume, difficulty: r.difficulty, intent: r.intent, cpc: r.cpc, at: r.at });
@@ -109,7 +76,7 @@ export async function keywordMetrics(keywords: string[], fetchFn: typeof fetch =
     // One request per language: a Hebrew search has to be asked in Hebrew.
     const byLang = new Map<string, string[]>();
     for (const k of stale) byLang.set(keywordLanguage(k), [...(byLang.get(keywordLanguage(k)) ?? []), k]);
-    const put = db().prepare('INSERT OR REPLACE INTO keyword_metrics (keyword, location, volume, difficulty, intent, cpc, at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    const put = getDb().prepare('INSERT OR REPLACE INTO keyword_metrics (keyword, location, volume, difficulty, intent, cpc, at) VALUES (?, ?, ?, ?, ?, ?, ?)');
     for (const [lang, list] of byLang) {
       for (let i = 0; i < list.length; i += BATCH) {
         const chunk = list.slice(i, i + BATCH);
@@ -117,7 +84,7 @@ export async function keywordMetrics(keywords: string[], fetchFn: typeof fetch =
         cost += r.cost;
         const found = new Map(r.items.map((m) => [m.keyword, m]));
         const at = new Date().toISOString();
-        db().transaction(() => {
+        getDb().transaction(() => {
           for (const k of chunk) {
             const m = found.get(k);
             put.run(k, location, m?.volume ?? null, m?.difficulty ?? null, m?.intent ?? null, m?.cpc ?? null, at);
@@ -209,7 +176,7 @@ export async function refreshCompetitorKeywords(fetchFn: typeof fetch = fetch): 
       const r = await rankedKeywords(c.url!, 100, fetchFn);
       cost += r.cost;
       const at = new Date().toISOString();
-      const d = db();
+      const d = getDb();
       d.transaction(() => {
         d.prepare('DELETE FROM competitor_keywords WHERE competitor_id = ?').run(c.id);
         const ins = d.prepare('INSERT OR REPLACE INTO competitor_keywords (competitor_id, keyword, position, url, volume, difficulty, at) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -249,7 +216,7 @@ function oursAlready(): Set<string> {
  */
 export function keywordGaps(limit = 20, skip: Iterable<string> = []): KeywordGap[] {
   const names = new Map(listCompetitors().map((c) => [c.id, c.name]));
-  const rows = db().prepare('SELECT * FROM competitor_keywords ORDER BY position').all() as any[];
+  const rows = getDb().prepare('SELECT * FROM competitor_keywords ORDER BY position').all() as any[];
   const ours = oursAlready();
   const site = siteUrl();
   const mine = site ? bareHost(site) : null;
@@ -272,5 +239,5 @@ export function keywordGaps(limit = 20, skip: Iterable<string> = []): KeywordGap
 }
 
 export function competitorKeywordsCheckedAt(): string | null {
-  return (db().prepare('SELECT MAX(at) at FROM competitor_keywords').get() as { at: string | null }).at;
+  return (getDb().prepare('SELECT MAX(at) at FROM competitor_keywords').get() as { at: string | null }).at;
 }

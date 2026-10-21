@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../db';
 
 /**
@@ -6,57 +5,6 @@ import { getDb } from '../db';
  * to the business (link building). One row per person or page, with where they are in the conversation.
  * Created by the feature itself, so the shared schema file stays untouched.
  */
-const TABLES = `
-CREATE TABLE IF NOT EXISTS outreach_contacts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,              -- creator | link
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,               -- creator profile, or the page that could link to us
-  platform TEXT NOT NULL DEFAULT '',
-  audience TEXT NOT NULL DEFAULT '',  -- as stated on the page ("12k subscribers"); never estimated
-  email TEXT NOT NULL DEFAULT '',
-  email_source TEXT NOT NULL DEFAULT '', -- the page the address was read from
-  email_verified INTEGER NOT NULL DEFAULT 0, -- 1 = Plume saw the address on that page, or the owner typed it
-  why TEXT NOT NULL DEFAULT '',
-  opportunity TEXT NOT NULL DEFAULT '', -- link prospects: unlinked-mention | lists-competitors
-  status TEXT NOT NULL DEFAULT 'found',
-  rate TEXT NOT NULL DEFAULT '',
-  deliverable_url TEXT NOT NULL DEFAULT '',
-  paid INTEGER NOT NULL DEFAULT 0,
-  notes TEXT NOT NULL DEFAULT '',
-  last_emailed_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (kind, url)
-);
-CREATE TABLE IF NOT EXISTS link_evidence (
-  contact_id INTEGER PRIMARY KEY,
-  evidence TEXT NOT NULL,
-  checked_at TEXT NOT NULL,
-  verification TEXT,
-  verified_url TEXT,
-  verification_at TEXT,
-  verification_note TEXT
-);
-CREATE TABLE IF NOT EXISTS link_discovery_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  result TEXT,
-  error TEXT
-);
-CREATE INDEX IF NOT EXISTS outreach_by_status ON outreach_contacts (kind, status);
-`;
-const ready = new WeakSet<Database.Database>();
-export function odb(): Database.Database {
-  const d = getDb();
-  if (!ready.has(d)) {
-    d.exec(TABLES);
-    ready.add(d);
-  }
-  return d;
-}
-
 export type ContactKind = 'creator' | 'link';
 export const STATUSES: Record<ContactKind, string[]> = {
   creator: ['found', 'drafted', 'contacted', 'replied', 'agreed', 'posted', 'paid', 'declined'],
@@ -120,13 +68,13 @@ export function cleanUrl(raw: string): string {
 
 export function listContacts(kind?: ContactKind): Contact[] {
   const rows = kind
-    ? odb().prepare('SELECT * FROM outreach_contacts WHERE kind = ? ORDER BY id DESC').all(kind)
-    : odb().prepare('SELECT * FROM outreach_contacts ORDER BY id DESC').all();
+    ? getDb().prepare('SELECT * FROM outreach_contacts WHERE kind = ? ORDER BY id DESC').all(kind)
+    : getDb().prepare('SELECT * FROM outreach_contacts ORDER BY id DESC').all();
   return rows.map(row);
 }
 
 export function getContact(id: number): Contact | undefined {
-  const r = odb().prepare('SELECT * FROM outreach_contacts WHERE id = ?').get(id);
+  const r = getDb().prepare('SELECT * FROM outreach_contacts WHERE id = ?').get(id);
   return r ? row(r) : undefined;
 }
 
@@ -156,7 +104,7 @@ export function addContact(c: NewContact): Contact | null {
   const email = String(c.email ?? '').trim().toLowerCase();
   if (email && !isEmail(email)) throw new Error(`"${email}" is not an email address`);
   const now = new Date().toISOString();
-  const r = odb()
+  const r = getDb()
     .prepare(
       `INSERT OR IGNORE INTO outreach_contacts (kind, name, url, platform, audience, email, email_source, email_verified, why, opportunity, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -196,7 +144,7 @@ export function updateContact(id: number, patch: ContactPatch): Contact {
       throw new Error(`"${patch.deliverableUrl}" is not a web address`);
     }
   }
-  odb()
+  getDb()
     .prepare(
       `UPDATE outreach_contacts SET name = ?, status = ?, email = ?, email_verified = ?, email_source = ?, rate = ?, deliverable_url = ?, paid = ?, notes = ?, updated_at = ? WHERE id = ?`,
     )
@@ -217,16 +165,16 @@ export function updateContact(id: number, patch: ContactPatch): Contact {
 }
 
 export function markEmailed(id: number, at = new Date()): void {
-  odb().prepare(`UPDATE outreach_contacts SET status = CASE WHEN status IN ('found','drafted') THEN 'contacted' ELSE status END, last_emailed_at = ?, updated_at = ? WHERE id = ?`).run(at.toISOString(), at.toISOString(), id);
+  getDb().prepare(`UPDATE outreach_contacts SET status = CASE WHEN status IN ('found','drafted') THEN 'contacted' ELSE status END, last_emailed_at = ?, updated_at = ? WHERE id = ?`).run(at.toISOString(), at.toISOString(), id);
 }
 
 export function removeContact(id: number): void {
-  odb().prepare('DELETE FROM outreach_contacts WHERE id = ?').run(id);
+  getDb().prepare('DELETE FROM outreach_contacts WHERE id = ?').run(id);
 }
 
 /** Addresses never to write to: anyone who declined, under any kind. */
 export function declinedEmails(): Set<string> {
-  return new Set((odb().prepare(`SELECT email FROM outreach_contacts WHERE status = 'declined' AND email != ''`).all() as { email: string }[]).map((r) => r.email));
+  return new Set((getDb().prepare(`SELECT email FROM outreach_contacts WHERE status = 'declined' AND email != ''`).all() as { email: string }[]).map((r) => r.email));
 }
 
 /** Contacts ready for a first message: found, not declined, and not written to in the last 30 days. */
@@ -241,25 +189,25 @@ export function readyToDraft(kind: ContactKind, limit: number): Contact[] {
 export function summary(kind: ContactKind): Record<string, number> {
   const out: Record<string, number> = {};
   for (const s of STATUSES[kind]) out[s] = 0;
-  for (const r of odb().prepare('SELECT status, COUNT(*) n FROM outreach_contacts WHERE kind = ? GROUP BY status').all(kind) as { status: string; n: number }[]) out[r.status] = r.n;
+  for (const r of getDb().prepare('SELECT status, COUNT(*) n FROM outreach_contacts WHERE kind = ? GROUP BY status').all(kind) as { status: string; n: number }[]) out[r.status] = r.n;
   return out;
 }
 
 export function linkEvidence(id: number): any {
-  return odb().prepare('SELECT * FROM link_evidence WHERE contact_id = ?').get(id) ?? null;
+  return getDb().prepare('SELECT * FROM link_evidence WHERE contact_id = ?').get(id) ?? null;
 }
 export function saveLinkEvidence(id: number, evidence: string): void {
-  odb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at) VALUES (?, ?, ?)
+  getDb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at) VALUES (?, ?, ?)
     ON CONFLICT(contact_id) DO UPDATE SET evidence = excluded.evidence, checked_at = excluded.checked_at`)
     .run(id, evidence, new Date().toISOString());
 }
 export function saveVerification(id: number, state: string, url: string, note: string): void {
-  odb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at, verification, verified_url, verification_at, verification_note)
+  getDb().prepare(`INSERT INTO link_evidence (contact_id, evidence, checked_at, verification, verified_url, verification_at, verification_note)
     VALUES (?, '', ?, ?, ?, ?, ?) ON CONFLICT(contact_id) DO UPDATE SET verification = excluded.verification,
     verified_url = excluded.verified_url, verification_at = excluded.verification_at, verification_note = excluded.verification_note`)
     .run(id, new Date().toISOString(), state, url, new Date().toISOString(), note);
 }
 export function latestLinkDiscovery(): any {
-  const row = odb().prepare('SELECT * FROM link_discovery_runs ORDER BY id DESC LIMIT 1').get() as any;
+  const row = getDb().prepare('SELECT * FROM link_discovery_runs ORDER BY id DESC LIMIT 1').get() as any;
   return row ? { ...row, result: row.result ? JSON.parse(row.result) : null } : null;
 }

@@ -8,7 +8,8 @@ import { siteUrl } from '../sites';
 import { fetchPage } from '../research/fetchPage';
 import { brandNames, textMentions } from '../geo/visibility';
 import type { Agent, Opportunity } from '../agents/types';
-import { odb, saveLinkEvidence, saveVerification, Contact, absUrl, addContact, cleanUrl, declinedEmails, getContact, listContacts, readyToDraft, updateContact } from './store';
+import { getDb } from '../db';
+import { saveLinkEvidence, saveVerification, Contact, absUrl, addContact, cleanUrl, declinedEmails, getContact, listContacts, readyToDraft, updateContact } from './store';
 import { findEmail, pageText, senderName } from './creators';
 
 /**
@@ -218,13 +219,13 @@ export const linksAgent: Agent = {
 
 /** Persist outcomes for discovery started either by the workspace or the agent. */
 export async function discoverLinkPages(onProgress: (m: string) => void = () => {}, fetchFn: typeof fetch = fetch) {
-  const id = Number(odb().prepare('INSERT INTO link_discovery_runs (started_at) VALUES (?)').run(new Date().toISOString()).lastInsertRowid);
+  const id = Number(getDb().prepare('INSERT INTO link_discovery_runs (started_at) VALUES (?)').run(new Date().toISOString()).lastInsertRowid);
   try {
     const result = await discoverLinkPagesInner(onProgress, fetchFn);
-    odb().prepare('UPDATE link_discovery_runs SET finished_at = ?, result = ? WHERE id = ?').run(new Date().toISOString(), JSON.stringify(result), id);
+    getDb().prepare('UPDATE link_discovery_runs SET finished_at = ?, result = ? WHERE id = ?').run(new Date().toISOString(), JSON.stringify(result), id);
     return result;
   } catch (err: any) {
-    odb().prepare('UPDATE link_discovery_runs SET finished_at = ?, error = ? WHERE id = ?').run(new Date().toISOString(), String(err.message ?? err), id);
+    getDb().prepare('UPDATE link_discovery_runs SET finished_at = ?, error = ? WHERE id = ?').run(new Date().toISOString(), String(err.message ?? err), id);
     throw err;
   }
 }
