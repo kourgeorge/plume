@@ -156,15 +156,62 @@ export function homeFacts(html: string, url: string): HomeFacts {
   return { ...contactLinks(html), profiles: profileLinks(html, url), logo: logoUrl };
 }
 
-async function sitemapUrls(origin: string, fetchFn: typeof fetch): Promise<string[]> {
-  try {
-    const res = await fetchFn(`${origin}/sitemap.xml`, { headers: { 'user-agent': USER_AGENT } });
-    if (!res.ok) return [];
-    const $ = cheerio.load(await res.text(), { xml: true });
-    return $('loc').map((_, el) => $(el).text().trim()).get();
-  } catch {
-    return [];
+/** Sitemap files read per crawl, and addresses kept from them. Big sites list hundreds of files and millions of pages. */
+const MAX_SITEMAP_FILES = 20;
+const MAX_SITEMAP_URLS = 50_000;
+
+/** The same site, with or without "www.". */
+function sameSite(a: string, b: string): boolean {
+  return a.replace(/^www\./, '') === b.replace(/^www\./, '');
+}
+
+/** "Sitemap:" lines in robots.txt (any user-agent group). */
+export function robotsSitemaps(robots: string | null): string[] {
+  return (robots ?? '').split('\n').map((l) => l.split('#')[0].trim()).filter((l) => /^sitemap\s*:/i.test(l)).map((l) => l.replace(/^sitemap\s*:/i, '').trim()).filter(Boolean);
+}
+
+/**
+ * Every page address the site's sitemaps list. Starts from the sitemaps named in robots.txt (or /sitemap.xml)
+ * and follows sitemap index files, which only list other sitemaps. `complete` is false when a file could not be
+ * read or a limit cut the list short, so pages missing from the list may still exist.
+ */
+export async function sitemapUrls(origin: string, fetchFn: typeof fetch, robots: string | null = null): Promise<{ urls: string[]; complete: boolean }> {
+  const host = new URL(origin).hostname;
+  const named = robotsSitemaps(robots).filter((u) => {
+    try {
+      return sameSite(new URL(u).hostname, host);
+    } catch {
+      return false;
+    }
+  });
+  const queue = named.length ? [...named] : [`${origin}/sitemap.xml`];
+  const done = new Set<string>();
+  const urls: string[] = [];
+  let complete = true;
+  while (queue.length) {
+    const file = queue.shift()!;
+    if (done.has(file)) continue;
+    if (done.size >= MAX_SITEMAP_FILES || urls.length >= MAX_SITEMAP_URLS) {
+      complete = false;
+      break;
+    }
+    done.add(file);
+    try {
+      const res = await fetchFn(file, { headers: { 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(20_000) });
+      // A missing /sitemap.xml just means the site has none; a sitemap robots.txt names but can't be read is a gap.
+      if (!res.ok) {
+        if (named.length) complete = false;
+        continue;
+      }
+      const $ = cheerio.load(await res.text(), { xml: true });
+      // A sitemap index lists more sitemaps; a plain sitemap lists pages.
+      $('sitemap > loc').each((_, el) => void queue.push($(el).text().trim()));
+      $('url > loc').each((_, el) => void (urls.length < MAX_SITEMAP_URLS ? urls.push($(el).text().trim()) : (complete = false)));
+    } catch {
+      complete = false;
+    }
   }
+  return { urls, complete };
 }
 
 /**
@@ -181,12 +228,18 @@ export async function withWorkingHost(startUrl: string, fetchFn: typeof fetch): 
   return second.ok || second.kind !== 'unreachable' ? u.toString() : startUrl;
 }
 
-/** Crawl one site breadth-first, sitemap URLs first. Saves every page to the `pages` table. */
+/** Pages read at the same time. Enough to be quick, few enough not to hammer a small site. */
+const CONCURRENCY = 4;
+
+/**
+ * Crawl one site. The home page first, then pages its links lead to (the menu and content, closest first), and
+ * only after those the pages the sitemap lists that no link reached. Saves every page to the `pages` table.
+ */
 export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Promise<CrawledPage[]> {
   const fetchFn = opts.fetchFn ?? fetch;
   const maxPages = opts.maxPages ?? 40;
   startUrl = await withWorkingHost(startUrl, fetchFn);
-  const origin = new URL(startUrl).origin;
+  let origin = new URL(startUrl).origin;
 
   let disallow: string[] = [];
   // Kept for the site check, which reads it again per AI crawler. null = the site has none.
@@ -203,17 +256,32 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   setSetting('robotsTxt', { at: new Date().toISOString(), body: robots });
   const allowed = (u: string) => !disallow.some((d) => new URL(u).pathname.startsWith(d));
 
+  /** Every address found: kept on the next crawl even if the page limit stopped us opening it. */
   const seen = new Set<string>();
-  const queue: string[] = [];
-  const enqueue = (href: string, base: string) => {
+  /** Addresses opened (or being opened), so a page found twice is read once. */
+  const taken = new Set<string>();
+  /** Found through a link: read first. */
+  const linked: string[] = [];
+  /** Only in the sitemap so far: read when no linked page is left. */
+  const listed: string[] = [];
+  /** Another address for a saved page (where a redirect started or ended), so links to it count for that page. */
+  const alias = new Map<string, string>();
+  const add = (href: string, base: string, to: string[]) => {
     const u = normaliseUrl(href, base, origin);
-    if (u && !seen.has(u) && allowed(u)) {
-      seen.add(u);
-      queue.push(u);
-    }
+    if (!u || taken.has(u) || !allowed(u)) return;
+    // A sitemap page that a link also reaches moves up to the linked list.
+    if (to === linked || !seen.has(u)) to.push(u);
+    seen.add(u);
   };
-  enqueue(startUrl, startUrl);
-  for (const u of await sitemapUrls(origin, fetchFn)) enqueue(u, origin);
+  const next = (): string | undefined => {
+    for (const q of [linked, listed]) {
+      while (q.length) {
+        const u = q.shift()!;
+        if (!taken.has(u)) return taken.add(u), u;
+      }
+    }
+    return undefined;
+  };
 
   const pages: CrawledPage[] = [];
   const failures: Failed[] = [];
@@ -229,8 +297,7 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
   // Once a page only opened in a real browser, use the browser for the rest of the site.
   let preferBrowser = false;
 
-  while (queue.length && pages.length < maxPages) {
-    const url = queue.shift()!;
+  const read = async (url: string, isHome = false): Promise<void> => {
     const r = await fetchPage(url, { fetchFn, browserFn: opts.browserFn, preferBrowser });
     if (!r.ok) {
       failures.push(r);
@@ -239,31 +306,89 @@ export async function crawlSite(startUrl: string, opts: CrawlOptions = {}): Prom
         changes.push(...pageChanges(before.get(url) as PageRow | undefined, { url, status: r.status }));
         saveMissing(url, r.status);
       }
-      continue;
+      return;
     }
     if (r.via === 'browser') preferBrowser = true;
-    const { page, links } = extractPage(url, r.status, r.html);
-    signals.push(detectTech(r.html, url));
+    // The home page sends visitors to the www (or bare) address: that is the site from now on.
+    if (isHome && new URL(r.url).origin !== origin && sameSite(new URL(r.url).hostname, new URL(origin).hostname)) {
+      origin = new URL(r.url).origin;
+      const root = `${origin}/`;
+      if (root !== url) alias.set(root, url), taken.add(root), seen.add(root);
+    }
+    // A redirect: save the page under the address it really lives at, once. The home page keeps the address the
+    // site was added with (it is how the home page is found later); its real address becomes an alias.
+    let key = url;
+    const landed = normaliseUrl(r.url, r.url, origin);
+    if (landed && landed !== url) {
+      if (isHome) alias.set(landed, url);
+      else {
+        alias.set(url, landed);
+        if (taken.has(landed)) return; // read (or being read) under its real address already
+        key = landed;
+      }
+      taken.add(landed);
+      seen.add(landed);
+    }
+    const { page, links } = extractPage(key, r.status, r.html);
+    signals.push(detectTech(r.html, key));
     pages.push(page);
     const { lang: _lang, ...row } = page;
-    changes.push(...pageChanges(before.get(url) as PageRow | undefined, page));
+    changes.push(...pageChanges(before.get(key) as PageRow | undefined, page));
     save.run({
       ...row, headings: JSON.stringify(page.headings), hasSchema: page.hasSchema ? 1 : 0, crawledAt: new Date().toISOString(), schemaTypes: JSON.stringify(page.schemaTypes),
       og: JSON.stringify(page.og), linksOut: JSON.stringify(page.linksOut), heroLazy: page.heroLazy ? 1 : 0, hreflang: JSON.stringify(page.hreflang),
     });
     if (pages.length === 1) setSetting('homeFacts', homeFacts(r.html, r.url));
     opts.onPage?.(page, pages.length);
-    for (const l of links) enqueue(l, r.url);
+    for (const l of links) add(l, r.url, linked);
+  };
+
+  // The home page alone first: it can move the site to its www address and show whether a browser is needed.
+  add(startUrl, startUrl, linked);
+  const home = next();
+  if (home) await read(home, true);
+  const sitemap = await sitemapUrls(origin, fetchFn, robots);
+  for (const u of sitemap.urls) add(u, origin, listed);
+
+  const running = new Set<Promise<void>>();
+  for (;;) {
+    while (running.size < CONCURRENCY && pages.length + running.size < maxPages) {
+      const url = next();
+      if (!url) break;
+      const job: Promise<void> = read(url).catch(() => {}).finally(() => running.delete(job));
+      running.add(job);
+    }
+    if (!running.size) break;
+    await Promise.race(running);
   }
   if (!pages.length) throw new CrawlError(startUrl, failures);
-  forgetGonePages(seen);
+  relinkAliases(pages, alias);
+  // Pages listed only in a sitemap file we could not read may still exist: keep them until the list is whole.
+  if (sitemap.complete) forgetGonePages(seen);
   savePageChanges(changes);
   // "Nothing links here" is only fair when every page the site lists was opened.
-  setSetting('crawlComplete', seen.size === pages.length + failures.length);
+  setSetting('crawlComplete', sitemap.complete && !linked.some((u) => !taken.has(u)) && !listed.some((u) => !taken.has(u)));
   saveTechSignals(mergeSignals(signals));
   // A language the owner picked by hand stays; reading the site only fills it in.
   if (!languageSetByOwner()) setContentLanguages(detectLanguages(pages));
   return pages;
+}
+
+/**
+ * Links to an address that redirects now point at the page it lands on, so that page doesn't look unlinked.
+ * A copy saved under the old address by an earlier crawl is dropped: the page lives at the new one now.
+ */
+function relinkAliases(pages: CrawledPage[], alias: Map<string, string>): void {
+  if (!alias.size) return;
+  const drop = getDb().prepare('DELETE FROM pages WHERE url = ?');
+  for (const from of alias.keys()) drop.run(from);
+  const update = getDb().prepare('UPDATE pages SET links_out = ? WHERE url = ?');
+  for (const p of pages) {
+    const out = [...new Set(p.linksOut.map((l) => alias.get(l) ?? l))].filter((l) => l !== p.url);
+    if (out.length === p.linksOut.length && out.every((l, i) => l === p.linksOut[i])) continue;
+    p.linksOut = out;
+    update.run(JSON.stringify(out), p.url);
+  }
 }
 
 /**
