@@ -648,6 +648,14 @@ function renderTodayCard(item) {
     $('t-seen').onclick = act(async () => post('/api/ai-visibility/gaps/done', { runId: g.runId, questionId: g.questionId }));
   }
   $('t-skip').onclick = act(async () => post('/api/today/skip', { key: item.key }));
+  // Every card can be taken to the chat to ask about it.
+  const ask = document.createElement('button');
+  ask.className = 'secondary';
+  ask.id = 't-ask';
+  ask.textContent = 'Ask Plume';
+  ask.title = 'Open this in the chat and ask about it';
+  ask.onclick = () => window.plumeChat?.ask(item.key);
+  box.querySelector('.acts').insertBefore(ask, box.querySelector('.acts > .right'));
 }
 
 /** A ranking move in the weeks of a Google update: say so, with Google's own announcement. */

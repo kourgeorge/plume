@@ -41,7 +41,7 @@ import {
 } from '../chat';
 import { pageChangeSeen, rankAlertSeen } from '../today';
 import { updatesBetween } from '../seo/googleUpdates';
-import { changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress, wontFixIssue } from '../today';
+import { briefFor, changeSeen, countDone, fixDone, notUseful, sendSpeedToSeo, skipItem, todayFeed, todayProgress, wontFixIssue } from '../today';
 import {
   addCompetitor, brandProfiles, getCompetitor, listCompetitors, listPeople, removeCompetitor, removePerson,
   savePerson, setBrandProfiles, setUserNotes, updateCompetitor, userNotes,
@@ -705,7 +705,13 @@ export function buildServer(port: number): FastifyInstance {
     }
   });
   /** Start a chat (no id) or continue one. Answers at once; the reply is written in the background. */
-  app.post<{ Body: { threadId?: number; text?: string } }>('/api/chat', async (req, reply) => {
+  /** What "Ask Plume" on a Dashboard card shows before the first message: the card's title and starter questions. */
+  app.get<{ Querystring: { key?: string } }>('/api/chat/about', async (req, reply) => {
+    const card = briefFor(String(req.query.key ?? ''));
+    return card ? { key: card.key, title: card.title, questions: card.questions } : reply.code(404).send({ error: 'that item is no longer on the Dashboard' });
+  });
+  /** `about` is a Dashboard card key: its details go to the assistant with the message. */
+  app.post<{ Body: { threadId?: number; text?: string; about?: string } }>('/api/chat', async (req, reply) => {
     const text = (req.body?.text ?? '').trim();
     if (!text) return reply.code(400).send({ error: 'write a message first' });
     if (text.length > 20_000) return reply.code(400).send({ error: 'that message is too long (keep it under 20,000 characters)' });
@@ -714,8 +720,9 @@ export function buildServer(port: number): FastifyInstance {
     let id = req.body?.threadId;
     if (id && !getThread(id)) return reply.code(404).send({ error: 'that chat no longer exists' });
     if (id && isThreadRunning(id)) return reply.code(409).send({ error: 'the assistant is still answering — wait for it to finish' });
-    if (!id) id = createThread(text).id;
-    void sendMessage(id, text);
+    const about = typeof req.body?.about === 'string' ? req.body.about : undefined;
+    if (!id) id = createThread(text, about ? briefFor(about)?.title : undefined).id;
+    void sendMessage(id, text, about);
     return { threadId: id };
   });
   app.delete<{ Params: { id: string } }>('/api/chat/:id', async (req, reply) => {

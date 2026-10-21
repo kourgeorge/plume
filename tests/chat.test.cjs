@@ -220,3 +220,25 @@ test('data tools read each source and say exactly what is missing', async () => 
   assert.match((await run('get_live_visitors')).content, /no Analytics property is picked/);
   fs.rmSync(tokenFile);
 });
+
+test('"Ask Plume" on a Dashboard card sends the card to the assistant and names the chat after it', async () => {
+  const today = require('../src/today');
+  const d = q.createDraft({ agent: 'writer', kind: 'blog_post', title: 'Ten ways to save on shipping', body: '# Ten ways\n\nUse flat-rate boxes.', meta: { reason: 'People search for this' } });
+  const card = today.briefFor(`draft:${d.id}`);
+  assert.equal(card.title, 'Draft: Ten ways to save on shipping');
+  assert.match(card.details, /flat-rate boxes/);
+  assert.ok(card.questions.length);
+  assert.equal(today.briefFor('draft:999999'), undefined, 'a card that is gone has nothing to ask about');
+
+  script.push({ blocks: [text('It reads well.')], stop: 'end_turn' });
+  const t = chat.createThread('Is it ready?', card.title);
+  assert.equal(t.title, card.title);
+  const before = requests.length;
+  await chat.sendMessage(t.id, 'Is it ready?', card.key);
+  const sent = requests[before].messages.at(-1).content;
+  assert.match(sent[0].text, /^<dashboard-card[\s\S]*flat-rate boxes/);
+  assert.equal(sent[1].text, 'Is it ready?');
+  const mine = chat.showThread(t.id).items[0];
+  assert.equal(mine.text, 'Is it ready?', 'the card details stay out of the message bubble');
+  assert.equal(mine.about, card.title);
+});

@@ -4,6 +4,7 @@
   let polling = null;
   let mentions = [];
   let shownCount = -1;
+  let about = null; // the Dashboard card a new chat is about: { key, title }
 
   const log = $('chat-log');
   const input = $('chat-input');
@@ -95,7 +96,7 @@
   const CHECK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   function renderItem(item) {
-    if (item.role === 'you') return `<div class="msg you" dir="auto">${esc(item.text)}</div>`;
+    if (item.role === 'you') return `<div class="msg you" dir="auto">${item.about ? `<div class="msg-about">About: ${esc(item.about)}</div>` : ''}${esc(item.text)}</div>`;
     const steps = item.steps?.length ? `<div class="steps">${item.steps.map((s) => `<span>${esc(s)}</span>`).join('')}</div>` : '';
     const body = item.html ? `<div class="msg-body doc" dir="auto">${item.html}</div>` : '';
     const actions = (item.actions ?? []).map(renderAction).join('');
@@ -165,7 +166,8 @@
     input.disabled = $('chat-send').disabled = true;
     $('mention-box').hidden = true;
     try {
-      const r = await post('/api/chat', { threadId, text });
+      const r = await post('/api/chat', { threadId, text, about: about?.key });
+      setAbout(null);
       input.value = '';
       grow();
       $('chat-suggest').innerHTML = '';
@@ -273,7 +275,37 @@
   });
   grip.ondblclick = () => setChatW(NORMAL_W);
 
+  // "Ask Plume" on a Dashboard card: a new chat about that card, with questions to start from.
+  function setAbout(a) {
+    about = a;
+    const box = $('chat-about');
+    box.hidden = !a;
+    if (!a) return;
+    box.innerHTML = `<span dir="auto">About: <b>${esc(a.title)}</b></span><button type="button" class="icon-btn plain" title="Don't attach this" aria-label="Don't attach this">×</button>`;
+    box.querySelector('button').onclick = () => setAbout(null);
+  }
+  async function ask(key) {
+    let card;
+    try {
+      card = await api(`/api/chat/about?key=${encodeURIComponent(key)}`);
+    } catch (err) {
+      return alertBox(err.message);
+    }
+    threadId = null;
+    clearTimeout(polling);
+    $('chat-cost').textContent = '';
+    await loadChat();
+    setAbout(card);
+    if (!input.disabled) {
+      log.innerHTML = '<div class="chat-empty muted">Ask anything about this item. Plume sees all its details.</div>';
+      showSuggestions(card.questions);
+    }
+    $('col-right').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    input.focus();
+  }
+
   $('chat-new').onclick = () => {
+    setAbout(null);
     threadId = null;
     clearTimeout(polling);
     $('chat-cost').textContent = '';
@@ -281,10 +313,11 @@
     input.focus();
   };
   $('chat-threads').onchange = () => {
+    setAbout(null);
     const id = Number($('chat-threads').value);
     if (id) openThread(id);
   };
 
   loadChat();
-  window.plumeChat = { reload: loadChat };
+  window.plumeChat = { reload: loadChat, ask };
 })();

@@ -164,3 +164,63 @@ export function aiGapSeen(runId: number, questionId: number): void {
   gapDone(runId, questionId);
   countDone();
 }
+
+/** A Dashboard card as the chat sees it: a short title, everything about it in plain text, and questions to start with. */
+export interface CardBrief {
+  key: string;
+  title: string;
+  details: string;
+  questions: string[];
+}
+
+/** Describe the card `key` for "Ask Plume", or undefined if it is no longer on the Dashboard. */
+export function briefFor(key: string, now = new Date()): CardBrief | undefined {
+  const item = todayFeed(now).find((i) => i.key === key);
+  if (!item) return undefined;
+  const lines: string[] = [];
+  let title: string;
+  let questions: string[];
+  if (item.kind === 'draft') {
+    const d = item.draft;
+    const full = getDraft(d.id);
+    title = `Draft: ${d.title}`;
+    lines.push(`Draft #${d.id} (${d.kind}) by the ${d.agent} agent, ${d.words} words, status ${d.status}.`);
+    if (d.meta.reason) lines.push(`Why it was written: ${d.meta.reason}`);
+    if (d.meta.to) lines.push(`To: ${d.meta.to}${d.meta.subject ? `, subject "${d.meta.subject}"` : ''}`);
+    if (full) lines.push('', 'Full text:', full.body.slice(0, 12_000));
+    questions = ['Is this draft ready to publish? What would you change?', 'Make it shorter and sharper', 'Does it match our brand voice?'];
+  } else if (item.kind === 'fix') {
+    const f = item.fix;
+    title = `Problem: ${f.title}`;
+    lines.push(`A ${f.severity} problem found by the ${f.agent} agent (${f.area}) on ${f.url}.`, `Why it matters: ${f.why}`, 'Proposed fix:', ...f.steps.map((s, n) => `${n + 1}. ${s}`));
+    if (f.snippet) lines.push('Code:', f.snippet);
+    if (f.status === 'failed') lines.push('An earlier attempt to fix it automatically failed.');
+    questions = ['Explain this problem in simple words', 'How do I fix this step by step?', 'How much does this really matter?'];
+  } else if (item.kind === 'speed') {
+    title = `Slow on ${item.strategy === 'mobile' ? 'phones' : 'computers'}`;
+    lines.push(`Page speed on ${item.strategy === 'mobile' ? 'phones' : 'computers'}: performance score ${item.performance} out of 100.`, `Main problem: ${item.headline}`);
+    questions = ['What is making the site slow?', 'What should I fix first?', 'How much does speed affect my Google ranking?'];
+  } else if (item.kind === 'watch') {
+    const c = item.change;
+    title = `${c.name} changed`;
+    lines.push(`Competitor ${c.name}${c.url ? ` (${c.url})` : ''}, noticed ${c.at}:`, ...c.changes.map((x) => `- ${x.text}${x.items ? `: ${x.items.join(', ')}` : ''}${x.url ? ` (${x.url})` : ''}`));
+    questions = ['What does this change mean for us?', 'Should we respond to this?', 'Write a post that answers this'];
+  } else if (item.kind === 'rank') {
+    const a = item.alert;
+    title = `"${a.keyword}": position ${a.from} → ${a.to}`;
+    lines.push(`Our Google position for the search "${a.keyword}" went from ${a.from} to ${a.to} in the week of ${a.week}.`);
+    if (item.googleUpdates.length) lines.push(`Google was rolling out ${item.googleUpdates.map((u) => `the ${u.name} (${u.date}, ${u.source})`).join(' and ')} around then.`);
+    questions = a.to > a.from ? ['Why did we drop for this search?', 'Who is ahead of us now?', 'How do we win it back?'] : ['What made us rise for this search?', 'How do we do more of this?'];
+  } else if (item.kind === 'page-change') {
+    const c = item.change;
+    title = `Your site changed (${c.changes.length})`;
+    lines.push(`Changes found on our own pages (${c.at}):`, ...c.changes.slice(0, 30).map((x) => `- [${x.severity}] ${x.url}: ${x.text}${x.before ? ` | was: ${x.before.slice(0, 200)}` : ''}${x.after ? ` | now: ${x.after.slice(0, 200)}` : ''}`));
+    questions = ['Could any of these changes hurt us in Google?', 'What should I undo or fix?'];
+  } else {
+    const g = item.gap;
+    title = `AI gap: ${g.question}`;
+    lines.push(`Asked "${g.question}", ${g.engines} AI assistant(s) recommended ${g.namedInstead.join(', ')} and not us.`);
+    questions = ['Why do AI assistants pick them instead of us?', 'What page should we write to get named?', 'Write a draft that answers this question'];
+  }
+  return { key, title: title.slice(0, 120), details: lines.join('\n'), questions };
+}

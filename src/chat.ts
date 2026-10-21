@@ -5,7 +5,7 @@ import { PROFILE_DOCS, ProfileDocId, agentSystem, isProfileDocId, readDoc, write
 import { addCompetitor, listCompetitors, removeCompetitor, setUserNotes, userNotes } from './context/extra';
 import { chatSearchTools, converse, runLocalTool } from './llm/client';
 import { createDraft, getDraft, listDrafts } from './queue';
-import { todayFeed } from './today';
+import { briefFor, todayFeed } from './today';
 import { AGENTS, startAgentRun } from './agents';
 import { AuditResult } from './agents/seoAudit';
 import { lastSpeed } from './analytics/pagespeed';
@@ -40,6 +40,8 @@ import { actionResults, auditHistory, describeResult, recordAction } from './act
 
 export const MAX_ROUNDS = 12;
 const NOTE_TAG = '<context-update>';
+/** Starts the details of a Dashboard card the owner asked about with "Ask Plume". */
+const CARD_TAG = '<dashboard-card';
 
 const DOC_IDS = [...PROFILE_DOCS.map((d) => d.id), 'notes'] as const;
 type ChatDoc = ProfileDocId | 'notes';
@@ -54,6 +56,7 @@ How to work:
 - To produce a post or article, call create_draft. It goes to the owner's Dashboard for approval; nothing is published by you.
 - Only call run_agent when the owner explicitly asks for an agent to run — runs cost money.
 - The owner may mention @seo, @writer (agents) or @doc:product, @doc:voice, … (documents); treat these as pointers to what they mean.
+- A message may come with a ${CARD_TAG}> block: the Dashboard item the owner pressed "Ask Plume" on. Their questions are about that item unless they say otherwise.
 - Messages that start with ${NOTE_TAG} are facts from Plume about what happened since your last turn (applied changes, finished jobs). Trust them over your earlier assumptions.`;
 
 // ---------------------------------------------------------------- tools
@@ -501,9 +504,9 @@ function freshSystem(): Anthropic.Beta.BetaTextBlockParam[] {
   return agentSystem(ROLE, undefined, undefined, 'chat');
 }
 
-export function createThread(firstMessage: string): Thread {
+export function createThread(firstMessage: string, name?: string): Thread {
   const now = new Date().toISOString();
-  const title = firstMessage.replace(/\s+/g, ' ').trim().slice(0, 70) || 'New chat';
+  const title = (name ?? firstMessage).replace(/\s+/g, ' ').trim().slice(0, 70) || 'New chat';
   const r = getDb().prepare('INSERT INTO chat_threads (title, system, created_at, updated_at) VALUES (?, ?, ?, ?)').run(title, JSON.stringify(freshSystem()), now, now);
   return getThread(Number(r.lastInsertRowid))!;
 }
@@ -561,7 +564,7 @@ const runKey = (threadId: number) => `${currentSite()}|${threadId}`;
  * Add the owner's message and let the assistant work until it has answered.
  * Resolves when the reply is finished; the web page polls the thread meanwhile.
  */
-export async function sendMessage(threadId: number, text: string): Promise<void> {
+export async function sendMessage(threadId: number, text: string, about?: string): Promise<void> {
   const key = runKey(threadId);
   if (running.has(key)) throw new Error('the assistant is still answering — wait for it to finish');
   const thread = getDb().prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as any;
@@ -573,6 +576,8 @@ export async function sendMessage(threadId: number, text: string): Promise<void>
     const notes = takeNotes(threadId);
     const content: any[] = [];
     if (notes.length) content.push({ type: 'text', text: `${NOTE_TAG}\n${notes.map((n) => `- ${n}`).join('\n')}` });
+    const card = about ? briefFor(about) : undefined;
+    if (card) content.push({ type: 'text', text: `${CARD_TAG} title="${card.title.replace(/"/g, "'")}">\n${card.details}\n</dashboard-card>` });
     content.push({ type: 'text', text });
     appendMessage(threadId, 'user', 'text', content);
     await runLoop(threadId, JSON.parse(thread.system));
@@ -673,6 +678,8 @@ export interface ShownItem {
   role: 'you' | 'assistant';
   html?: string;
   text?: string;
+  /** The Dashboard item this message asked about, by title. */
+  about?: string;
   /** Plain labels for what the assistant looked at ("Looked at the Dashboard"). */
   steps?: string[];
   actions?: ShownAction[];
@@ -735,8 +742,10 @@ export function showThread(threadId: number): { thread: Thread; items: ShownItem
   for (const m of storedMessages(threadId)) {
     if (m.kind === 'tool') continue;
     if (m.kind === 'text') {
-      const text = m.content.filter((b) => b.type === 'text' && !String(b.text).startsWith(NOTE_TAG)).map((b) => b.text).join('\n');
-      items.push({ role: 'you', text, at: m.at });
+      const hidden = (b: any) => String(b.text).startsWith(NOTE_TAG) || String(b.text).startsWith(CARD_TAG);
+      const text = m.content.filter((b) => b.type === 'text' && !hidden(b)).map((b) => b.text).join('\n');
+      const card = m.content.find((b) => b.type === 'text' && String(b.text).startsWith(CARD_TAG));
+      items.push({ role: 'you', text, at: m.at, ...(card ? { about: String(card.text).match(/title="([^"]*)"/)?.[1] ?? 'a Dashboard item' } : {}) });
       continue;
     }
     const text = m.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
