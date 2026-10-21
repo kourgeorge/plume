@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { contentLanguages } from '../context/language';
 import { publicOnly } from './safeUrl';
 
 export const USER_AGENT = 'PlumeBot/0.1 (+local marketing assistant)';
@@ -64,11 +65,29 @@ function explainNetworkError(err: any): string {
   return `could not connect (${code || err?.message || 'network error'})`;
 }
 
+/**
+ * The languages to ask a site for: the site's own once they are known (main first), English last.
+ * Always a real list: Node's default is "*", which some sites put into their redirect (IBM sends you to /il-*, a 404).
+ */
+export function acceptLanguage(langs: string[] = siteLanguages()): string {
+  const all = [...new Set([...langs, 'en'])];
+  return all.map((c, i) => (i ? `${c};q=${Math.max(1 - i / 10, 0.1).toFixed(1)}` : c)).join(',');
+}
+
+/** The current site's languages, or none when no site is open (or it has never been read). */
+function siteLanguages(): string[] {
+  try {
+    return contentLanguages();
+  } catch {
+    return [];
+  }
+}
+
 /** One plain HTTP read, classified. */
 export async function fetchHttp(url: string, fetchFn: typeof fetch = fetch): Promise<FetchResult> {
   let res: Response;
   try {
-    res = await fetchFn(url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,*/*' }, redirect: 'follow', signal: AbortSignal.timeout(20_000) });
+    res = await fetchFn(url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,*/*', 'accept-language': acceptLanguage() }, redirect: 'follow', signal: AbortSignal.timeout(20_000) });
   } catch (err) {
     return { ok: false, url, kind: 'unreachable', reason: explainNetworkError(err) };
   }
@@ -135,7 +154,8 @@ export const BROWSER_USER_AGENT = BROWSER_UA;
 
 export const chromeFetch: BrowserFetch = (url) =>
   withBrowser(async (browser) => {
-    const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: 'en-US' });
+    const langs = acceptLanguage();
+    const ctx = await browser.newContext({ userAgent: BROWSER_UA, locale: langs.split(',')[0], extraHTTPHeaders: { 'accept-language': langs } });
     try {
       const page = await ctx.newPage();
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });

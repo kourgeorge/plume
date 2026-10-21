@@ -102,3 +102,16 @@ test('when nothing can be read, the error says why', async () => {
     (err) => err instanceof CrawlError && /Could not read https:\/\/wall.test\/: blocked by Cloudflare/.test(err.message),
   );
 });
+
+test("pages are asked for in the site's own languages, English last, never \"*\"", async () => {
+  const { acceptLanguage } = require('../src/research/fetchPage');
+  const { setContentLanguages } = require('../src/context/language');
+  assert.equal(acceptLanguage([]), 'en');
+  assert.equal(acceptLanguage(['he', 'en']), 'he,en;q=0.9');
+  assert.equal(acceptLanguage(['de', 'fr']), 'de,fr;q=0.9,en;q=0.8');
+  setContentLanguages({ main: 'he', all: ['he', 'ar'] });
+  let sent;
+  await fetchHttp('https://a.test/', async (url, init) => ((sent = init.headers['accept-language']), respond(real())(url)));
+  assert.equal(sent, 'he,ar;q=0.9,en;q=0.8');
+  setContentLanguages({ main: 'en', all: ['en'] });
+});
