@@ -6,6 +6,8 @@ import { contentLanguage } from '../context/language';
 import { HEAD_CODE, type Issue, type Severity } from '../agents/seoAudit';
 import { AxeViolation, PageScan, ScanFindings, complianceIssues, matchCmp, matchTrackers } from './checks';
 import { Region, regionsFor, visitorCountries } from './regions';
+import { cleanUrl } from '../issueId';
+import { recordScan } from '../issues';
 
 /**
  * The compliance visit: open the site in Chrome like a first-time visitor and watch what happens before
@@ -326,6 +328,12 @@ export async function runComplianceScan(origin: string, onProgress: (m: string) 
   };
   setSetting('lastCompliance', result);
   setSetting('lastComplianceFindings', findings.f);
+  // A problem is only "no longer found" if this visit could have seen it. Privacy problems are about the
+  // home page, which is always opened. An accessibility rule can be on any page, so only a visit to every
+  // page can say it is gone.
+  const visited = new Set(findings.f.pages.map((p) => cleanUrl(p.url)));
+  const covers = (check: string, url: string) => (check.startsWith('a11y-') && check !== 'a11y-no-statement' && check !== 'a11y-overlay-not-enough' ? !!opts.allPages : visited.has(cleanUrl(url)));
+  recordScan(issues, { agent: 'compliance', at: result.at, covers });
   return result;
 }
 

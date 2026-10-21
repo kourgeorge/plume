@@ -1,7 +1,7 @@
 import { getSetting, setSetting } from './db';
 import { listDrafts, getDraft, moveDraft, Draft } from './queue';
-import { Issue, markFixDone, pinIssue } from './agents/seoAudit';
-import { findTracked, openIssues, setWontFix } from './issues';
+import type { Issue } from './agents/seoAudit';
+import { findTracked, markFixed, openIssues, recordOne, setWontFix } from './issues';
 import { recordFixDone } from './actions';
 import { lastSpeed, speedIssue, Strategy } from './analytics/pagespeed';
 import { recordFeedback } from './feedback';
@@ -120,11 +120,10 @@ export function notUseful(draftId: number, reason: string | null): void {
 }
 
 export function fixDone(id: string): void {
-  // Look it up before marking it: a pinned fix leaves the pinned list once done.
   const issue = findTracked(id);
-  markFixDone(id);
-  setWontFix(id, false);
-  if (issue) recordFixDone(issue);
+  if (!issue) throw new Error('that problem is no longer in the latest check');
+  markFixed(id);
+  recordFixDone(issue);
   countDone();
 }
 
@@ -133,7 +132,8 @@ export function sendSpeedToSeo(strategy: Strategy): Issue | null {
   const r = lastSpeed()[strategy];
   const issue = r && speedIssue(r);
   if (!issue) return null;
-  pinIssue(issue);
+  // Sending it again reopens it, even after it was marked fixed: a fresh report says it is still slow.
+  recordOne(issue, 'site-check', r!.at);
   setSetting('speedHandled', { ...getSetting<Record<string, string>>('speedHandled', {}), [strategy]: r!.at });
   return issue;
 }

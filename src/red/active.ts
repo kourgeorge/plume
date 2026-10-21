@@ -1,4 +1,5 @@
 import type { Issue } from '../agents/seoAudit';
+import { withId } from '../issueId';
 
 /**
  * Active, NON-DESTRUCTIVE testing. This is the only part of Plume-Red that sends input the site
@@ -17,7 +18,7 @@ import type { Issue } from '../agents/seoAudit';
  * Each check makes one or two requests and stops.
  */
 
-const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push(withId(i));
 
 /** A marker that is obvious in a page and can't be mistaken for anything else, but does nothing if run. */
 const MARKER = 'plumeRedCheck1337';

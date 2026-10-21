@@ -158,7 +158,7 @@ test('prepares the change first: shows the file and the lines, opens nothing unt
   repoFiles = { 'site/legal/ar/cookies-storage.html': html, 'site/legal/ar/terms.html': '<html><head><title>الشروط — Dsim</title></head></html>', 'site/base.html': '<head></head>' };
   livePages = { '/legal/ar/storage.html': html };
   const it = issue({ id: 'missing-meta-description:https://acme.example/legal/ar/storage.html', url: 'https://acme.example/legal/ar/storage.html' });
-  require('../src/db').setSetting('pinnedIssues', [it]);
+  require('../src/issues').recordOne(it, 'site-check');
   plans.push({ can_fix: true, reason: '', summary: 'Adds an Arabic meta description.', edits: [{ path: 'site/legal/ar/cookies-storage.html', find: '<title>ملفات الارتباط وتخزين المتصفح — Dsim</title>', replace: '<title>ملفات الارتباط وتخزين المتصفح — Dsim</title>\n<meta name="description" content="وصف">' }], new_files: [] });
   const r = await cf.prepareFix(it, () => {}, ENV(), LIVE);
   assert.equal(r.proposal.source.path, 'site/legal/ar/cookies-storage.html');
@@ -188,7 +188,7 @@ test('prepares the change first: shows the file and the lines, opens nothing unt
 test('cancelling a prepared change drops it', async () => {
   repoFiles = { 'src/pages/pricing.html': '<html><head>\n<title>Pricing</title>\n</head></html>' };
   livePages = { '/pricing': repoFiles['src/pages/pricing.html'] };
-  require('../src/db').setSetting('pinnedIssues', [issue()]);
+  require('../src/issues').recordOne(issue(), 'site-check');
   plans.push({ can_fix: true, reason: '', summary: 'x', edits: [{ path: 'src/pages/pricing.html', find: '<title>Pricing</title>', replace: '<title>Pricing</title><meta name="description" content="d">' }], new_files: [] });
   await cf.prepareFix(issue(), () => {}, ENV(), LIVE);
   cf.cancelProposedFix(issue().id);
@@ -198,7 +198,7 @@ test('cancelling a prepared change drops it', async () => {
 
 test('after the merge: re-reads the live page and marks the fix done only once the problem is gone', async () => {
   const it = issue();
-  require('../src/db').setSetting('pinnedIssues', [it]);
+  require('../src/issues').recordOne(it, 'site-check');
   repoFiles = { 'src/pages/pricing.html': '<html><head>\n<title>Pricing plans for teams</title>\n</head><body><h1>Pricing</h1></body></html>' };
   livePages = { '/pricing': repoFiles['src/pages/pricing.html'] };
   plans.push({ can_fix: true, reason: '', summary: 'Adds a description.', edits: [{ path: 'src/pages/pricing.html', find: '<title>Pricing plans for teams</title>', replace: '<title>Pricing plans for teams</title>\n<meta name="description" content="Plans from $49 a month for small teams.">' }], new_files: [] });
@@ -219,13 +219,13 @@ test('after the merge: re-reads the live page and marks the fix done only once t
   const r = await cf.followUpFixes(ENV(), LIVE.fetchFn);
   assert.deepEqual(r.verified, [it.id]);
   assert.equal(cf.lastFix(it.id).status, 'verified');
-  assert.ok(!require('../src/agents/seoAudit').pinnedIssues().some((i) => i.id === it.id));
+  assert.equal(require('../src/issues').findTracked(it.id).state, 'fixed', 'a confirmed fix is marked fixed');
   assert.equal((await cf.followUpFixes(ENV(), LIVE.fetchFn)).checked, 0, 'a confirmed fix is not checked again');
 });
 
 test('a pull request closed without merging is reported, not checked forever', async () => {
   const it = issue({ id: 'missing-h1:https://acme.example/pricing', check: 'missing-h1', title: 'No main heading (H1)' });
-  require('../src/db').setSetting('pinnedIssues', [it]);
+  require('../src/issues').recordOne(it, 'site-check');
   repoFiles = { 'src/pages/pricing.html': '<html><head><title>Pricing</title></head><body><p>x</p></body></html>' };
   livePages = { '/pricing': repoFiles['src/pages/pricing.html'] };
   plans.push({ can_fix: true, reason: '', summary: 'Adds a heading.', edits: [{ path: 'src/pages/pricing.html', find: '<body>', replace: '<body><h1>Pricing</h1>' }], new_files: [] });

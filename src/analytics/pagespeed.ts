@@ -1,4 +1,5 @@
 import { getSetting, setSetting } from '../db';
+import { withId } from '../issueId';
 
 /** Google's PageSpeed Insights (runs Lighthouse for us). Works without a key; PAGESPEED_API_KEY raises the rate limit. */
 export const PSI_URL = { base: 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed' };
@@ -140,14 +141,15 @@ export function speedIssue(r: SpeedReport): import('../agents/seoAudit').Issue |
     ? r.opportunities.slice(0, 4).map((o) => `${o.title} (could save about ${formatValue('lcp', o.savingsMs)}): ${o.description}`)
     : ['Run the page through PageSpeed Insights and work through the "Opportunities" list from the top.'];
   steps.push('After changing the site, click "Check speed" again to confirm the improvement.');
-  return {
-    id: `speed:${r.strategy}:${bad.id}`,
-    check: 'page-speed',
+  // One speed problem per device, whichever measurement is worst: a later report updates the same problem.
+  return withId<Omit<import('../agents/seoAudit').Issue, 'id'>>({
+    check: `page-speed-${r.strategy}`,
     severity: bad.rating === 'poor' ? 'critical' : 'medium',
     area: 'performance',
-    url: r.url,
+    // Older reports (and some answers from Google) carry no address: it is about the site's home page then.
+    url: r.url || (require('../sites') as typeof import('../sites')).siteUrl() || 'site',
     title: `${bad.label}: ${bad.display} on ${r.strategy} (${bad.target})`,
     why: `${r.headline} Slow pages rank lower and lose visitors before they see anything.`,
     steps,
-  };
+  });
 }

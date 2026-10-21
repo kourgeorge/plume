@@ -386,7 +386,7 @@ const CHECK_NAME = {
   'broken-page': 'Pages that return an error', 'duplicate-title': 'Same title on several pages', 'thin-content': 'Very little text on the page',
   'meta-description-length': 'Description too short or too long', 'missing-meta-description': 'No description', 'missing-title': 'No title',
   'missing-h1': 'No main heading', 'missing-canonical': 'No canonical link', 'images-no-size': 'Images without a set size', 'orphan-page': 'Pages nothing links to',
-  'missing-social-preview': 'No social preview', 'hero-image-lazy': 'Main image loads late', 'page-speed': 'Slow pages',
+  'missing-social-preview': 'No social preview', 'hero-image-lazy': 'Main image loads late', 'page-speed-mobile': 'Slow on phones', 'page-speed-desktop': 'Slow on computers',
 };
 
 /** How serious a card is, for the overview's severity filter. Non-problem cards have none. */
@@ -944,7 +944,7 @@ function issueRow(i) {
   const pr = i.fix?.prUrl ? ` · <a href="${esc(i.fix.prUrl)}" target="_blank" rel="noopener">pull request</a>` : '';
   const open = i.status === 'draft' || i.status === 'failed';
   return `<li class="issue-row"><details><summary><span class="sev ${i.severity}">${esc(i.severity)}</span> <span dir="auto">${esc(i.title)}</span>
-      <small>Problem · ${esc(areaLabel(i.area))} · ${esc(sourceName(i.url))}${i.fixedAt ? ` · fixed ${esc(when(i.fixedAt))}` : ''}${pr}</small></summary>
+      <small>Problem · ${esc(areaLabel(i.area))} · ${esc(sourceName(i.url))}${i.state === 'fixed' ? ` · fixed ${esc(when(i.closedAt))}` : i.state === 'gone' ? ` · no longer found since ${esc(when(i.closedAt))}` : i.state === 'wont-fix' ? ` · turned down ${esc(when(i.closedAt))}` : ` · first found ${esc(when(i.firstSeen))}`}${pr}</small></summary>
       <p class="small">${esc(i.why)}</p>
       ${i.steps?.length ? `<p class="small"><strong>Proposed fix</strong></p><ol class="small">${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : ''}
       ${i.snippet ? `<pre><code>${esc(i.snippet)}</code></pre>` : ''}

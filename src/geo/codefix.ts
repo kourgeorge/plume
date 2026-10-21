@@ -3,7 +3,7 @@ import { MODELS } from '../config';
 import { askJson } from '../llm/client';
 import { siteEnv } from '../integrations';
 import { techSignals } from '../research/techSignals';
-import { AuditResult, Issue, pinnedIssues } from '../agents/seoAudit';
+import { Issue } from '../agents/seoAudit';
 import { finishJob, runningJob, startJob, updateJob } from '../jobs';
 import { log } from '../log';
 import { recordAction } from '../actions';
@@ -13,7 +13,8 @@ import { fetchHttp } from '../research/fetchPage';
 import { extractPage } from '../research/crawl';
 import { languageName, pageLanguageOf } from '../context/language';
 import { aiAccess } from '../research/aiCrawlers';
-import { auditPages, markFixDone } from '../agents/seoAudit';
+import { auditPages } from '../agents/seoAudit';
+import { findTracked, markFixed } from '../issues';
 import { recordFixDone } from '../actions';
 import { escapeHtml } from '../publish';
 import { DiffLine, lineDiff } from '../diff';
@@ -294,11 +295,7 @@ const FOLLOW_UP_DAYS = 3;
 /** Find a site-check problem by its id, in the latest check or in the ones sent over by hand. */
 export function findIssue(id: string): Issue | null {
   // Any agent that finds problems: the site check, the compliance check, the security scan.
-  for (const key of ['lastAudit', 'lastCompliance', 'lastRedScan']) {
-    const hit = getSetting<{ issues: Issue[] } | null>(key, null)?.issues.find((i) => i.id === id);
-    if (hit) return hit;
-  }
-  return pinnedIssues().find((i) => i.id === id) ?? null;
+  return findTracked(id) ?? null;
 }
 
 /** What the owner sees before a pull request is opened. */
@@ -605,7 +602,7 @@ export async function followUpFixes(env = siteEnv(), fetchFn: typeof fetch = fet
   const rows = (getDb().prepare("SELECT * FROM code_fixes WHERE id IN (SELECT MAX(id) FROM code_fixes GROUP BY issue_id) AND status IN ('opened', 'merged') AND pr_number IS NOT NULL").all() as any[]);
   for (const r of rows) {
     out.checked++;
-    const issue = findIssue(r.issue_id);
+    const issue = findTracked(r.issue_id);
     const pr = await call(g, 'GET', `/pulls/${r.pr_number}`).catch(() => null);
     if (!pr) continue;
     const keep = { prUrl: r.pr_url, prNumber: r.pr_number, files: JSON.parse(r.files ?? '[]') };
@@ -615,14 +612,14 @@ export async function followUpFixes(env = siteEnv(), fetchFn: typeof fetch = fet
       continue;
     }
     if (!pr.merged_at) continue;
-    // Not in the site check any more (fixed some other way, or marked done): nothing left to confirm.
-    if (!issue) {
+    // No longer found by a scan, or marked done: nothing left to confirm.
+    if (!issue || issue.state !== 'open') {
       record(r.issue_id, 'verified', 'Merged. The problem is no longer in the site check.', keep);
       continue;
     }
     const broken = await stillBroken(issue, fetchFn).catch(() => null);
     if (broken === false) {
-      markFixDone(issue.id);
+      markFixed(issue.id);
       recordFixDone(issue);
       record(issue.id, 'verified', 'Merged, and the live page no longer has the problem.', keep);
       log('info', 'codefix', `confirmed fixed on the live site: ${issue.check} on ${issue.url}`);

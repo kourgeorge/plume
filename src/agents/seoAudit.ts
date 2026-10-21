@@ -4,6 +4,8 @@ import { aiAccess, unblockSnippet } from '../research/aiCrawlers';
 import { saveAuditHistory } from '../actions';
 import { BusinessFacts, IDENTITY_TYPES, RETIRED_RICH_RESULTS, identitySchema } from '../research/schema';
 import type { PageRow } from '../research/pageChanges';
+import { cleanUrl, withId } from '../issueId';
+import { recordScan } from '../issues';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 export type Area = 'technical' | 'on-page' | 'content' | 'performance' | 'ai-search' | 'security' | 'privacy' | 'accessibility';
@@ -91,11 +93,13 @@ function siteName(pages: PageRow[]): string {
   return (home?.title.split(/[|–—-]/)[0] ?? '').trim() || new URL(home.url).hostname;
 }
 
+const ORPHAN_LIMIT = 10;
+
 /** Every check runs on the crawl already in the database — no extra requests. */
 export function auditPages(pages: PageRow[], site: SiteFacts = {}): AuditResult {
   const issues: Issue[] = [];
   let passed = 0;
-  const add = (i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+  const add = (i: Omit<Issue, 'id'>) => issues.push(withId(i));
   const name = pages.length ? siteName(pages) : '';
 
   const titleCounts = new Map<string, string[]>();
@@ -275,7 +279,7 @@ export function auditPages(pages: PageRow[], site: SiteFacts = {}): AuditResult 
     for (const p of pages) for (const l of JSON.parse(p.links_out || '[]') as string[]) linked.add(l);
     const live = pages.filter((p) => p.status < 400 && new URL(p.url).pathname !== '/' && !/noindex/i.test(p.meta_robots ?? ''));
     const orphans = live.filter((p) => !linked.has(p.url));
-    for (const p of orphans.slice(0, 10)) {
+    for (const p of orphans.slice(0, ORPHAN_LIMIT)) {
       add({ check: 'orphan-page', severity: 'medium', area: 'technical', url: p.url, title: 'No other page links here',
         why: 'Plume only found this page through the sitemap. Pages without links from the rest of the site are found late by Google, rank as less important, and visitors can\'t reach them.',
         steps: ['Link to it from a related page, the menu or the footer, with words that say what it is about.', 'If it is an old page nobody needs, remove it from the sitemap or redirect it.'] });
@@ -404,32 +408,36 @@ export async function runAudit(origin?: string): Promise<AuditResult> {
   const result = auditPages(pages, site);
   setSetting('lastAudit', result);
   saveAuditHistory(result);
+  recordScan(result.issues, { agent: 'site-check', at: result.at, covers: auditCovers(pages, site, result.issues) });
   return result;
 }
 
-/** When each problem was marked fixed. A check that runs after that and still finds it puts it back. */
-export function fixedAt(): Record<string, string> {
-  const marks = getSetting<Record<string, string> | null>('fixedIssues', null);
-  if (marks) return marks;
-  // Older sites kept a plain list in the daily-fixes log: count those as fixed when it was written.
-  const old = getSetting<{ day?: string; done?: string[] }>('dailyFixes', {});
-  return Object.fromEntries((old.done ?? []).map((id) => [id, `${old.day || '1970-01-01'}T23:59:59.999Z`]));
-}
+/** Site-wide checks that only run when Plume knows the fact behind them. */
+const SITE_WIDE: Record<string, (site: SiteFacts) => boolean> = {
+  'no-https-redirect': (s) => s.httpsRedirect !== undefined,
+  'missing-robots': (s) => s.robotsOk !== undefined,
+  'missing-sitemap': (s) => s.sitemapOk !== undefined,
+  'ai-crawlers-blocked': (s) => s.robots !== undefined,
+  'cloudflare-ai-block': (s) => s.robots !== undefined,
+};
 
-export function markFixDone(id: string, at = new Date()): void {
-  setSetting('fixedIssues', { ...fixedAt(), [id]: at.toISOString() });
-  setSetting('pinnedIssues', pinnedIssues().filter((i) => i.id !== id));
-}
-
-export function pinnedIssues(): Issue[] {
-  return getSetting<Issue[]>('pinnedIssues', []);
-}
-
-/** Put a problem on the Dashboard now (e.g. from the speed panel). Re-sending replaces the old copy. */
-export function pinIssue(issue: Issue): void {
-  const { [issue.id]: _, ...rest } = fixedAt();
-  setSetting('fixedIssues', rest);
-  setSetting('pinnedIssues', [issue, ...pinnedIssues().filter((i) => i.id !== issue.id)]);
+/**
+ * Which earlier problems this check could have found again. Per-page checks cover every page read this time;
+ * a page that now returns an error only had the "broken page" check; a page no longer on the site has none of
+ * its problems any more. Speed problems come from the speed check, not from here.
+ */
+function auditCovers(pages: PageRow[], site: SiteFacts, found: Issue[]): (check: string, url: string) => boolean {
+  const byUrl = new Map(pages.map((p) => [cleanUrl(p.url), p]));
+  // Only the first ORPHAN_LIMIT pages nothing links to are listed, so a full list can't say the rest are gone.
+  const orphansComplete = !!site.crawlComplete && found.filter((i) => i.check === 'orphan-page').length < ORPHAN_LIMIT;
+  return (check, url) => {
+    if (check.startsWith('page-speed-')) return false;
+    if (check === 'orphan-page') return orphansComplete;
+    if (check in SITE_WIDE) return SITE_WIDE[check](site);
+    const p = byUrl.get(cleanUrl(url));
+    if (!p) return true;
+    return p.status >= 400 ? check === 'broken-page' : true;
+  };
 }
 
 /** What Plume knows about the business, for its structured data. Only facts found on the site or entered by the owner. */

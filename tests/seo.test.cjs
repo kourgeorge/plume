@@ -7,8 +7,9 @@ const path = require('path');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plume-test-'));
 process.env.PLUME_SITE = 'test.example';
-const { auditPages, markFixDone } = require('../src/agents/seoAudit');
-const { openIssues, trackedIssues, setWontFix } = require('../src/issues');
+const { auditPages } = require('../src/agents/seoAudit');
+const { openIssues, trackedIssues, setWontFix, markFixed, recordScan, findTracked, issueEvents } = require('../src/issues');
+const { cleanUrl, issueId } = require('../src/issueId');
 const { setSetting } = require('../src/db');
 const { filterNew, searchConsoleGaps } = require('../src/agents/seo');
 
@@ -40,26 +41,64 @@ test('snippets escape page text', () => {
   assert.doesNotMatch(r.issues.find((i) => i.check === 'missing-title').snippet, /<script>x/);
 });
 
-test('every problem waits until fixed or turned down, and a later check that still finds it brings it back', () => {
-  const r = { ...auditPages([page({ url: 'https://a.com/x', title: '', meta_description: '', canonical: '', h1: '' })]), at: '2026-10-16T05:00:00.000Z' };
-  setSetting('lastAudit', r);
-  const all = openIssues('site-check');
-  assert.equal(all.length, r.issues.length, 'every problem should be waiting, not two a day');
-  markFixDone(all[0].id, new Date('2026-10-16T10:00:00Z'));
-  assert.equal(trackedIssues().find((i) => i.id === all[0].id).status, 'published', 'a fixed problem is resolved');
-  setWontFix(all[1].id, true);
-  assert.equal(trackedIssues().find((i) => i.id === all[1].id).status, 'rejected');
-  assert.equal(openIssues('site-check').length, all.length - 2);
-  setSetting('lastAudit', { ...r, at: '2026-10-17T05:00:00.000Z' });
-  assert.equal(openIssues('site-check').length, all.length - 1, 'the fixed one is found again and comes back; the turned-down one stays out');
-  setWontFix(all[1].id, false);
-  assert.equal(openIssues('site-check').length, all.length);
+const scan = (pages, at, covers = () => true) => {
+  const r = { ...auditPages(pages), at };
+  recordScan(r.issues, { agent: 'site-check', at, covers });
+  return r;
+};
+
+test('every address is written one way, so the same problem always gets the same id', () => {
+  assert.equal(cleanUrl('https://A.com/about/?x=1#top'), 'https://a.com/about');
+  assert.equal(cleanUrl('https://a.com'), 'https://a.com/');
+  assert.equal(cleanUrl('repo:acme/site/package.json'), 'repo:acme/site/package.json');
+  assert.equal(issueId('missing-title', 'https://a.com/about/'), issueId('missing-title', 'https://a.com/about'));
+});
+
+test('problems survive a rescan: found again stays, not found is "gone", fixed and found again reopens', () => {
+  const bad = page({ url: 'https://k.com/x', title: '', meta_description: '' });
+  const first = scan([bad], '2026-10-16T05:00:00.000Z');
+  const title = first.issues.find((i) => i.check === 'missing-title').id;
+  const desc = first.issues.find((i) => i.check === 'missing-meta-description').id;
+  assert.equal(openIssues('site-check').filter((i) => i.url === 'https://k.com/x').length, first.issues.length, 'every problem waits, not two a day');
+
+  // The title gets fixed on the site; the next scan no longer finds it.
+  scan([{ ...bad, title: 'A good title for the page' }], '2026-10-17T05:00:00.000Z');
+  assert.equal(findTracked(title).state, 'gone');
+  assert.equal(findTracked(title).status, 'published', 'no longer found counts as resolved');
+  assert.equal(findTracked(desc).state, 'open');
+
+  // The owner marks the description fixed, but the next scan still finds it: it is waiting again.
+  markFixed(desc, new Date('2026-10-17T10:00:00Z'));
+  assert.equal(findTracked(desc).state, 'fixed');
+  scan([{ ...bad, title: 'A good title for the page' }], '2026-10-18T05:00:00.000Z');
+  assert.equal(findTracked(desc).state, 'open');
+  assert.deepEqual(issueEvents(desc).map((e) => e.note), ['found by site-check', 'marked fixed', 'found again after it was marked fixed']);
+});
+
+test("a scan that didn't look at a page, or skipped a check, leaves its problems alone", () => {
+  const p = page({ url: 'https://s.com/y', title: '' });
+  const id = scan([p], '2026-10-16T05:00:00.000Z').issues.find((i) => i.check === 'missing-title').id;
+  scan([], '2026-10-17T05:00:00.000Z', () => false);
+  assert.equal(findTracked(id).state, 'open', 'a scan that covered nothing closed a problem');
+  // A page that now returns an error only had the "broken page" check, so its old problems stay as they were.
+  scan([{ ...p, status: 500 }], '2026-10-18T05:00:00.000Z', (check, url) => check === 'broken-page' || url !== 'https://s.com/y');
+  assert.equal(findTracked(id).state, 'open');
+});
+
+test("won't fix stays out even when a later scan finds it again, until reopened", () => {
+  const p = page({ url: 'https://w.com/z', h1: '' });
+  const id = scan([p], '2026-10-16T05:00:00.000Z').issues.find((i) => i.check === 'missing-h1').id;
+  setWontFix(id, true);
+  scan([p], '2026-10-17T05:00:00.000Z');
+  assert.equal(findTracked(id).status, 'rejected');
+  assert.ok(!openIssues('site-check').some((i) => i.id === id));
+  setWontFix(id, false);
+  assert.ok(openIssues('site-check').some((i) => i.id === id));
 });
 
 test('problems from the compliance check belong to the compliance agent', () => {
-  setSetting('lastCompliance', { issues: [{ id: 'no-banner:https://a.com/', check: 'no-banner', severity: 'critical', area: 'privacy', url: 'https://a.com/', title: 'No banner', why: 'w', steps: ['s'] }], at: '2026-10-17T05:00:00.000Z' });
+  recordScan([{ id: 'no-banner:https://a.com/', check: 'no-banner', severity: 'critical', area: 'privacy', url: 'https://a.com/', title: 'No banner', why: 'w', steps: ['s'] }], { agent: 'compliance', at: '2026-10-17T05:00:00.000Z', covers: () => false });
   assert.deepEqual(openIssues('compliance').map((i) => i.id), ['no-banner:https://a.com/']);
-  setSetting('lastCompliance', null);
 });
 
 test('filterNew drops covered and duplicate keywords', () => {

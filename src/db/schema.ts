@@ -442,6 +442,39 @@ CREATE TABLE IF NOT EXISTS telegram_why (
 );
 `,
   },
+  {
+    // Problems kept between scans, like drafts: a scan updates them, it never wipes them.
+    version: 2,
+    sql: `
+CREATE TABLE IF NOT EXISTS issues (
+  id TEXT PRIMARY KEY,            -- check + address, e.g. "missing-title:https://a.com/about"
+  agent TEXT NOT NULL,            -- who found it: site-check | compliance | red
+  check_id TEXT NOT NULL,
+  url TEXT NOT NULL,              -- the page (or "repo:..." for a file in the repository)
+  severity TEXT NOT NULL,
+  area TEXT NOT NULL,
+  title TEXT NOT NULL,
+  why TEXT NOT NULL,
+  steps TEXT NOT NULL,            -- JSON list
+  snippet TEXT,
+  state TEXT NOT NULL,            -- open | fixed | gone | wont-fix
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,        -- the last scan that found it
+  closed_at TEXT                  -- when it was fixed, stopped being found, or turned down
+);
+CREATE INDEX IF NOT EXISTS issues_by_agent ON issues (agent, state);
+-- What happened to each problem, in order: found, fixed, found again, no longer found, won't fix, reopened.
+CREATE TABLE IF NOT EXISTS issue_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  from_state TEXT,
+  to_state TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS issue_events_by_issue ON issue_events (issue_id, id);
+`,
+  },
 ];
 
 /** The shared database: data/plume.db. Site list, AI usage (one budget for all sites), logs, app-wide settings. */

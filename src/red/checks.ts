@@ -1,5 +1,6 @@
 import type { Issue } from '../agents/seoAudit';
 import type { HeadResult } from './headers';
+import { withId } from '../issueId';
 
 /**
  * Turns what the header-preserving fetch found into security issues, in the same shape as the SEO
@@ -10,7 +11,7 @@ import type { HeadResult } from './headers';
  * reported twice.
  */
 
-const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push(withId(i));
 
 /** A header, why it matters in plain English, and what to add. Severity is how exposed the site is without it. */
 interface HeaderRule {
@@ -90,7 +91,7 @@ export function headerIssues(url: string, head: HeadResult): Issue[] {
 }
 
 /** TLS / transport checks for the site as a whole. */
-export function transportIssues(origin: string, httpsRedirect: boolean | undefined, homeHtml?: string): Issue[] {
+export function transportIssues(origin: string, homeHtml?: string): Issue[] {
   const issues: Issue[] = [];
   if (!origin.startsWith('https://')) {
     add(issues, {
@@ -104,17 +105,7 @@ export function transportIssues(origin: string, httpsRedirect: boolean | undefin
     });
     return issues; // the rest assumes https
   }
-  if (httpsRedirect === false) {
-    add(issues, {
-      check: 'no-https-redirect',
-      severity: 'high',
-      area: 'security',
-      url: origin,
-      title: 'The http:// address does not redirect to https://',
-      why: 'The secure site exists, but visitors who reach the plain http:// address stay there, unencrypted, instead of being sent to the secure one.',
-      steps: ['Add a permanent redirect from http:// to https:// at your host or CDN.'],
-    });
-  }
+  // "http:// doesn't redirect" is the site check's problem (no-https-redirect), so it is reported once, not twice.
   // Mixed content: a https page that pulls in http resources. Reads the home page HTML only.
   if (homeHtml) {
     const mixed = /\b(?:src|href)\s*=\s*["']http:\/\/[^"']+/i.test(homeHtml);

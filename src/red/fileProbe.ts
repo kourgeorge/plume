@@ -1,4 +1,5 @@
 import type { Issue } from '../agents/seoAudit';
+import { withId } from '../issueId';
 
 /**
  * Checks whether the live site exposes files it never should — a leaked `.env`, an open `.git`
@@ -7,7 +8,7 @@ import type { Issue } from '../agents/seoAudit';
  * for a short, fixed list. It never follows links, never guesses deeply, and asks for each path once.
  */
 
-const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push(withId(i));
 
 interface ProbeTarget {
   path: string;

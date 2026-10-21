@@ -54,20 +54,19 @@ test('headerIssues says nothing about a page it could not read', () => {
 // ---------------------------------------------------------------- transport
 
 test('transportIssues flags a plain-http site as critical', () => {
-  const issues = transportIssues('http://acme.test', undefined);
+  const issues = transportIssues('http://acme.test');
   assert.equal(issues.length, 1);
   assert.equal(issues[0].check, 'no-https');
   assert.equal(issues[0].severity, 'critical');
 });
 
-test('transportIssues flags a missing http->https redirect', () => {
-  const issues = transportIssues('https://acme.test', false);
-  assert.ok(issues.find((i) => i.check === 'no-https-redirect'));
+test('the missing http->https redirect is left to the site check, so it is not reported twice', () => {
+  assert.ok(!transportIssues('https://acme.test').some((i) => i.check === 'no-https-redirect'));
 });
 
 test('transportIssues flags mixed content on a secure page', () => {
   const html = '<img src="http://cdn.example.com/logo.png">';
-  const issues = transportIssues('https://acme.test', true, html);
+  const issues = transportIssues('https://acme.test', html);
   assert.ok(issues.find((i) => i.check === 'mixed-content'));
 });
 

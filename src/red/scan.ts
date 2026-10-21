@@ -2,11 +2,13 @@ import type { AuditResult, Issue, Severity } from '../agents/seoAudit';
 import { getDb, setSetting } from '../db';
 import { log } from '../log';
 import { siteEnv } from '../integrations';
-import { fetchHeaders, httpRedirectsToHttps } from './headers';
+import { fetchHeaders } from './headers';
 import { headerIssues, transportIssues, versionIssues } from './checks';
 import { scanRepo } from './repoScan';
 import { probeFiles } from './fileProbe';
 import { redPermissions, RedPermissions } from './ownership';
+import { cleanUrl } from '../issueId';
+import { recordScan } from '../issues';
 
 /**
  * Plume-Red: the security side of Plume. One scan that runs each tier of checks only as far as the
@@ -60,6 +62,8 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
   }
 
   let pagesChecked = 0;
+  // What ran this time, so only those parts can say a problem is gone (see `covers` below).
+  const ran = { headersOn: new Set<string>(), transport: false, home: false, repo: false, files: false, active: false };
 
   // Tier A: passive header / TLS / version checks on what the server already returns.
   if (perms.passiveHeaders && opts.origin) {
@@ -70,6 +74,7 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
       const head = await fetchHeaders(url, fetchFn);
       issues.push(...headerIssues(url, head));
       pagesChecked++;
+      if (head.ok) ran.headersOn.add(cleanUrl(url));
       if (url === origin + '/' && head.ok) {
         // Read the home page body once, for mixed-content and version checks.
         try {
@@ -80,9 +85,10 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
         }
       }
     }
-    const httpsRedirect = origin.startsWith('https://') ? await httpRedirectsToHttps(origin, fetchFn) : undefined;
-    issues.push(...transportIssues(origin, httpsRedirect, homeHtml));
+    issues.push(...transportIssues(origin, homeHtml));
     if (homeHtml) issues.push(...versionIssues(origin, homeHtml));
+    ran.transport = true;
+    ran.home = !!homeHtml;
   } else if (!opts.origin) {
     skipped.push('No site address, so header and TLS checks were skipped.');
   }
@@ -91,6 +97,7 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
   if (perms.repoScan) {
     try {
       issues.push(...(await scanRepo(env)));
+      ran.repo = true;
     } catch (e) {
       log('warn', 'red', `repo scan failed: ${e instanceof Error ? e.message : e}`);
       skipped.push('Could not read the connected repository this time.');
@@ -102,6 +109,7 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
   // Tier C: live file-probe. Verified ownership only.
   if (perms.fileProbe && opts.origin) {
     issues.push(...(await probeFiles(opts.origin, fetchFn)));
+    ran.files = true;
   } else if (opts.origin) {
     skipped.push('Exposed-file checks need Search Console connected (Google verifies you own the domain first).');
   }
@@ -111,12 +119,32 @@ export async function runRedScan(opts: RedScanOptions = {}): Promise<RedScanResu
     if (perms.activeTesting) {
       const { runActiveTests } = await import('./active');
       issues.push(...(await runActiveTests(opts.origin!, fetchFn)));
+      ran.active = true;
     } else {
       skipped.push('Active tests were requested but need Search Console connected first; they did not run.');
     }
   }
 
-  return finish(issues, perms, skipped, pagesChecked);
+  const result = finish(issues, perms, skipped, pagesChecked);
+  if (perms.enabled) recordScan(result.issues, { agent: 'red', at: result.at, covers: redCovers(ran) });
+  return result;
+}
+
+const HEADER_CHECKS = new Set(['missing-csp', 'missing-hsts', 'missing-referrer-policy', 'missing-x-content-type', 'missing-x-frame-options']);
+const FILE_CHECKS = new Set(['exposed-ds-store', 'exposed-env', 'exposed-git', 'exposed-wp-config-backup']);
+const ACTIVE_CHECK = /^(reflected-input|sql-injection|cors-reflects-origin|open-redirect-|cookie-flags-)/;
+
+/** Which earlier problems this scan could have found again: only the parts that ran, on the pages they read. */
+function redCovers(ran: { headersOn: Set<string>; transport: boolean; home: boolean; repo: boolean; files: boolean; active: boolean }): (check: string, url: string) => boolean {
+  return (check, url) => {
+    if (check === 'no-https') return ran.transport;
+    if (HEADER_CHECKS.has(check)) return ran.headersOn.has(cleanUrl(url));
+    if (FILE_CHECKS.has(check)) return ran.files;
+    if (ACTIVE_CHECK.test(check)) return ran.active;
+    if (url.startsWith('repo:')) return ran.repo;
+    // Mixed content and an outdated builder come from reading the home page.
+    return ran.home;
+  };
 }
 
 function finish(issues: Issue[], permissions: RedPermissions, skipped: string[], pagesChecked: number): RedScanResult {

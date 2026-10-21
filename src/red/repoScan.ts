@@ -1,6 +1,7 @@
 import type { Issue } from '../agents/seoAudit';
 import { Gh, ghBase, ghCall, ghFrom, ghPath } from '../github';
 import { siteEnv } from '../integrations';
+import { withId } from '../issueId';
 
 /**
  * Security checks that read the connected GitHub repository: known-vulnerable dependencies and
@@ -8,7 +9,7 @@ import { siteEnv } from '../integrations';
  * scoped to it), so they are allowed whenever a repo is connected. No site is contacted.
  */
 
-const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+const add = (issues: Issue[], i: Omit<Issue, 'id'>) => issues.push(withId(i));
 
 /** A dependency and the version at or below which it is known vulnerable. Bundled snapshot; a later follow-up refreshes it. */
 interface DepAdvisory {

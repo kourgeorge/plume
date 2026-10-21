@@ -1,6 +1,7 @@
 import type { Issue, Severity } from '../agents/seoAudit';
 import { HEAD_CODE } from '../agents/seoAudit';
 import { IMPRINT_LANGS, REGIONS, Region, lawList, needsConsentFirst, needsOptOut, needsRejectButton, needsStatement } from './regions';
+import { withId } from '../issueId';
 
 /**
  * What the real-browser visit found, turned into problems in the same shape as the site check. Kept apart
@@ -160,7 +161,7 @@ const BANNER_HOW: Record<string, string> = {
 
 export function complianceIssues(f: ScanFindings): Issue[] {
   const issues: Issue[] = [];
-  const add = (i: Omit<Issue, 'id'>) => issues.push({ ...i, id: `${i.check}:${i.url}` });
+  const add = (i: Omit<Issue, 'id'>) => issues.push(withId(i));
   const home = f.pages[0];
   const site = `${f.origin.replace(/\/$/, '')}/`;
   const rs = f.regions;
@@ -249,10 +250,12 @@ export function complianceIssues(f: ScanFindings): Issue[] {
   for (const [id, r] of rules) {
     const plain = AXE_PLAIN[id];
     const severity: Severity = r.v.impact === 'critical' ? 'high' : 'medium';
-    add({ check: `a11y-${id}`, severity, area: 'accessibility', url: r.urls[0],
+    // Filed under the home page, not the first page it was seen on: the same rule must keep the same id
+    // whether one page of each kind was visited or every page.
+    add({ check: `a11y-${id}`, severity, area: 'accessibility', url: site,
       title: `${plain?.title ?? r.v.help} (${r.nodes} place${r.nodes === 1 ? '' : 's'}${r.urls.length > 1 ? ` on ${r.urls.length} pages` : ''})`,
       why: `${plain?.why ?? 'This makes the page hard or impossible to use for some disabled visitors.'}${a11yLaws ? ` Accessibility rules here include ${a11yLaws}.` : ''}`,
-      steps: [...(plain?.steps ?? [`Fix what this rule describes: ${r.v.help}.`]), `Details and examples: ${r.v.helpUrl}`, ...(r.urls.length > 1 ? [`Also on: ${r.urls.slice(1).join(', ')}`] : [])],
+      steps: [...(plain?.steps ?? [`Fix what this rule describes: ${r.v.help}.`]), `Details and examples: ${r.v.helpUrl}`, `Found on: ${r.urls.join(', ')}`],
       snippet: r.v.sample });
   }
   if (needsStatement(rs) && !f.links.accessibility) {
